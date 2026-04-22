@@ -1,0 +1,34 @@
+{
+  "$schema": "https://synaps.sh/synaps-cli/marketplace.schema.json",
+  "name": "synaps-skills",
+  "version": "1.0.0",
+  "description": "Web search, browser automation, YouTube toolkit, speech-to-text, multi-agent pipelines, and dev workflows for Synaps CLI",
+  "owner": {
+    "name": "JR Morton",
+    "url": "https://github.com/maha-media"
+  },
+  "plugins": [
+    {
+      "name": "web-tools",
+      "description": "Exa web search, Playwright browser automation, YouTube transcripts/downloads, and Whisper speech-to-text",
+      "version": "1.0.0",
+      "author": {
+        "name": "JR Morton",
+        "url": "https://github.com/maha-media"
+      },
+      "source": "./web-tools-plugin",
+      "category": "productivity"
+    },
+    {
+      "name": "dev-tools",
+      "description": "Development workflow (brainstorm → plan → execute → finish) and Black-Box Engineering multi-agent convergence pipeline",
+      "version": "1.0.0",
+      "author": {
+        "name": "JR Morton",
+        "url": "https://github.com/maha-media"
+      },
+      "source": "./dev-tools-plugin",
+      "category": "development"
+    }
+  ]
+}

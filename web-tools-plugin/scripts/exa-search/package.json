@@ -1,0 +1,7 @@
+{
+	"name": "exa-search",
+	"version": "1.0.0",
+	"type": "module",
+	"description": "Web search and content extraction via Exa API",
+	"license": "MIT"
+}

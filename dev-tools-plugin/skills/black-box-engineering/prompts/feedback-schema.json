@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Holdout-Safe Structured Feedback",
+  "description": "Structured feedback template for Arbiter REWORK verdicts. Prevents test detail leakage in holdout mode.",
+  "type": "object",
+  "required": ["feedback_type", "items"],
+  "properties": {
+    "feedback_type": {
+      "type": "string",
+      "enum": ["proceed", "review", "rework"],
+      "description": "Maps to Arbiter verdict"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["behavior_gap", "observed_behavior", "dimension", "severity"],
+        "properties": {
+          "behavior_gap": {
+            "type": "string",
+            "description": "What the spec says should happen (from spec, not from tests)"
+          },
+          "observed_behavior": {
+            "type": "string",
+            "description": "What actually happened (from test results, abstracted — no test names or line numbers)"
+          },
+          "dimension": {
+            "type": "string",
+            "enum": ["spec_compliance", "code_quality", "test_coverage", "edge_cases", "security"],
+            "description": "Which scoring dimension this feedback affects"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["high", "medium", "low"],
+            "description": "Impact severity"
+          }
+        }
+      }
+    }
+  }
+}
