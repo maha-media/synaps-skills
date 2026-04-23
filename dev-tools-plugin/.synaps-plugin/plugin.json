@@ -1,6 +1,6 @@
 {
   "name": "dev-tools",
-  "version": "1.0.0",
+  "version": "0.1.0-beta",
   "description": "Development workflow and multi-agent pipeline skills for Synaps CLI — brainstorm, plan, execute, finish, and Black-Box Engineering convergence loops",
   "author": {
     "name": "JR Morton",
