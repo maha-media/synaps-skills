@@ -3,6 +3,9 @@ name: security-review
 description: Security-focused code review checklist
 ---
 
+# Security Review
+
+Use this skill to perform a focused security review of code changes. It provides a concise checklist for identifying common security issues such as unsafe input handling, secret exposure, access control gaps, and denial-of-service risks.
 When reviewing code for security:
 
 - Check all user input is validated before use
