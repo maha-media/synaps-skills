@@ -70,6 +70,19 @@ Skills are bundled into plugins. Each plugin lives in its own directory and decl
 | **[workflow](dev-tools-plugin/skills/workflow/SKILL.md)** | End-to-end dev workflow — brainstorm → plan → execute → finish | — |
 | **[black-box-engineering](dev-tools-plugin/skills/black-box-engineering/SKILL.md)** | Multi-agent pipeline — design, build, blind-test, score, refine | synaps CLI |
 
+### 🏗️ engineering-plugin
+
+| Skill | What it does | Requires |
+|-------|-------------|----------|
+| **[code-review](engineering-plugin/skills/code-review/SKILL.md)** | Structured multi-axis code review — correctness, readability, architecture, security, performance | — |
+| **[security-review](engineering-plugin/skills/security-review/SKILL.md)** | Security-focused code review checklist — injection, traversal, secrets, auth, crypto | — |
+| **[test-driven-development](engineering-plugin/skills/test-driven-development/SKILL.md)** | Red-green-refactor TDD cycle, test pyramid, anti-patterns | — |
+| **[systematic-debugging](engineering-plugin/skills/systematic-debugging/SKILL.md)** | Root-cause debugging — reproduce, localize, reduce, fix, guard | — |
+| **[spec-driven-development](engineering-plugin/skills/spec-driven-development/SKILL.md)** | Write specs before code — objectives, boundaries, success criteria | — |
+| **[incremental-implementation](engineering-plugin/skills/incremental-implementation/SKILL.md)** | Vertical slices — implement, test, verify, commit, repeat | — |
+| **[planning-and-task-breakdown](engineering-plugin/skills/planning-and-task-breakdown/SKILL.md)** | Decompose work into ordered, verifiable tasks with acceptance criteria | — |
+| **[verification-before-completion](engineering-plugin/skills/verification-before-completion/SKILL.md)** | Evidence-based verification — run checks, confirm output before claiming done | — |
+
 ## 🔧 Install Script
 
 `install.sh` handles all setup. Run it anytime to check or fix your environment:
