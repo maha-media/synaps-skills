@@ -1,7 +1,7 @@
 {
   "name": "web-tools",
   "version": "0.1.0-beta",
-  "description": "Web search, browser automation, YouTube toolkit, and speech-to-text transcription for Synaps CLI",
+  "description": "Web search, browser automation, YouTube toolkit, speech-to-text transcription, and academic paper search for Synaps CLI",
   "author": {
     "name": "JR Morton",
     "url": "https://github.com/maha-media"

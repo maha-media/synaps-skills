@@ -29,6 +29,17 @@
       },
       "source": "./dev-tools-plugin",
       "category": "development"
+    },
+    {
+      "name": "engineering",
+      "description": "Engineering discipline skills — code review, security review, TDD, systematic debugging, spec-driven development, incremental implementation, task planning, and verification. Battle-tested patterns for shipping reliable software.",
+      "version": "0.1.0-beta",
+      "author": {
+        "name": "Haseeb Khalid",
+        "url": "https://github.com/HaseebKhalid1507"
+      },
+      "source": "./engineering-plugin",
+      "category": "development"
     }
   ]
 }
