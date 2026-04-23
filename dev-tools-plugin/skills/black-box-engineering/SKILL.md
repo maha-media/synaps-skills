@@ -266,7 +266,7 @@ Dispatch Sage as a reactive subagent:
 
 ```
 handle = subagent_start(
-  agent: "<skill_dir>/agents/sage.md",
+  agent: "dev-tools:sage",
   model: <sage_model>,
   task: "<sage_task>",
   timeout: 600
@@ -294,7 +294,7 @@ For each task **sequentially**, dispatch Quinn:
 
 ```
 handle = subagent_start(
-  agent: "<skill_dir>/agents/quinn.md",
+  agent: "dev-tools:quinn",
   model: <quinn_model>,
   task: "<quinn_task>",
   timeout: 600
@@ -324,7 +324,7 @@ Dispatch Glitch:
 
 ```
 handle = subagent_start(
-  agent: "<skill_dir>/agents/glitch.md",
+  agent: "dev-tools:glitch",
   model: <glitch_model>,
   task: "<glitch_task>",
   timeout: 600
@@ -353,7 +353,7 @@ Dispatch Arbiter:
 
 ```
 handle = subagent_start(
-  agent: "<skill_dir>/agents/arbiter.md",
+  agent: "dev-tools:arbiter",
   model: <arbiter_model>,
   task: "<arbiter_task>",
   timeout: 600

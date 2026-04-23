@@ -23,7 +23,6 @@ Your task message contains structured parameters:
 ```
 plan_file: <path>          — Markdown plan with ## Task N: headers
 design_file: <path>        — Markdown design/spec document
-skill_dir: <path>          — Path to BBE skill directory (for agent files)
 workdir: <path>            — Project working directory (default: .)
 threshold: <float>         — Pass score 0.0-1.0 (default: 0.8)
 max_fixes: <int>           — Max fix iterations (default: 2)
@@ -44,7 +43,7 @@ Use **reactive subagents** for every crew member so each is visible in the `syna
 ```
 # 1. LAUNCH — agent starts immediately
 handle = subagent_start(
-  agent: "<skill_dir>/agents/<agent>.md",
+  agent: "dev-tools:<agent>",
   model: <model>,
   task: "<task_prompt>",
   timeout: 600
@@ -88,7 +87,7 @@ Dispatch Sage as a reactive subagent:
 
 ```
 handle = subagent_start(
-  agent: "<skill_dir>/agents/sage.md",
+  agent: "dev-tools:sage",
   model: <sage_model>,
   task: "<sage_task>",
   timeout: 600
@@ -114,7 +113,7 @@ For each task (sequentially):
 
 ```
 handle = subagent_start(
-  agent: "<skill_dir>/agents/quinn.md",
+  agent: "dev-tools:quinn",
   model: <quinn_model>,
   task: "<quinn_task>",
   timeout: 600
@@ -141,7 +140,7 @@ Dispatch Glitch as a reactive subagent:
 
 ```
 handle = subagent_start(
-  agent: "<skill_dir>/agents/glitch.md",
+  agent: "dev-tools:glitch",
   model: <glitch_model>,
   task: "<glitch_task>",
   timeout: 600
@@ -167,7 +166,7 @@ Dispatch Arbiter as a reactive subagent:
 
 ```
 handle = subagent_start(
-  agent: "<skill_dir>/agents/arbiter.md",
+  agent: "dev-tools:arbiter",
   model: <arbiter_model>,
   task: "<arbiter_task>",
   timeout: 600

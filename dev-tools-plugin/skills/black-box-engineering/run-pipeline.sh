@@ -157,7 +157,6 @@ TASK="Run the Black-Box Engineering pipeline with these parameters:
 
 plan_file: $PLAN_FILE
 design_file: $DESIGN_FILE
-skill_dir: $SCRIPT_DIR
 workdir: $WORKDIR
 threshold: $THRESHOLD
 max_fixes: $MAX_FIXES
