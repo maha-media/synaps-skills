@@ -62,6 +62,7 @@ Skills are bundled into plugins. Each plugin lives in its own directory and decl
 | **[browser-tools](web-tools-plugin/skills/browser-tools/SKILL.md)** | Browser automation via Playwright — navigate, run JS, screenshot, scrape | Node.js |
 | **[youtube](web-tools-plugin/skills/youtube/SKILL.md)** | Transcripts, downloads, metadata, subtitles, playlists | Node.js, [yt-dlp](https://github.com/yt-dlp/yt-dlp) |
 | **[transcribe](web-tools-plugin/skills/transcribe/SKILL.md)** | Local speech-to-text via Whisper — `.txt`, `.srt`, `.json` output | Python 3.10+, ffmpeg, [openai-whisper](https://github.com/openai/whisper) |
+| **[scholar](web-tools-plugin/skills/scholar/SKILL.md)** | Academic paper search via OpenAlex — 200M+ works, abstracts, BibTeX citations, PDF links | Python 3, `requests` |
 
 ### 🛠️ dev-tools-plugin
 
