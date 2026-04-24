@@ -70,6 +70,7 @@ Skills are bundled into plugins. Each plugin lives in its own directory and decl
 |-------|-------------|----------|
 | **[workflow](dev-tools-plugin/skills/workflow/SKILL.md)** | End-to-end dev workflow — brainstorm → plan → execute → finish | — |
 | **[black-box-engineering](dev-tools-plugin/skills/black-box-engineering/SKILL.md)** | Multi-agent pipeline — design, build, blind-test, score, refine | synaps CLI |
+| **[nvim-live](dev-tools-plugin/skills/nvim-live/SKILL.md)** | Real-time pair programming through Neovim RPC + tmux — agent sees and edits your buffer live | Neovim, tmux |
 
 ### 🏗️ engineering-plugin
 
