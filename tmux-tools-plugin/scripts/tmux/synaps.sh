@@ -188,12 +188,18 @@ cleanup_pane() {
     "$PANE_SH" close "$PANE_NAME" 2>/dev/null || true
 }
 
-# Open /plugins modal. Assumes synaps is at its prompt.
+# Open /plugins modal. If a modal is already open from a prior operation,
+# Esc out of it first so we always start from a fresh state:
+# selected_left=0 (Installed), focus=Left.
 open_plugins_modal() {
     local id; id="$("$PANE_SH" id "$PANE_NAME")"
+    # Esc twice: closes any sub-mode (Detail / Confirm / TrustPrompt) then the modal itself.
+    tmux send-keys -t "$id" Escape
+    sleep 0.15
+    tmux send-keys -t "$id" Escape
+    sleep 0.15
     tmux send-keys -t "$id" "/plugins" Enter
     sleep 0.6
-    # Modal opened: focus=Left, selected_left=0 (Installed row).
 }
 
 # Send N Down keypresses with brief settle delay between each.
