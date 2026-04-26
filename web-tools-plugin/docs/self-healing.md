@@ -93,6 +93,10 @@ The top-level `SKILL.md` puts these on you:
 2. **On failure**: re-recall with the error class; try the escalations from
    the relevant `docs/<cap>.md`; if you find a fix, **commit it**.
 3. **On `STALE` warnings**: treat the existing playbook as suspect. Re-investigate.
+4. **On `command not found` / `Cannot find module`**: don't commit a memory —
+   run `bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh --check` to diagnose, then
+   without `--check` to repair. The plugin's deps are configuration drift,
+   not knowledge — they belong in `setup.sh`, not in `notes/`.
 
 ## Staleness rule
 
