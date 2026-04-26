@@ -7,7 +7,7 @@ description: Drives multi-agent convergence loops — designer, builder, tester,
 
 Some work is too complex, too biased-toward-the-author, or too consequential for a single agent to verify itself. A convergence loop splits the work across role-specialised agents, isolates them from each other's biases, scores the result against the spec, and iterates until the score crosses a threshold or the loop gives up explicitly.
 
-This skill is **advisory** — it describes the pattern. For a runnable pipeline that implements it, see `dev-tools:black-box-engineering`.
+This skill is **advisory** — it describes the pattern. To run it, an orchestrator (typically the top-level TUI agent, since only that level has `subagent_start`/`subagent_collect`) dispatches each role as a subagent and routes structured feedback between iterations. The orchestrator owns the budget, the worktree, and the information walls.
 
 ## When to Use
 
