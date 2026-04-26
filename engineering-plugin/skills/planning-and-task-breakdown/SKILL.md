@@ -19,6 +19,42 @@ Before writing any code:
 
 **Do NOT write code during planning.** Output is a plan document, not implementation.
 
+### Step 1.5: Convergence Decision (Human-owned)
+
+Before decomposing tasks, the human must answer: does this work warrant a
+multi-agent convergence loop? See **convergence-loop** for the pattern.
+
+**This decision is owned by the human, not the agent.** Two reasons:
+
+- **Cost** — convergence is ~4× single-agent model spend. The human owns
+  the budget.
+- **Stakes** — "is this consequential enough for bias elimination?"
+  requires context the agent doesn't always have (security posture,
+  blast radius, whether a human will review the output).
+
+The plan must commit to one of:
+
+| Mode | When | Cost |
+|---|---|---|
+| `convergence: none` | Trivial, exploratory, low-stakes work | 1× |
+| `convergence: informed` | Medium/large feature work, bias matters but speed dominates | ~4× |
+| `convergence: holdout` | Security-critical code, autonomous merges without human review, work where the author would mark their own homework favourably | ~4× + walls overhead |
+
+If `informed` or `holdout`, the plan also fixes — **before any code is
+written** — these parameters:
+
+- `threshold` (default `0.8`)
+- `axis_weights` (default per `code-review`)
+- `max_fix_iterations` (default `2`)
+- `max_total_calls` (default `10`)
+
+**Do not change these mid-run.** Adjusting threshold or axis weights
+after seeing the first score is goalpost-moving and defeats the loop.
+
+If during implementation the agent believes the wrong mode was chosen,
+**stop and surface it to the human for a plan amendment** — do not
+unilaterally upgrade or skip convergence.
+
 ### Step 2: Dependency Graph
 
 Map what depends on what. Implementation order follows the graph bottom-up — build foundations first.
@@ -150,6 +186,12 @@ If a task is L or larger, break it down further. Agents perform best on S and M 
 - No checkpoints between tasks
 - Dependency order not considered
 - Plan is approved but no worktree was created (see **worktrees-by-default**)
+- Convergence mode not declared — agent will either skip the loop or
+  invoke it gratuitously without authorization
+- Threshold or axis weights adjusted after the first score (goalpost
+  moving — defeats the loop)
+- Agent unilaterally upgraded `convergence: none` → `informed`/`holdout`
+  mid-run instead of pausing for a human plan amendment
 
 ## Verification
 
@@ -160,4 +202,6 @@ Before starting implementation:
 - [ ] No task touches more than ~5 files
 - [ ] Checkpoints exist between major phases
 - [ ] Human has reviewed and approved the plan
+- [ ] Convergence mode declared (`none` | `informed` | `holdout`)
+- [ ] If not `none`: threshold, axis weights, and loop bounds fixed
 - [ ] Dedicated worktree created and active (`git worktree list` shows it; `pwd` is inside it)

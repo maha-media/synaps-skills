@@ -1,6 +1,6 @@
 {
   "name": "engineering",
-  "version": "0.3.1-beta",
+  "version": "0.4.0-beta",
   "description": "Engineering discipline skills — code review, security review, TDD, debugging, spec-driven development, incremental implementation, planning, verification, worktree-based isolation, and multi-agent convergence loops. Battle-tested patterns for shipping reliable software.",
   "author": {
     "name": "Haseeb Khalid",
