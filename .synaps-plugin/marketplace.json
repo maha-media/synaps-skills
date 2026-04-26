@@ -43,8 +43,8 @@
     },
     {
       "name": "memkoshi",
-      "description": "Persistent memory for Synaps agents — recall past decisions, commit new ones, hand off context between sessions. Wraps the Memkoshi memory system (staging gate, 4-layer search, pattern detection, evolution scoring). Local-first, no cloud required.",
-      "version": "0.1.0",
+      "description": "Persistent memory for Synaps agents — recall past decisions, commit new ones, hand off context between sessions. Wraps Memkoshi (4-layer VelociRAG search) + Stelline (richer write path); both auto-installed via setup.sh. Local-first, no cloud required.",
+      "version": "0.2.0",
       "author": {
         "name": "JR Morton",
         "url": "https://github.com/maha-media"
