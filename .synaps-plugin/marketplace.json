@@ -2,7 +2,7 @@
   "$schema": "https://synaps.sh/synaps-cli/marketplace.schema.json",
   "name": "synaps-skills",
   "version": "1.0.0",
-  "description": "Web search, browser automation, YouTube toolkit, speech-to-text, multi-agent pipelines, and dev workflows for Synaps CLI",
+  "description": "Web search, browser automation, YouTube toolkit, speech-to-text, persistent memory, tmux orchestration, engineering disciplines, and skill scaffolding for Synaps CLI",
   "owner": {
     "name": "JR Morton",
     "url": "https://github.com/maha-media"
@@ -20,20 +20,9 @@
       "category": "productivity"
     },
     {
-      "name": "dev-tools",
-      "description": "Development workflow (brainstorm → plan → execute → finish) and Black-Box Engineering multi-agent convergence pipeline",
-      "version": "1.0.0",
-      "author": {
-        "name": "JR Morton",
-        "url": "https://github.com/maha-media"
-      },
-      "source": "./dev-tools-plugin",
-      "category": "development"
-    },
-    {
       "name": "engineering",
-      "description": "Engineering discipline skills — code review, security review, TDD, systematic debugging, spec-driven development, incremental implementation, task planning, and verification. Battle-tested patterns for shipping reliable software.",
-      "version": "0.1.0-beta",
+      "description": "Engineering discipline skills — code review, security review, TDD, debugging, spec-driven development, incremental implementation, planning, verification, worktree-based isolation, and multi-agent convergence loops. Battle-tested patterns for shipping reliable software.",
+      "version": "0.3.0-beta",
       "author": {
         "name": "Haseeb Khalid",
         "url": "https://github.com/HaseebKhalid1507"
@@ -62,6 +51,17 @@
       },
       "source": "./tmux-tools-plugin",
       "category": "productivity"
+    },
+    {
+      "name": "skill-maker",
+      "description": "Scaffold, validate, and lint Synaps CLI plugins and skills. Bash-based (no Node/Python), encoding the conventions used across the synaps-skills monorepo.",
+      "version": "0.1.0",
+      "author": {
+        "name": "JR Morton",
+        "url": "https://github.com/maha-media"
+      },
+      "source": "./skill-maker-plugin",
+      "category": "developer-tools"
     }
   ]
 }

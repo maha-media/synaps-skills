@@ -2,7 +2,7 @@
 
 This is the onboarding doc for any agent (Claude Code, Cursor, Aider, or Synaps CLI itself) working in this repo. Read this first.
 
-`synaps-skills` is the **plugin marketplace** for [Synaps CLI](https://github.com/maha-media/SynapsCLI). It is *not* a Rust codebase — it's a collection of agent plugins (skills + scripts) consumed by Synaps' `/plugins` UI. Six plugins ship today: `web-tools`, `dev-tools`, `engineering`, `memkoshi`, `tmux-tools`, `skill-maker`.
+`synaps-skills` is the **plugin marketplace** for [Synaps CLI](https://github.com/maha-media/SynapsCLI). It is *not* a Rust codebase — it's a collection of agent plugins (skills + scripts) consumed by Synaps' `/plugins` UI. Five plugins ship today: `web-tools`, `engineering`, `memkoshi`, `tmux-tools`, `skill-maker`.
 
 ---
 
