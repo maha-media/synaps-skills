@@ -5,7 +5,7 @@
 
 **Drop-in skills for [Synaps CLI](https://github.com/maha-media/synaps-cli)** — also works with Claude Code, Codex CLI, Amp, and Droid.
 
-Give your coding agent web search, YouTube downloads, speech-to-text, browser automation, multi-agent pipelines, and structured dev workflows — all in one repo.
+Give your coding agent web search, YouTube downloads, speech-to-text, browser automation, persistent memory, tmux orchestration, and battle-tested engineering disciplines — all in one repo.
 
 ## ⚡ Quick Start
 
@@ -64,13 +64,6 @@ Skills are bundled into plugins. Each plugin lives in its own directory and decl
 | **[transcribe](web-tools-plugin/skills/transcribe/SKILL.md)** | Local speech-to-text via Whisper — `.txt`, `.srt`, `.json` output | Python 3.10+, ffmpeg, [openai-whisper](https://github.com/openai/whisper) |
 | **[scholar](web-tools-plugin/skills/scholar/SKILL.md)** | Academic paper search via OpenAlex — 200M+ works, abstracts, BibTeX citations, PDF links | Python 3, `requests` |
 
-### 🛠️ dev-tools-plugin
-
-| Skill | What it does | Requires |
-|-------|-------------|----------|
-| **[workflow](dev-tools-plugin/skills/workflow/SKILL.md)** | End-to-end dev workflow — brainstorm → plan → execute → finish | — |
-| **[black-box-engineering](dev-tools-plugin/skills/black-box-engineering/SKILL.md)** | Multi-agent pipeline — design, build, blind-test, score, refine | synaps CLI |
-
 ### 🏗️ engineering-plugin
 
 | Skill | What it does | Requires |
@@ -83,6 +76,8 @@ Skills are bundled into plugins. Each plugin lives in its own directory and decl
 | **[incremental-implementation](engineering-plugin/skills/incremental-implementation/SKILL.md)** | Vertical slices — implement, test, verify, commit, repeat | — |
 | **[planning-and-task-breakdown](engineering-plugin/skills/planning-and-task-breakdown/SKILL.md)** | Decompose work into ordered, verifiable tasks with acceptance criteria | — |
 | **[verification-before-completion](engineering-plugin/skills/verification-before-completion/SKILL.md)** | Evidence-based verification — run checks, confirm output before claiming done | — |
+| **[worktrees-by-default](engineering-plugin/skills/worktrees-by-default/SKILL.md)** | Isolate every implementation in a dedicated git worktree; primary clone stays clean | git ≥2.5 |
+| **[convergence-loop](engineering-plugin/skills/convergence-loop/SKILL.md)** | Multi-agent convergence pattern — designer/builder/tester/judge with information walls and bounded fix loops | — |
 
 ## 🔧 Install Script
 
