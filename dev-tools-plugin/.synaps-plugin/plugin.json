@@ -1,7 +1,7 @@
 {
   "name": "dev-tools",
-  "version": "0.1.0-beta",
-  "description": "Development workflow and multi-agent pipeline skills for Synaps CLI — brainstorm, plan, execute, finish, and Black-Box Engineering convergence loops",
+  "version": "0.2.0-beta",
+  "description": "Development workflow and multi-agent pipeline skills for Synaps CLI — brainstorm, plan, execute, finish, and Black-Box Engineering convergence loops. BBE implements the convergence-loop pattern from the engineering plugin.",
   "author": {
     "name": "JR Morton",
     "url": "https://github.com/maha-media"

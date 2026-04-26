@@ -10,6 +10,21 @@ description: Multi-agent code builder pipeline — designs, builds, blind-tests,
 
 A domain-agnostic multi-agent pipeline that runs entirely inside Synaps. You — the TUI agent — ARE the orchestrator. You dispatch Sage, Quinn, Glitch, and Arbiter as native subagents, driving a feedback loop: design → build → test → judge → fix until convergence.
 
+> **Pattern source:** This skill is a runnable implementation of the convergence-loop pattern described in `engineering:convergence-loop`. Read that skill for the abstract pattern (roles, information walls, scoring rubric, bounds); read this one for the BBE-specific orchestration mechanics.
+
+## Disciplines This Enacts
+
+Each crew member operationalizes a discipline the engineering plugin already defines. When the prompts and the engineering skills disagree, the engineering skills win — they are the source of truth for the disciplines.
+
+| Crew member | Engineering skill it enacts | Why |
+|---|---|---|
+| **Sage** | `engineering:test-driven-development` | Sage writes failing-behaviour scenarios from the spec before any code exists — the RED step, isolated from the implementation. |
+| **Quinn** | `engineering:incremental-implementation` + `engineering:worktrees-by-default` | Quinn writes one task at a time, commits per task, and operates inside the worktree the orchestrator set up. Never the integration branch. |
+| **Glitch** | `engineering:verification-before-completion` | Glitch runs the actual scenarios and reports outcome with evidence. Zero interpretation, zero "should pass." |
+| **Arbiter** | `engineering:code-review` + `engineering:security-review` | Arbiter's 5-axis rubric (spec compliance, code quality, test coverage, edge cases, security) is `code-review`'s 5 axes. Same axes, numeric form. |
+| **Fix loop** | `engineering:systematic-debugging` | Structured feedback describes behaviour gaps (root cause), not test names (symptoms). Quinn fixes the cause. |
+| **Plan + design inputs** | `engineering:spec-driven-development` + `engineering:planning-and-task-breakdown` | Loop won't run without a design doc and a plan. Workflow Phase 1/2 produce them; the engineering skills define what "good" looks like. |
+
 ## Architecture
 
 ```
@@ -543,7 +558,17 @@ black-box-engineering/
 
 | Skill | Relationship |
 |-------|-------------|
-| `workflow` Phase 1 (Brainstorm) | Produces the design doc (input) |
-| `workflow` Phase 2 (Plan) | Produces the plan file (input) |
-| `workflow` Phase 3 (Execute) | Alternative: manual execution |
-| `workflow` Phase 4 (Finish) | Post-convergence merge/PR/cleanup |
+| `engineering:convergence-loop` | The pattern this skill implements. Read it for the abstract roles, walls, scoring, and bounds. |
+| `engineering:test-driven-development` | Discipline Sage enacts (RED step). |
+| `engineering:incremental-implementation` | Discipline Quinn enacts (one task, one commit, working state between). |
+| `engineering:worktrees-by-default` | Discipline Quinn operates under (work happens in the orchestrator's worktree, never the primary clone). |
+| `engineering:verification-before-completion` | Discipline Glitch enacts (evidence before any pass/fail claim). |
+| `engineering:code-review` | Source of Arbiter's 5 scoring axes. |
+| `engineering:security-review` | Source of Arbiter's security dimension checklist. |
+| `engineering:systematic-debugging` | Discipline the fix loop enacts (root cause, not symptom). |
+| `engineering:spec-driven-development` | Defines what a good design doc looks like (input). |
+| `engineering:planning-and-task-breakdown` | Defines what a good plan with `## Task N:` headers looks like (input). |
+| `workflow` Phase 1 (Brainstorm) | Produces the design doc (input). |
+| `workflow` Phase 2 (Plan) | Produces the plan file (input). |
+| `workflow` Phase 3 (Execute) | Alternative: manual execution. |
+| `workflow` Phase 4 (Finish) | Post-convergence merge/PR/cleanup. |
