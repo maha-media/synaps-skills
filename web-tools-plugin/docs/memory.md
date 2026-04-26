@@ -73,8 +73,8 @@ See `docs/self-healing.md` for the full table. Minimum: `kind-` + one of
 "github.com fetch hits 403 anonymously → set Authorization Bearer $GITHUB_TOKEN"
   kind=fix  tags=[domain-github-com, op-fetch, err-http_403]
 
-"transcript.js fails on age-gated YouTube videos → fall back to yt-dlp + whisper"
-  kind=fix  tags=[domain-youtube-com, op-youtube, err-age_gate]
+"transcript.js bot-detection bypassed by --cookies-from-browser=chrome (logged-in)"
+  kind=fix  tags=[domain-youtube-com, op-youtube-transcript, err-bot_detected]
 
 "Cloudflare-protected sites need browser render, not raw fetch"
   kind=lesson  tags=[op-fetch, err-cloudflare]
