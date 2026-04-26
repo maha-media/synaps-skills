@@ -129,6 +129,21 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/status/web-consolidate.js          # dry-run
 node ${CLAUDE_PLUGIN_ROOT}/scripts/status/web-consolidate.js --commit # write notes
 ```
 
+The consolidator suppresses any bucket already documented by an existing
+note's `covers:` frontmatter. Add a `covers:` array to a note when you
+write a fix so future recurrences don't generate duplicate proposals:
+
+```yaml
+---
+covers:
+  - "youtube.com|youtube-transcript|no_transcript"
+  - "*|search|no_api_key"
+---
+```
+
+`*` is a wildcard. Use `--show-covered` to list what's currently suppressed,
+`--no-skip-covered` to bypass.
+
 See `docs/status.md` for the full workflow.
 
 ## Conventions
