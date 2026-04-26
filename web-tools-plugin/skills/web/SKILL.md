@@ -39,6 +39,7 @@ detailed flags, gotchas, and escalation rules.
 | DOCX / PPTX / EPUB ↔ markdown | `docs/docs.md`       | shipped     |
 | GitHub (repos, issues, code)  | `docs/github.md`     | shipped     |
 | Wikipedia                     | `docs/wiki.md`       | shipped     |
+| Status / dashboard            | `docs/status.md`     | shipped     |
 | Memory ops (recall / commit)  | `docs/memory.md`     | shipped     |
 | Self-healing protocol         | `docs/self-healing.md` | shipped   |
 
@@ -71,6 +72,25 @@ When something fails:
 
 The full PRE / ACT / POST contract, staleness rules, and tag conventions
 live in `docs/self-healing.md`. Read it once.
+
+## Health checks
+
+Run `web-status` periodically to see what's broken and what's stale:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/status/web-status.js              # dashboard
+node ${CLAUDE_PLUGIN_ROOT}/scripts/status/web-status.js --since 24h  # recent only
+```
+
+Recurring failures trigger a STALE warning. To consolidate them into
+notes (review-gated):
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/status/web-consolidate.js          # dry-run
+node ${CLAUDE_PLUGIN_ROOT}/scripts/status/web-consolidate.js --commit # write notes
+```
+
+See `docs/status.md` for the full workflow.
 
 ## Conventions
 
