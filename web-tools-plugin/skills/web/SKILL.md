@@ -1,6 +1,6 @@
 ---
 name: web
-description: Swiss-army web toolkit — browser, search, youtube, scholar, transcribe (and growing). Self-healing memory via VelociRAG.
+description: Swiss-army web toolkit — fetch, browser, search, youtube, scholar, transcribe, pdf, docs (and growing). Self-healing memory via VelociRAG.
 ---
 
 # web — Index
@@ -29,16 +29,16 @@ detailed flags, gotchas, and escalation rules.
 
 | Need                          | Doc                  | Status      |
 |-------------------------------|----------------------|-------------|
+| Quick page fetch (light)      | `docs/fetch.md`      | shipped     |
 | Full browser (JS / auth)      | `docs/browser.md`    | shipped     |
 | Web search                    | `docs/search.md`     | shipped     |
 | YouTube                       | `docs/youtube.md`    | shipped     |
 | Academic papers               | `docs/scholar.md`    | shipped     |
 | Audio / video → text          | `docs/transcribe.md` | shipped     |
+| PDF text & metadata           | `docs/pdf.md`        | shipped     |
+| DOCX / PPTX / EPUB ↔ markdown | `docs/docs.md`       | shipped     |
 | Memory ops (recall / commit)  | `docs/memory.md`     | shipped     |
 | Self-healing protocol         | `docs/self-healing.md` | shipped   |
-| Quick page fetch (light)      | `docs/fetch.md`      | _phase 3_   |
-| PDF text & metadata           | `docs/pdf.md`        | _phase 3_   |
-| DOCX / PPTX / EPUB → markdown | `docs/docs.md`       | _phase 3_   |
 | GitHub (repos, issues, code)  | `docs/github.md`     | _phase 4_   |
 | Wikipedia                     | `docs/wiki.md`       | _phase 4_   |
 

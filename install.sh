@@ -151,6 +151,7 @@ head "Node Dependencies"
 
 for dir in \
   "$REPO_DIR/web-tools-plugin/scripts/browser" \
+  "$REPO_DIR/web-tools-plugin/scripts/fetch" \
   "$REPO_DIR/web-tools-plugin/scripts/youtube"; do
   skill=$(basename "$dir")
   [ ! -f "$dir/package.json" ] && continue
@@ -258,6 +259,30 @@ if command -v python3 &>/dev/null && python3 -c "import whisper" 2>/dev/null; th
 else
   warn "openai-whisper not installed — needed for transcribe skill"
   info "Install: pip install openai-whisper"
+fi
+
+# pdftotext / poppler (pdf skill)
+if command -v pdftotext &>/dev/null; then
+  ok "pdftotext (poppler) found"
+else
+  warn "pdftotext not found — needed for pdf skill"
+  case "$OS" in
+    mac)     info "Install: brew install poppler" ;;
+    windows) info "Install: choco install poppler  (or via WSL: sudo apt install poppler-utils)" ;;
+    *)       info "Install: sudo apt install poppler-utils" ;;
+  esac
+fi
+
+# pandoc (docs skill)
+if command -v pandoc &>/dev/null; then
+  ok "pandoc found"
+else
+  warn "pandoc not found — needed for docs skill (DOCX/PPTX/EPUB ↔ markdown)"
+  case "$OS" in
+    mac)     info "Install: brew install pandoc" ;;
+    windows) info "Install: https://pandoc.org/installing.html  (or via WSL: sudo apt install pandoc)" ;;
+    *)       info "Install: sudo apt install pandoc" ;;
+  esac
 fi
 
 # memkoshi (web plugin self-healing memory)
