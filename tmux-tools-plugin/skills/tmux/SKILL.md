@@ -65,6 +65,29 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/tmux/pane.sh id     NAME                   # print
 
 Naming uses tmux pane titles, scoped to the tmux server (cross-window). Pick descriptive names: `install`, `build`, `logs`, `repl`, `db`.
 
+## Bonus: drive Synaps's `/plugins` UI from a side pane
+
+`scripts/tmux/synaps.sh` composes `pane.sh` to drive the Synaps TUI itself — useful for the **edit → push → install** loop when you've just pushed a plugin update to a marketplace repo and want to pull it into the running Synaps without leaving your seat.
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/tmux/synaps.sh refresh [MARKETPLACE]            # refresh marketplace cache
+${CLAUDE_PLUGIN_ROOT}/scripts/tmux/synaps.sh install PLUGIN [--marketplace M] # install a cached plugin
+${CLAUDE_PLUGIN_ROOT}/scripts/tmux/synaps.sh update  PLUGIN                   # update an installed plugin to latest cached SHA
+${CLAUDE_PLUGIN_ROOT}/scripts/tmux/synaps.sh sync    PLUGIN [--marketplace M] # refresh + install/update in one shot
+${CLAUDE_PLUGIN_ROOT}/scripts/tmux/synaps.sh status  [PLUGIN]                 # print installed/cached state (no TUI)
+```
+
+It opens Synaps in a fresh side pane (`synaps-sync`), navigates `/plugins` via key sends, polls `~/.synaps-cli/plugins.json` for state changes (not screen scraping), then quits cleanly. Common flow after pushing a plugin update:
+
+```bash
+# from your repo, after `git push`:
+${CLAUDE_PLUGIN_ROOT}/scripts/tmux/synaps.sh sync memkoshi
+# → spawns pane → runs synaps → /plugins → r (refresh) → Tab → u (update) → quit
+# → returns: "updated: abc12345 → def67890"
+```
+
+Flags: `--pane NAME` (default `synaps-sync`), `--keep-pane` (don't kill on success — for debugging), `--timeout SEC` (default 30), `--synaps-cmd CMD` (default `synaps`).
+
 ## Patterns
 
 ### Pattern 1 — sudo / interactive password
