@@ -105,22 +105,64 @@ git rev-parse --show-toplevel        # should be the worktree path
 
 Keep slugs short, hyphenated, lowercase, and describe the *outcome* not the activity.
 
-## Cleanup
+## Cleanup Is Mandatory
 
-When the branch is merged:
+A worktree's job ends when its PR merges. The moment the PR is merged, **the cleanup runs immediately** — same session, no deferral.
+
+```
+PR merged → cleanup → primary clone on main, worktree gone, branch gone
+```
+
+Leftover worktrees and local branches accumulate fast across sessions and across agents. They cause:
+- Stale checkouts that drift from `origin/main`
+- Branch-name collisions on the next task
+- Confusion about which worktree is "real"
+- Disk bloat from per-tree build artifacts
+- Multi-agent collisions on abandoned trees
+
+### The Cleanup Sequence
+
+Run all four steps. Do not skip any.
 
 ```bash
-cd ~/Projects/<org>/<repo>           # back to primary
+# 1. Leave the worktree before deleting it
+cd ~/Projects/<org>/<repo>           # primary clone
+
+# 2. Make sure local main reflects the merge
+git checkout main
+git pull origin main                 # fast-forward to merged state
+
+# 3. Remove the worktree directory
 git worktree remove ../.worktrees/<repo>-<slug>
-git branch -d feat/<slug>            # local branch
-git fetch origin --prune             # drop tracking refs
+
+# 4. Delete the local branch and prune remote refs
+git branch -d feat/<slug>            # -d (safe) since merged
+git fetch origin --prune             # drops origin/feat/<slug>
 ```
 
-If a worktree was force-deleted from disk:
+Verify clean state:
 
 ```bash
-git worktree prune
+git worktree list                    # only the primary entry remains
+git branch                           # only main (and other active work)
+git status                           # clean
 ```
+
+### Edge Cases
+
+**Worktree directory was force-deleted before `git worktree remove`:**
+```bash
+git worktree prune                   # drop the orphaned admin entry
+git branch -D feat/<slug>            # -D since the merge ref may be gone
+```
+
+**Branch was squash-merged (so `-d` refuses to delete):**
+```bash
+git branch -D feat/<slug>            # safe: PR is merged on the remote
+```
+
+**Uncommitted changes in the worktree at merge time:**
+That's a process bug — those changes should have been on the PR. Investigate before deleting; do not silently discard work.
 
 ## Multi-Agent Safety
 
@@ -130,6 +172,7 @@ When multiple agents (or processes) operate on the same repo:
 - Never `git checkout` a branch another agent has checked out — git will refuse anyway, but assume nothing.
 - The primary clone is the integration anchor; only the human (or a merge agent) moves it.
 - If you find your worktree has been mutated by another process, treat it like a merge conflict: stash, sync, replay.
+- **After your PR merges, clean up your worktree even if other agents are still running.** Their worktrees are independent.
 
 ## Rationalizations
 
@@ -141,6 +184,8 @@ When multiple agents (or processes) operate on the same repo:
 | "This is just a quick fix" | Quick fixes are how broken main happens. Worktree it. |
 | "Setting up a worktree is overhead" | `git worktree add` is one command. The overhead is the rule, not the tooling. |
 | "Plans don't need worktrees" | Correct — but the moment the plan is *approved*, you do. |
+| "I'll clean up the worktree later" | Later is when collisions happen. Cleanup is part of merge, not a future task. |
+| "The branch will get auto-deleted on the remote" | Remote auto-delete doesn't touch your local worktree, local branch, or disk. |
 
 ## Red Flags
 
@@ -150,6 +195,10 @@ When multiple agents (or processes) operate on the same repo:
 - "I'll move it to a worktree once it works"
 - Two agents reporting work on the same path
 - Branch name does not match worktree slug
+- **PR merged but the worktree directory still exists**
+- **PR merged but the local feature branch still exists**
+- Multiple `feat/*` or `fix/*` branches lingering after their PRs merged
+- Disk usage in `.worktrees/` growing across sessions
 
 ## Verification
 
@@ -160,3 +209,11 @@ Before declaring "ready to implement":
 - [ ] `git branch --show-current` matches the planned `feat/` or `fix/` slug
 - [ ] Primary clone is on the integration branch with a clean working tree
 - [ ] Branch is created from a fresh `origin/<integration-branch>`
+
+After PR merges (cleanup gate — run before claiming the task is done):
+
+- [ ] Primary clone is on `main` with `git pull` complete (fast-forwarded to merged state)
+- [ ] `git worktree list` shows only the primary entry
+- [ ] `git branch` no longer lists the merged feature branch
+- [ ] `git fetch --prune` has dropped the remote tracking ref
+- [ ] `~/Projects/<org>/.worktrees/<repo>-<slug>/` directory no longer exists on disk
