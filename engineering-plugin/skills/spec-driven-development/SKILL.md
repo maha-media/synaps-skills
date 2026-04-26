@@ -76,6 +76,13 @@ With the validated spec, generate a technical implementation plan:
 4. Identify parallel vs sequential work
 5. Define verification checkpoints between phases
 
+> **Surface stakes for the convergence decision.** The spec should call
+> out anything that affects the convergence-mode choice: security-critical
+> paths, autonomous-merge expectations, blast radius, bias-sensitive
+> review needs. The human uses this in **planning-and-task-breakdown**
+> Step 1.5 to choose `convergence: none` | `informed` | `holdout`. See
+> **convergence-loop** for the pattern itself.
+
 ## Phase 3: Tasks
 
 Break the plan into discrete tasks. See the **planning-and-task-breakdown** skill for the full task breakdown process.

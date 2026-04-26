@@ -9,15 +9,60 @@ Some work is too complex, too biased-toward-the-author, or too consequential for
 
 This skill is **advisory** — it describes the pattern. To run it, an orchestrator (typically the top-level TUI agent, since only that level has `subagent_start`/`subagent_collect`) dispatches each role as a subagent and routes structured feedback between iterations. The orchestrator owns the budget, the worktree, and the information walls.
 
+## Authorization
+
+This pattern is **invoked by the orchestrator only when the plan
+explicitly declares `convergence: informed` or `convergence: holdout`**.
+The decision is owned by the human during
+**planning-and-task-breakdown**, not by the agent at runtime.
+
+Why the human owns it:
+
+- **Cost** — ~4× single-agent model spend. Budget is a human decision.
+- **Stakes** — "is this consequential enough for bias elimination?"
+  requires context the agent doesn't always have (security posture,
+  blast radius, whether a human will review the output).
+- **Policy** — threshold, axis weights, and loop bounds are policy
+  choices, not preferences. They must be fixed before the first score is
+  seen, otherwise the loop becomes goalpost-moving theatre.
+
+If the plan says `convergence: none`, **do not run this loop** even if
+the work feels risky mid-implementation. Surface the risk to the human
+and request a plan amendment. Unilaterally escalating to convergence is
+unauthorized; unilaterally skipping it when the plan demanded it is also
+unauthorized.
+
 ## When to Use
 
-- A task is large enough that one agent's quality drifts (medium/large feature work)
-- Bias matters: the author of code shouldn't grade their own tests
-- The work is testable behaviourally (you can write scenarios and check pass/fail)
-- You can afford 4× model cost for higher-confidence convergence
-- You want a numeric verdict, not a vibe check
+Use the criteria below during **planning-and-task-breakdown** to choose
+between `convergence: none`, `informed`, or `holdout`. These are
+human-evaluated checks, not agent-runtime decisions.
 
-**Skip it for:** trivial changes, exploratory work, anything where a clean spec doesn't yet exist. Convergence requires a target — without one, the loop has nothing to converge to.
+Choose **`informed`** or **`holdout`** when any of these hold:
+
+- Bias matters: the author of code shouldn't grade their own tests
+- Medium/large feature work where one agent's quality drifts over a long
+  context
+- The work is testable behaviourally (you can write scenarios and check
+  pass/fail) — convergence requires a target
+- You can afford ~4× model cost for higher-confidence convergence
+- You want a numeric verdict with axis-level evidence, not a vibe check
+
+Choose **`holdout`** specifically when:
+
+- Security-critical code where the author marking their own homework is
+  unacceptable
+- The output will ship without human review
+- Bias elimination matters more than speed
+
+Choose **`none`** for:
+
+- Trivial changes, refactors confined to one file
+- Exploratory work where the spec doesn't yet exist (convergence needs a
+  target — without one, the loop has nothing to converge to)
+- Anything where human review at the end will catch the same issues
+  convergence would catch
+
 
 ## The Pattern
 
@@ -159,6 +204,13 @@ When any limit trips: produce an escalation report (current score, structured fe
 
 ## Red Flags
 
+- Loop invoked without `convergence: informed` or `convergence: holdout`
+  declared in the plan — unauthorized escalation
+- Plan amended mid-run to enable convergence after a single-agent attempt
+  produced bad output (retroactive justification — the threshold no
+  longer means anything)
+- Threshold or axis weights changed after the first score (goalpost
+  moving)
 - Roles bleeding into each other (Builder reading test specs in holdout mode; Judge sees the code that implemented its own scenarios)
 - No threshold defined before the loop runs (you'll move the goalposts after seeing the first score)
 - Iterating past `max_fix_iterations` "because it was almost there"
@@ -172,6 +224,7 @@ When any limit trips: produce an escalation report (current score, structured fe
 
 Before declaring a convergence run complete:
 
+- [ ] Plan declared `convergence: informed` or `convergence: holdout` *before* the loop ran (not amended after a bad single-agent result)
 - [ ] Threshold was fixed before the loop started (not adjusted to match the score it produced)
 - [ ] Final verdict is PROCEED *or* the loop stopped explicitly at a documented bound
 - [ ] Structured feedback from any rejected iteration is preserved (audit trail)
