@@ -10,6 +10,28 @@ read **only the doc for the capability you're about to use**.
 
 ---
 
+## First-run setup (or: a capability just failed with "missing dep")
+
+If anything web-tools-related fails with a missing-binary error
+(`yt-dlp not found`, `pdftotext not found`, `Cannot find module 'playwright'`,
+etc.) run the plugin's idempotent setup script:
+
+```bash
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh --check    # status only
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh            # install missing deps
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh --minimal  # only fetch + memory
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh --reinstall  # nuke node_modules first
+```
+
+It covers: Node ≥ 18, `npm install` for fetch/browser/youtube, yt-dlp + JS-runtime
+config, `python3-secretstorage` (Linux), Whisper, pdftotext, pandoc, Playwright
+browsers, VelociRAG, and the memory tree at `~/.synaps-cli/memory/web/`.
+
+Hard issues (Node missing, `npm install` failed) exit 1; soft warnings
+(optional capabilities not installed) exit 0.
+
+---
+
 ## Step 1 — Always recall first
 
 Before any web operation, ask memory:

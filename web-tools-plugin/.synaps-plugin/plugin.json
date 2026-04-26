@@ -1,6 +1,6 @@
 {
   "name": "web-tools",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Swiss-army web toolkit — fetch, browser, search, youtube, scholar, transcribe, pdf, docs, github, wiki, status — backed by self-healing long-term memory (VelociRAG).",
   "author": {
     "name": "JR Morton",
