@@ -1,0 +1,34 @@
+---
+name: ${NAME}
+description: ${DESC}
+---
+
+# ${NAME} — Index
+
+A single entry point for every capability in the **${NAME}** plugin. Read this
+index, then read **only the doc for the capability you're about to use**
+(progressive disclosure — saves context tokens).
+
+---
+
+## Step 1 — Pick a capability
+
+| Need                | Doc                  | Status      |
+|---------------------|----------------------|-------------|
+| _example task A_    | `docs/example.md`    | shipped     |
+
+## Step 2 — Run it
+
+Each capability's doc has its own flags, gotchas, and escalation rules.
+Follow them.
+
+## Step 3 — On failure
+
+_If this plugin uses the self-healing memory pattern, link to_
+_`docs/self-healing.md` here. Otherwise document the escalation chain inline._
+
+## Conventions
+
+- All capability docs live under `docs/`.
+- All scripts live under `scripts/<capability>/` (or `bin/` for single CLIs).
+- Shared helpers live under `scripts/_lib/` (or `lib/`).

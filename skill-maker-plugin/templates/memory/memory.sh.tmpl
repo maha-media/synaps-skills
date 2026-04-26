@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# memory.sh — minimal VelociRAG wrapper (best-effort).
+#
+# This is the bash equivalent of the JS/Python helpers in web-tools.
+# All operations swallow errors so memory failures NEVER break the caller.
+#
+# Layout (per-plugin):
+#   ~/.synaps-cli/memory/${NAME}/
+#     notes/         markdown source of truth
+#     db/            VelociRAG index (derived)
+#     failures.jsonl raw operational failure log
+
+set -uo pipefail
+
+MEMORY_ROOT="${MEMORY_ROOT:-$HOME/.synaps-cli/memory/${NAME}}"
+MEMORY_NOTES="$MEMORY_ROOT/notes"
+MEMORY_DB="$MEMORY_ROOT/db"
+MEMORY_FAILURES="$MEMORY_ROOT/failures.jsonl"
+MEMORY_SOURCE="${NAME}"
+
+memory_ensure() { mkdir -p "$MEMORY_NOTES" "$MEMORY_DB" 2>/dev/null || true; }
+
+memory_available() { command -v velocirag >/dev/null 2>&1; }
+
+# memory_recall QUERY [--tag TAG]... [--limit N]
+memory_recall() {
+  memory_available || return 0
+  local query="$1"; shift
+  local args=( search "$query" --db "$MEMORY_DB" --format json -l 5 )
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --tag)   args+=( --tags "$2" ); shift 2 ;;
+      --limit) args+=( -l "$2" ); shift 2 ;;
+      *)       shift ;;
+    esac
+  done
+  velocirag "${args[@]}" 2>/dev/null || true
+}
+
+# memory_log_failure JSON_OBJ
+memory_log_failure() {
+  memory_ensure
+  local payload="$1"
+  local ts
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '%s\n' "$(jq -c --arg ts "$ts" '. + {ts: $ts}' <<<"$payload")" \
+    >> "$MEMORY_FAILURES" 2>/dev/null || true
+}
+
+# memory_reindex
+memory_reindex() {
+  memory_available || return 0
+  memory_ensure
+  velocirag index "$MEMORY_NOTES" --db "$MEMORY_DB" -s "$MEMORY_SOURCE" \
+    >/dev/null 2>&1 || true
+}
