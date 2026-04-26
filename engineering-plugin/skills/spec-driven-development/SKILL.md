@@ -18,14 +18,16 @@ Write a structured specification before writing any code. The spec is the shared
 ## The Gated Workflow
 
 ```
-SPECIFY ──→ PLAN ──→ TASKS ──→ IMPLEMENT
-   │          │        │          │
-   ▼          ▼        ▼          ▼
- Human      Human    Human      Human
- reviews    reviews  reviews    reviews
+SPECIFY ──→ PLAN ──→ [WORKTREE] ──→ TASKS ──→ IMPLEMENT
+   │          │           │            │          │
+   ▼          ▼           ▼            ▼          ▼
+ Human      Human    Worktree       Human      Human
+ reviews    reviews   created       reviews    reviews
 ```
 
 Do not advance to the next phase until the current one is validated.
+
+**The worktree gate is non-negotiable.** SPECIFY and PLAN may happen on the primary checkout. Once the plan is approved — before writing tasks or any code — switch to a dedicated worktree. See **worktrees-by-default**.
 
 ## Phase 1: Specify
 
@@ -78,6 +80,8 @@ With the validated spec, generate a technical implementation plan:
 
 Break the plan into discrete tasks. See the **planning-and-task-breakdown** skill for the full task breakdown process.
 
+> **Worktree required from here on.** Task breakdown is the boundary between thinking and doing. Once tasks exist, code is imminent. Confirm you are inside the dedicated worktree (`git worktree list`, `git branch --show-current`) before continuing. See **worktrees-by-default**.
+
 ## Phase 4: Implement
 
 Execute tasks using the **incremental-implementation** and **test-driven-development** skills.
@@ -115,3 +119,4 @@ Before proceeding to implementation:
 - [ ] Success criteria are specific and testable
 - [ ] Boundaries (Always/Ask/Never) are defined
 - [ ] Spec is saved to a file in the repository
+- [ ] A dedicated worktree exists for the implementation (see **worktrees-by-default**)

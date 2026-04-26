@@ -1,7 +1,7 @@
 {
   "name": "engineering",
-  "version": "0.1.0-beta",
-  "description": "Engineering discipline skills — code review, security review, TDD, debugging, spec-driven development, incremental implementation, planning, and verification. Battle-tested patterns for shipping reliable software.",
+  "version": "0.2.0-beta",
+  "description": "Engineering discipline skills — code review, security review, TDD, debugging, spec-driven development, incremental implementation, planning, verification, and worktree-based isolation. Battle-tested patterns for shipping reliable software.",
   "author": {
     "name": "Haseeb Khalid",
     "url": "https://github.com/HaseebKhalid1507"

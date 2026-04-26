@@ -42,7 +42,19 @@ Slice 3: Add offline support and reconnection
 
 ## Implementation Rules
 
-### Rule 0: Simplicity First
+### Rule 0: Be in a Worktree
+
+Before the first edit, verify:
+
+```bash
+git worktree list                    # dedicated worktree present
+git rev-parse --show-toplevel        # current path is that worktree
+git branch --show-current            # branch is feat/<slug> or fix/<slug>
+```
+
+If any check fails — **stop and create the worktree first.** Implementation never happens on the primary checkout. See **worktrees-by-default**.
+
+### Rule 1: Simplicity First
 
 Before writing any code: "What is the simplest thing that could work?"
 
@@ -66,7 +78,7 @@ SIMPLICITY CHECK:
 
 Three similar lines of code is better than a premature abstraction. Implement the naive, obviously-correct version first. Optimize only after correctness is proven with tests.
 
-### Rule 1: Scope Discipline
+### Rule 2: Scope Discipline
 
 Touch only what the task requires. Do NOT:
 - "Clean up" adjacent code
@@ -82,15 +94,15 @@ NOTICED BUT NOT TOUCHING:
 → Want me to create tasks for these?
 ```
 
-### Rule 2: One Thing at a Time
+### Rule 3: One Thing at a Time
 
 Each increment changes one logical thing. Don't mix concerns. Bad: one commit adding a component, refactoring another, and updating config. Good: three separate commits.
 
-### Rule 3: Keep It Compilable
+### Rule 4: Keep It Compilable
 
 After each increment, `cargo build` succeeds and `cargo test` passes. Don't leave the codebase broken between slices.
 
-### Rule 4: Feature Flags for Incomplete Features
+### Rule 5: Feature Flags for Incomplete Features
 
 ```rust
 // Feature flag for work-in-progress
@@ -103,7 +115,7 @@ if ENABLE_MULTIPLAYER {
 
 Merge small increments without exposing incomplete work.
 
-### Rule 5: Rollback-Friendly
+### Rule 6: Rollback-Friendly
 
 Each increment should be independently revertable:
 - Additive changes (new files, new functions) are easy to revert
@@ -138,6 +150,7 @@ After each increment:
 - Build or tests broken between increments
 - Building abstractions before the third use case demands it
 - Touching files outside task scope "while I'm here"
+- Editing files on the primary checkout instead of the worktree
 
 ## Verification
 
@@ -147,3 +160,4 @@ After completing all increments for a task:
 - [ ] Build is clean (`cargo build`, `cargo clippy`)
 - [ ] Feature works end-to-end as specified
 - [ ] No uncommitted changes remain
+- [ ] All commits live on the worktree branch, not on the integration branch directly

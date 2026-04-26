@@ -18,6 +18,8 @@ Write a failing test before writing the code that makes it pass. For bug fixes, 
    Test FAILS        Test PASSES         Tests still PASS
 ```
 
+The full cycle runs inside a dedicated worktree. Tests are code; writing them outside an isolated branch contaminates the integration tree. See **worktrees-by-default**.
+
 ### Step 1: RED — Write a Failing Test
 Write the test first. It must fail. A test that passes immediately proves nothing.
 
@@ -164,3 +166,4 @@ After completing any implementation:
 - [ ] Test names describe the behavior being verified
 - [ ] No tests were skipped or disabled
 - [ ] Coverage hasn't decreased
+- [ ] Tests and implementation live on the worktree branch (see **worktrees-by-default**)

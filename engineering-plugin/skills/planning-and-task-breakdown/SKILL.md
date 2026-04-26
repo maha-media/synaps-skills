@@ -77,7 +77,6 @@ Each task follows this structure:
 ```
 
 ### Step 5: Order and Checkpoint
-
 Arrange tasks so that:
 1. Dependencies are satisfied (foundations first)
 2. Each task leaves the system in a working state
@@ -91,6 +90,19 @@ Arrange tasks so that:
 - [ ] Core flow works end-to-end
 - [ ] Review with human before proceeding
 ```
+
+### Step 6: Switch to a Worktree
+
+The plan exists. Tasks exist. **Code is next.** Before any task runs:
+
+```bash
+cd ~/Projects/<org>/<repo>
+git fetch origin --prune
+git worktree add -b feat/<slug> ../.worktrees/<repo>-<slug> origin/main
+cd ../.worktrees/<repo>-<slug>
+```
+
+The primary checkout stays clean on the integration branch. All implementation happens in the worktree. This is non-negotiable — see **worktrees-by-default** for the full discipline.
 
 ## Task Sizing
 
@@ -137,6 +149,7 @@ If a task is L or larger, break it down further. Agents perform best on S and M 
 - All tasks are XL-sized
 - No checkpoints between tasks
 - Dependency order not considered
+- Plan is approved but no worktree was created (see **worktrees-by-default**)
 
 ## Verification
 
@@ -147,3 +160,4 @@ Before starting implementation:
 - [ ] No task touches more than ~5 files
 - [ ] Checkpoints exist between major phases
 - [ ] Human has reviewed and approved the plan
+- [ ] Dedicated worktree created and active (`git worktree list` shows it; `pwd` is inside it)
