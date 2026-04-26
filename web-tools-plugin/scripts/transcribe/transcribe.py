@@ -17,8 +17,16 @@ import sys
 from datetime import timedelta
 from pathlib import Path
 
+# Wire in self-healing hooks
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _lib import hooks  # noqa: E402
+
 
 SUPPORTED_EXT = {".mp3", ".mp4", ".m4a", ".wav", ".ogg", ".flac", ".webm", ".mpeg", ".mpga", ".avi", ".mkv", ".mov"}
+
+# Local op — no network host. Use the file extension as a sub-tag at recall time.
+HOST = None
+OP = "transcribe"
 
 
 def check_dependencies():
@@ -51,10 +59,13 @@ def check_dependencies():
         )
 
     if errors:
-        print("Missing dependencies:\n", file=sys.stderr)
-        for e in errors:
-            print(f"  ✗ {e}\n", file=sys.stderr)
-        sys.exit(1)
+        joined = "\n  ✗ ".join([""] + errors)
+        hooks.fail_and_exit(
+            host=HOST, op=OP,
+            err=Exception("Missing dependencies:" + joined),
+            err_class="missing_dep",
+            cmd="transcribe.py (dep check)",
+        )
 
 
 def detect_device():
@@ -123,13 +134,23 @@ def transcribe(
 
     file_path = Path(file_path).resolve()
     if not file_path.exists():
-        print(f"Error: File not found: {file_path}", file=sys.stderr)
-        sys.exit(1)
+        hooks.fail_and_exit(
+            host=HOST, op=OP,
+            err=FileNotFoundError(f"File not found: {file_path}"),
+            err_class="file_not_found",
+            cmd=f"transcribe.py {file_path}",
+            args={"file": str(file_path)},
+        )
 
     ext = file_path.suffix.lower()
     if ext not in SUPPORTED_EXT:
-        print(f"Error: Unsupported format '{ext}'. Supported: {', '.join(sorted(SUPPORTED_EXT))}", file=sys.stderr)
-        sys.exit(1)
+        hooks.fail_and_exit(
+            host=HOST, op=OP,
+            err=ValueError(f"Unsupported format '{ext}'. Supported: {', '.join(sorted(SUPPORTED_EXT))}"),
+            err_class="unsupported_format",
+            cmd=f"transcribe.py {file_path}",
+            args={"file": str(file_path), "ext": ext},
+        )
 
     if formats is None:
         formats = ["txt", "srt", "json"]
@@ -158,9 +179,12 @@ def transcribe(
         model = whisper.load_model(model_name, device=device)
     except RuntimeError as e:
         if "out of memory" in str(e).lower() or "CUDA" in str(e):
-            print(f"\nError: GPU out of memory loading '{model_name}' model.", file=sys.stderr)
-            print("Try a smaller model (--model small or --model base) or use --device cpu", file=sys.stderr)
-            sys.exit(1)
+            hooks.fail_and_exit(
+                host=HOST, op=OP, err=e,
+                err_class="oom",
+                cmd=f"transcribe.py {file_path} --model {model_name}",
+                args={"model": model_name, "device": device},
+            )
         raise
 
     transcribe_kwargs = {"verbose": False}
@@ -171,9 +195,12 @@ def transcribe(
         result = model.transcribe(str(file_path), **transcribe_kwargs)
     except RuntimeError as e:
         if "out of memory" in str(e).lower():
-            print(f"\nError: GPU out of memory during transcription.", file=sys.stderr)
-            print("Try: --model small, --model base, or --device cpu", file=sys.stderr)
-            sys.exit(1)
+            hooks.fail_and_exit(
+                host=HOST, op=OP, err=e,
+                err_class="oom",
+                cmd=f"transcribe.py {file_path} --model {model_name}",
+                args={"model": model_name, "device": device},
+            )
         raise
 
     text = result["text"].strip()
@@ -249,21 +276,41 @@ def main():
                         help="Print plain text to stdout only (no files written)")
     args = parser.parse_args()
 
+    # PRE — recall any prior transcribe-related fixes (oom, codec, language)
+    ext = Path(args.file).suffix.lstrip(".").lower() or "?"
+    hooks.recall_and_emit(
+        f"transcribe {ext} {args.model or 'auto'}",
+        host=HOST, op=OP,
+        tags=[f"format-{ext}"] if ext != "?" else None,
+    )
+
     # Check deps before doing anything
     check_dependencies()
 
     formats = [f.strip().lower() for f in args.format.split(",")]
 
-    transcribe(
-        file_path=args.file,
-        model_name=args.model,
-        language=args.language,
-        output_dir=args.output_dir,
-        name_override=args.name,
-        formats=formats,
-        to_stdout=args.stdout,
-        device=args.device,
-    )
+    try:
+        transcribe(
+            file_path=args.file,
+            model_name=args.model,
+            language=args.language,
+            output_dir=args.output_dir,
+            name_override=args.name,
+            formats=formats,
+            to_stdout=args.stdout,
+            device=args.device,
+        )
+    except SystemExit:
+        raise
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
+        sys.exit(130)
+    except Exception as e:
+        hooks.fail_and_exit(
+            host=HOST, op=OP, err=e,
+            cmd=f"transcribe.py {args.file}",
+            args={"file": args.file, "model": args.model, "language": args.language},
+        )
 
 
 if __name__ == "__main__":
