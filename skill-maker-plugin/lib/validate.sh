@@ -35,23 +35,23 @@ validate_plugin_json() {
 
   if [[ -z "$name" ]]; then
     err "P001: $file missing 'name'"
-    ((errs++))
+    errs=$((errs + 1))
   elif [[ ! "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
     err "P002: $file 'name' must be lower-kebab-case (got '$name')"
-    ((errs++))
+    errs=$((errs + 1))
   fi
 
   if [[ -z "$version" ]]; then
     err "P001: $file missing 'version'"
-    ((errs++))
+    errs=$((errs + 1))
   elif [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
     err "P003: $file 'version' must be semver (got '$version')"
-    ((errs++))
+    errs=$((errs + 1))
   fi
 
   if [[ -z "$desc" ]]; then
     err "P001: $file missing 'description'"
-    ((errs++))
+    errs=$((errs + 1))
   fi
 
   return $errs
@@ -79,11 +79,11 @@ validate_skill_md() {
 
   if [[ -z "$name" ]]; then
     err "F001: $file frontmatter missing 'name'"
-    ((errs++))
+    errs=$((errs + 1))
   fi
   if [[ -z "$desc" ]]; then
     err "F001: $file frontmatter missing 'description'"
-    ((errs++))
+    errs=$((errs + 1))
   fi
 
   # name must match parent directory
@@ -91,7 +91,7 @@ validate_skill_md() {
   parent=$(basename "$(dirname "$file")")
   if [[ -n "$name" && "$name" != "$parent" ]]; then
     err "F002: $file frontmatter name '$name' != parent dir '$parent'"
-    ((errs++))
+    errs=$((errs + 1))
   fi
 
   return $errs
@@ -116,7 +116,7 @@ validate_plugin() {
   # at least one skill must exist
   if [[ ! -d "$dir/skills" ]]; then
     err "$dir missing skills/ directory"
-    ((total++))
+    total=$((total + 1))
   else
     local found=0
     while IFS= read -r skill_dir; do
@@ -128,7 +128,7 @@ validate_plugin() {
 
     if [[ "$found" -eq 0 ]]; then
       err "$dir/skills/ contains no skill subdirectories"
-      ((total++))
+      total=$((total + 1))
     fi
   fi
 
