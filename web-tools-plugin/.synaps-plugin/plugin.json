@@ -1,7 +1,7 @@
 {
   "name": "web-tools",
-  "version": "0.3.0-beta",
-  "description": "Swiss-army web toolkit — fetch, browser, search, youtube, scholar, transcribe, pdf, docs — backed by self-healing long-term memory (VelociRAG).",
+  "version": "0.4.0-beta",
+  "description": "Swiss-army web toolkit — fetch, browser, search, youtube, scholar, transcribe, pdf, docs, github, wiki — backed by self-healing long-term memory (VelociRAG).",
   "author": {
     "name": "JR Morton",
     "url": "https://github.com/maha-media"

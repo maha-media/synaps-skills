@@ -1,6 +1,6 @@
 ---
 name: web
-description: Swiss-army web toolkit — fetch, browser, search, youtube, scholar, transcribe, pdf, docs (and growing). Self-healing memory via VelociRAG.
+description: Swiss-army web toolkit — fetch, browser, search, youtube, scholar, transcribe, pdf, docs, github, wiki. Self-healing memory via VelociRAG.
 ---
 
 # web — Index
@@ -37,10 +37,10 @@ detailed flags, gotchas, and escalation rules.
 | Audio / video → text          | `docs/transcribe.md` | shipped     |
 | PDF text & metadata           | `docs/pdf.md`        | shipped     |
 | DOCX / PPTX / EPUB ↔ markdown | `docs/docs.md`       | shipped     |
+| GitHub (repos, issues, code)  | `docs/github.md`     | shipped     |
+| Wikipedia                     | `docs/wiki.md`       | shipped     |
 | Memory ops (recall / commit)  | `docs/memory.md`     | shipped     |
 | Self-healing protocol         | `docs/self-healing.md` | shipped   |
-| GitHub (repos, issues, code)  | `docs/github.md`     | _phase 4_   |
-| Wikipedia                     | `docs/wiki.md`       | _phase 4_   |
 
 ## Step 3 — On failure: re-recall, escalate, then commit a fix
 
