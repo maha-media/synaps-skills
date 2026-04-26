@@ -1,6 +1,6 @@
 ---
 name: tmux
-description: Worker-pane patterns for Synaps agents inside tmux. When `$TMUX` is set, prefer driving long-running, interactive, or streaming work in a side pane the user can watch and interact with — rather than blocking inside `bash` tool calls. Use for installs needing sudo, log tailing, build/test daemons, parallel shells, and anything where the user might need to inject input.
+description: Use when `$TMUX` is set to drive long-running, interactive, or streaming work in a side worker pane — installs needing sudo, log tailing, build/test daemons, parallel shells, user-injectable input.
 ---
 
 # tmux worker panes for agents

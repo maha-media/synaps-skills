@@ -1,6 +1,6 @@
 {
   "name": "memkoshi",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Persistent memory for Synaps agents — recall past decisions, commit new ones, hand off context between sessions. Wraps the Memkoshi memory system (staging gate, 4-layer search, pattern detection, evolution scoring).",
   "author": {
     "name": "JR Morton",

@@ -1,6 +1,6 @@
 ---
 name: web
-description: Swiss-army web toolkit — fetch, browser, search, youtube, scholar, transcribe, pdf, docs, github, wiki. Self-healing memory via VelociRAG.
+description: Use for any web operation — fetch, browser, search, youtube, scholar, transcribe, pdf, docs, github, wiki. Self-healing memory via VelociRAG.
 ---
 
 # web — Index
