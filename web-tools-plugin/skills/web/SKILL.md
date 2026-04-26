@@ -21,14 +21,31 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh --check    # status only
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh            # install missing deps
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh --minimal  # only fetch + memory
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh --reinstall  # nuke node_modules first
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh --exa-key=KEY   # set EXA_API_KEY
 ```
 
 It covers: Node ≥ 18, `npm install` for fetch/browser/youtube, yt-dlp + JS-runtime
 config, `python3-secretstorage` (Linux), Whisper, pdftotext, pandoc, Playwright
-browsers, VelociRAG, and the memory tree at `~/.synaps-cli/memory/web/`.
+browsers, VelociRAG, the memory tree at `~/.synaps-cli/memory/web/`, and the
+secrets file at `~/.config/synaps/web-tools.env` (chmod 600).
 
 Hard issues (Node missing, `npm install` failed) exit 1; soft warnings
 (optional capabilities not installed) exit 0.
+
+### Secrets and non-interactive shells
+
+API keys live in `~/.config/synaps/web-tools.env` (chmod 600), auto-loaded by
+every web capability via `_lib/hooks.mjs`. **This is required because agent
+bash tool calls don't source `~/.bashrc`** — a key that only lives in your
+shell profile won't reach a non-interactive subprocess.
+
+```env
+# ~/.config/synaps/web-tools.env
+EXA_API_KEY=…
+```
+
+Pre-set environment variables always win over file contents, so you can still
+override per-call. The file is missing-tolerant (no warning if absent).
 
 ---
 
