@@ -16,16 +16,23 @@ The staging gate is deliberate: you don't want hallucinations becoming "memories
 
 ## Setup
 
-One-time install on the host:
+One-time install on the host — use the plugin's setup script (idempotent):
 
 ```bash
-# Recommended — isolated venv via pipx
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/memkoshi/setup.sh
+```
+
+This installs memkoshi from git via pipx, **injects stelline by default** for
+the richer write path (session intelligence on top of the regex extractor),
+and runs `memkoshi init`. Pass `--no-stelline` to skip the extra, `--check`
+to verify status without changing anything, or `--reinstall` to wipe and
+rebuild the venv.
+
+Manual fallback (if you can't run the script):
+
+```bash
 pipx install git+https://github.com/HaseebKhalid1507/memkoshi.git
-
-# Alternative — user site-packages
-pip install --user --break-system-packages git+https://github.com/HaseebKhalid1507/memkoshi.git
-
-# Initialise the local store (creates ~/.memkoshi/memkoshi.db)
+pipx inject memkoshi git+https://github.com/HaseebKhalid1507/Stelline.git
 memkoshi init
 ```
 

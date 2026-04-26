@@ -14,16 +14,22 @@ Persistent memory for Synaps agents. Wraps the [Memkoshi](https://github.com/Has
 ## Installation
 
 ```bash
-# Add the plugin
+# 1. Add the plugin (or just refresh+install via /plugins UI inside Synaps)
 synaps plugins install memkoshi --marketplace synaps-skills
 
-# Install the underlying memkoshi runtime (one-time)
-pipx install git+https://github.com/HaseebKhalid1507/memkoshi.git
-# or:
-pip install --user --break-system-packages git+https://github.com/HaseebKhalid1507/memkoshi.git
+# 2. Install the underlying memkoshi + stelline runtime (one-time)
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/memkoshi/setup.sh
+```
 
-# Initialise storage
-memkoshi init
+`setup.sh` is idempotent. It installs `memkoshi` from git via pipx, injects
+`stelline` into the same venv (richer write path), and runs `memkoshi init`.
+Re-run anytime to verify with `--check`, or use `--no-stelline` to skip the
+optional extra. Pass `--reinstall` to wipe and rebuild the venv.
+
+```bash
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/memkoshi/setup.sh --check
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/memkoshi/setup.sh --no-stelline
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/memkoshi/setup.sh --reinstall
 ```
 
 ## Usage
@@ -44,6 +50,7 @@ See `skills/memkoshi/SKILL.md` for the full agent-facing playbook.
 memkoshi-plugin/
 ├── .synaps-plugin/plugin.json          # plugin manifest
 ├── scripts/memkoshi/
+│   ├── setup.sh                         # one-time installer (memkoshi + stelline)
 │   ├── approve.py                       # non-interactive approve/reject
 │   ├── approve.sh                       # shell wrapper
 │   └── boot-context.sh                  # boot-context for `synaps -s` injection

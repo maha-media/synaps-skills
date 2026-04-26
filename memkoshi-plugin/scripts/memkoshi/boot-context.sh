@@ -3,15 +3,17 @@
 # Falls back gracefully if memkoshi isn't installed yet.
 set -u
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 if ! command -v memkoshi >/dev/null 2>&1; then
-    cat <<'EOF'
+    cat <<EOF
 # Memory boot context
 
-(memkoshi not installed — install with:
-  pipx install git+https://github.com/HaseebKhalid1507/memkoshi.git
- or:
-  pip install --user --break-system-packages git+https://github.com/HaseebKhalid1507/memkoshi.git
- then run `memkoshi init`.)
+(memkoshi not installed — run the plugin's setup script:
+  bash $SCRIPT_DIR/setup.sh
+
+ This will install memkoshi + stelline via pipx and run \`memkoshi init\`.
+ Pass \`--no-stelline\` to skip the optional richer write path.)
 EOF
     exit 0
 fi
