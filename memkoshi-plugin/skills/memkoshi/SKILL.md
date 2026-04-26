@@ -1,6 +1,6 @@
 ---
 name: memkoshi
-description: Persistent memory across Synaps sessions. Use to recall prior decisions, preferences, and facts before answering; commit new decisions and learnings during work; hand off context between sessions. Backed by the Memkoshi CLI (staging gate, 4-layer search, pattern detection). Local-first, no cloud required.
+description: Use to recall prior decisions, preferences, and facts before answering, and to commit new decisions during work. Persistent local-first memory across Synaps sessions via the Memkoshi CLI.
 ---
 
 # Memkoshi — agent memory for Synaps

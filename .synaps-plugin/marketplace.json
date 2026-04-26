@@ -10,8 +10,8 @@
   "plugins": [
     {
       "name": "web-tools",
-      "description": "Exa web search, Playwright browser automation, YouTube transcripts/downloads, and Whisper speech-to-text",
-      "version": "1.3.0",
+      "description": "Use for any web operation — fetch, browser, search, youtube, scholar, transcribe, pdf, docs, github, wiki. Self-healing memory via VelociRAG.",
+      "version": "1.3.1",
       "author": {
         "name": "JR Morton",
         "url": "https://github.com/maha-media"
@@ -32,8 +32,8 @@
     },
     {
       "name": "memkoshi",
-      "description": "Persistent memory for Synaps agents — recall past decisions, commit new ones, hand off context between sessions. Wraps Memkoshi (4-layer VelociRAG search) + Stelline (richer write path); both auto-installed via setup.sh. Local-first, no cloud required.",
-      "version": "0.2.0",
+      "description": "Use to recall prior decisions, preferences, and facts before answering, and to commit new decisions during work. Persistent local-first memory across Synaps sessions via the Memkoshi CLI.",
+      "version": "0.2.1",
       "author": {
         "name": "JR Morton",
         "url": "https://github.com/maha-media"
@@ -43,8 +43,8 @@
     },
     {
       "name": "tmux-tools",
-      "description": "Worker-pane patterns for Synaps agents inside tmux. Spawn named side panes, drive long-running commands, capture streaming output, hand control back to the user when sudo or prompts appear. Includes synaps.sh — drives the Synaps /plugins TUI from a side pane to refresh/install/update plugins. Auto-suggested when $TMUX is detected.",
-      "version": "0.2.0",
+      "description": "Use when `$TMUX` is set to drive long-running, interactive, or streaming work in a side worker pane — installs needing sudo, log tailing, build/test daemons, parallel shells, user-injectable input.",
+      "version": "0.2.1",
       "author": {
         "name": "JR Morton",
         "url": "https://github.com/maha-media"
