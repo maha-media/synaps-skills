@@ -1,6 +1,6 @@
 ---
 name: security-review
-description: Security-focused code review checklist
+description: Use before merging code that handles user input, secrets, auth, or external I/O — checklist for injection, secret exposure, access control gaps, and DoS risks.
 ---
 
 # Security Review
