@@ -126,10 +126,14 @@ def recall_and_emit(query: str, *, host: str | None = None,
         tag_str = f" [{', '.join(all_tags)}]" if all_tags else ""
         _stderr(f"[{label}] {n} hit{'' if n == 1 else 's'} for \"{query}\"{tag_str}:")
         for h in hits:
-            file = h.get("file") or h.get("path") or (h.get("metadata") or {}).get("file") or "?"
+            meta = h.get("metadata") or {}
+            fm = meta.get("frontmatter") or {}
+            file = h.get("file") or h.get("path") or meta.get("file_path") or meta.get("file") or "?"
             score = h.get("score")
+            if not isinstance(score, (int, float)):
+                score = h.get("similarity")
             score_str = f" ({score:.3f})" if isinstance(score, (int, float)) else ""
-            title = h.get("title") or (h.get("metadata") or {}).get("title") or ""
+            title = h.get("title") or fm.get("title") or meta.get("title") or ""
             snippet_raw = h.get("content") or h.get("text") or h.get("body") or ""
             snippet = re.sub(r"\s+", " ", snippet_raw)[:160]
             _stderr(f"  • {title or file}{score_str}")

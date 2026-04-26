@@ -150,7 +150,7 @@ fi
 head "Node Dependencies"
 
 for dir in \
-  "$REPO_DIR/web-tools-plugin/scripts/browser-tools" \
+  "$REPO_DIR/web-tools-plugin/scripts/browser" \
   "$REPO_DIR/web-tools-plugin/scripts/youtube"; do
   skill=$(basename "$dir")
   [ ! -f "$dir/package.json" ] && continue
@@ -311,7 +311,7 @@ elif [ -n "$EXA_KEY" ]; then
   write_to_profiles "EXA_API_KEY" "export EXA_API_KEY=\"$EXA_KEY\""
   ok "EXA_API_KEY added to ${PROFILES[*]}"
 else
-  warn "EXA_API_KEY not set — needed for exa-search skill"
+  warn "EXA_API_KEY not set — needed for the web/search capability (Exa)"
   info "Re-run with: bash install.sh --exa-key=YOUR_KEY"
 fi
 

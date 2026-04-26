@@ -125,10 +125,18 @@ function recall(query, opts = {}) {
     try { hits = JSON.parse(r.stdout || '[]'); } catch { return []; }
     if (!Array.isArray(hits)) hits = hits.results || hits.hits || [];
     if (tags.length > 1) {
-      // post-filter for AND semantics — best-effort, depending on what fields velocirag returns
+      // post-filter for AND semantics — VelociRAG hits have tags under
+      // `metadata.frontmatter.tags`; some shapes also stash them at the top
+      // level. Check all known locations.
       const required = new Set(tags.slice(1));
       hits = hits.filter(h => {
-        const hTags = new Set([...(h.tags || []), ...(h.metadata?.tags || [])]);
+        const meta = h.metadata || {};
+        const fm = meta.frontmatter || {};
+        const hTags = new Set([
+          ...(h.tags || []),
+          ...(meta.tags || []),
+          ...(fm.tags || []),
+        ]);
         for (const t of required) if (!hTags.has(t)) return false;
         return true;
       });

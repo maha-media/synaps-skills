@@ -109,9 +109,12 @@ export function recallAndEmit(query, opts = {}) {
     const label = opts.label || "memory";
     _stderr(`[${label}] ${hits.length} hit${hits.length === 1 ? "" : "s"} for "${query}"${tags.length ? ` [${tags.join(", ")}]` : ""}:`);
     for (const h of hits) {
-      const file = h.file || h.path || h.metadata?.file || "?";
-      const score = typeof h.score === "number" ? h.score.toFixed(3) : "";
-      const title = h.title || h.metadata?.title || "";
+      const meta = h.metadata || {};
+      const fm = meta.frontmatter || {};
+      const file = h.file || h.path || meta.file_path || meta.file || "?";
+      const score = typeof h.score === "number" ? h.score.toFixed(3)
+                  : typeof h.similarity === "number" ? h.similarity.toFixed(3) : "";
+      const title = h.title || fm.title || meta.title || "";
       const snippet = (h.content || h.text || h.body || "").replace(/\s+/g, " ").slice(0, 160);
       _stderr(`  • ${title || file}${score ? ` (${score})` : ""}`);
       if (snippet) _stderr(`    ${snippet}${snippet.length === 160 ? "…" : ""}`);

@@ -145,9 +145,15 @@ def recall(query: str, *, limit: int = 5, tags: str | Iterable[str] | None = Non
             return []
         if len(norm_tags) > 1:
             required = set(norm_tags[1:])
+
             def has_all(h: dict) -> bool:
-                ht = set((h.get("tags") or []) +
-                         ((h.get("metadata") or {}).get("tags") or []))
+                meta = h.get("metadata") or {}
+                fm = meta.get("frontmatter") or {}
+                ht = set(
+                    (h.get("tags") or [])
+                    + (meta.get("tags") or [])
+                    + (fm.get("tags") or [])
+                )
                 return required.issubset(ht)
             hits = [h for h in hits if has_all(h)]
         return hits[:limit]
