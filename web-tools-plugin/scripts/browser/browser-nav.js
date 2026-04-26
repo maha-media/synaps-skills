@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { connect } from "./lib.js";
+import { connect, extractHost, recallAndEmit, failAndExit } from "./lib.js";
 
 const args = process.argv.slice(2);
 const newTab = args.includes("--new");
@@ -14,15 +14,32 @@ if (!url) {
   process.exit(1);
 }
 
-const { browser, context, page } = await connect();
+const HOST = extractHost(url);
+const OP = "browser-nav";
 
-if (newTab) {
-  const p = await context.newPage();
-  await p.goto(url, { waitUntil: "domcontentloaded" });
-  console.log("✓ Opened:", url);
-} else {
-  await page.goto(url, { waitUntil: "domcontentloaded" });
-  console.log("✓ Navigated to:", url);
+recallAndEmit(`${HOST || url} navigate`, { host: HOST, op: OP });
+
+let browserHandle;
+try {
+  const { browser, context, page } = await connect();
+  browserHandle = browser;
+
+  if (newTab) {
+    const p = await context.newPage();
+    await p.goto(url, { waitUntil: "domcontentloaded" });
+    console.log("✓ Opened:", url);
+  } else {
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    console.log("✓ Navigated to:", url);
+  }
+
+  await browser.close();
+} catch (e) {
+  try { await browserHandle?.close(); } catch {}
+  failAndExit({
+    host: HOST, op: OP,
+    err: e,
+    cmd: `browser-nav.js ${url}${newTab ? " --new" : ""}`,
+    args: { url, newTab },
+  });
 }
-
-await browser.close();

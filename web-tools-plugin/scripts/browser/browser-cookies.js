@@ -1,18 +1,33 @@
 #!/usr/bin/env node
 
-import { connect } from "./lib.js";
+import { connect, recallAndEmit, failAndExit } from "./lib.js";
 
-const { browser, context } = await connect();
+const OP = "browser-cookies";
 
-const cookies = await context.cookies();
+recallAndEmit("cookies dump", { op: OP });
 
-for (const cookie of cookies) {
-  console.log(`${cookie.name}: ${cookie.value}`);
-  console.log(`  domain: ${cookie.domain}`);
-  console.log(`  path: ${cookie.path}`);
-  console.log(`  httpOnly: ${cookie.httpOnly}`);
-  console.log(`  secure: ${cookie.secure}`);
-  console.log("");
+let browserHandle;
+try {
+  const { browser, context } = await connect();
+  browserHandle = browser;
+
+  const cookies = await context.cookies();
+
+  for (const cookie of cookies) {
+    console.log(`${cookie.name}: ${cookie.value}`);
+    console.log(`  domain: ${cookie.domain}`);
+    console.log(`  path: ${cookie.path}`);
+    console.log(`  httpOnly: ${cookie.httpOnly}`);
+    console.log(`  secure: ${cookie.secure}`);
+    console.log("");
+  }
+
+  await browser.close();
+} catch (e) {
+  try { await browserHandle?.close(); } catch {}
+  failAndExit({
+    host: null, op: OP,
+    err: e,
+    cmd: "browser-cookies.js",
+  });
 }
-
-await browser.close();

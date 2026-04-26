@@ -2,20 +2,36 @@
 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connect } from "./lib.js";
+import { connect, recallAndEmit, failAndExit } from "./lib.js";
 
 const args = process.argv.slice(2);
 const fullPage = args.includes("--full");
 const outPath = args.find((a) => !a.startsWith("--"));
 
-const { browser, page } = await connect();
+const OP = "browser-screenshot";
 
-const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-const filename = `screenshot-${timestamp}.png`;
-const filepath = outPath || join(tmpdir(), filename);
+recallAndEmit("screenshot", { op: OP });
 
-await page.screenshot({ path: filepath, fullPage });
+let browserHandle;
+try {
+  const { browser, page } = await connect();
+  browserHandle = browser;
 
-console.log(filepath);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const filename = `screenshot-${timestamp}.png`;
+  const filepath = outPath || join(tmpdir(), filename);
 
-await browser.close();
+  await page.screenshot({ path: filepath, fullPage });
+
+  console.log(filepath);
+
+  await browser.close();
+} catch (e) {
+  try { await browserHandle?.close(); } catch {}
+  failAndExit({
+    host: null, op: OP,
+    err: e,
+    cmd: `browser-screenshot.js${fullPage ? " --full" : ""}${outPath ? " " + outPath : ""}`,
+    args: { fullPage, outPath },
+  });
+}
