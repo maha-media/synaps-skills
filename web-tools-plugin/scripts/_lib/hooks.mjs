@@ -72,11 +72,21 @@ const _CLASS_RX = [
 export function classifyError(err, ctx = {}) {
   const stderr = ctx.stderr || "";
   const exit = ctx.exit;
-  const text = [
-    err?.message || (typeof err === "string" ? err : ""),
-    err?.stderr || "",
-    stderr,
-  ].join(" ");
+  // Walk cause chain (Node's native fetch puts ENOTFOUND etc. in err.cause)
+  const parts = [];
+  let cur = err;
+  for (let depth = 0; cur && depth < 5; depth++) {
+    if (typeof cur === "string") parts.push(cur);
+    else {
+      if (cur.message) parts.push(cur.message);
+      if (cur.code) parts.push(cur.code);
+      if (cur.errno) parts.push(String(cur.errno));
+    }
+    cur = cur?.cause;
+  }
+  if (err?.stderr) parts.push(err.stderr);
+  parts.push(stderr);
+  const text = parts.join(" ");
   for (const [rx, cls] of _CLASS_RX) {
     if (rx.test(text)) return cls;
   }
@@ -132,7 +142,14 @@ export function recallAndEmit(query, opts = {}) {
 export function failAndExit(opts) {
   const exit = opts.exit ?? 1;
   const err = opts.err;
-  const errMsg = err?.message || (typeof err === "string" ? err : String(err || "failed"));
+  let errMsg = err?.message || (typeof err === "string" ? err : String(err || "failed"));
+  // Surface cause-chain info into the logged message (Node fetch hides the real error in .cause)
+  let cur = err?.cause;
+  for (let depth = 0; cur && depth < 3; depth++) {
+    const m = cur?.message || (typeof cur === "string" ? cur : "");
+    if (m && !errMsg.includes(m)) errMsg += ` ← ${m}`;
+    cur = cur?.cause;
+  }
   const errClass = opts.err_class || classifyError(err, { stderr: opts.stderr, exit });
   const host = opts.host || null;
   const op = opts.op || null;

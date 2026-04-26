@@ -92,10 +92,23 @@ _CLASS_RX = [
 
 def classify_error(err: Any, *, stderr: str = "", exit: int | None = None) -> str:
     text_parts: list[str] = []
-    if isinstance(err, BaseException):
-        text_parts.append(str(err))
-    elif err is not None:
-        text_parts.append(str(err))
+    # Walk cause chain (Python: __cause__ for explicit raise from, __context__ for implicit)
+    cur = err
+    for _ in range(5):
+        if cur is None:
+            break
+        if isinstance(cur, BaseException):
+            text_parts.append(str(cur))
+            for attr in ("errno", "strerror"):
+                v = getattr(cur, attr, None)
+                if v is not None:
+                    text_parts.append(str(v))
+        else:
+            text_parts.append(str(cur))
+        nxt = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+        if nxt is cur:
+            break
+        cur = nxt
     if stderr:
         text_parts.append(stderr)
     text = " ".join(text_parts)
