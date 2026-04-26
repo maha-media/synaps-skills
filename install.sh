@@ -155,6 +155,20 @@ for dir in \
   "$REPO_DIR/web-tools-plugin/scripts/youtube"; do
   skill=$(basename "$dir")
   [ ! -f "$dir/package.json" ] && continue
+  # Skip if package.json declares no runtime/dev deps (avoids creating empty node_modules)
+  has_deps="yes"
+  if command -v node &>/dev/null; then
+    has_deps=$(node -e '
+      const p = require(process.argv[1]);
+      const d = Object.keys(p.dependencies || {}).length;
+      const dd = Object.keys(p.devDependencies || {}).length;
+      process.stdout.write(d + dd ? "yes" : "no");
+    ' "$dir/package.json" 2>/dev/null || echo "yes")
+  fi
+  if [ "$has_deps" = "no" ]; then
+    ok "$skill needs no node deps"
+    continue
+  fi
   if [ -d "$dir/node_modules" ]; then
     ok "$skill/node_modules exists"
   elif [ "$CHECK_ONLY" = true ]; then
