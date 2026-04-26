@@ -51,6 +51,17 @@
       },
       "source": "./memkoshi-plugin",
       "category": "productivity"
+    },
+    {
+      "name": "tmux-tools",
+      "description": "Worker-pane patterns for Synaps agents inside tmux. Spawn named side panes, drive long-running and interactive commands, capture streaming output, hand control to the user when sudo or prompts appear. Auto-suggested when $TMUX is detected.",
+      "version": "0.1.0",
+      "author": {
+        "name": "JR Morton",
+        "url": "https://github.com/maha-media"
+      },
+      "source": "./tmux-tools-plugin",
+      "category": "productivity"
     }
   ]
 }

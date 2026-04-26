@@ -1,0 +1,12 @@
+{
+  "name": "tmux-tools",
+  "version": "0.1.0",
+  "description": "Worker-pane patterns for Synaps agents inside tmux. Spawn named side panes, drive long-running commands, capture streaming output, hand control back to the user when interactive input is needed (sudo, prompts). Auto-suggested when $TMUX is detected.",
+  "author": {
+    "name": "JR Morton",
+    "url": "https://github.com/maha-media"
+  },
+  "repository": "maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "productivity"
+}
