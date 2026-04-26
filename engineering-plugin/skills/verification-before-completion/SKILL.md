@@ -48,6 +48,8 @@ Skip any step = lying, not verifying
 | Regression test works | Red-green cycle verified | Test passes once |
 | Agent completed | VCS diff shows changes | Agent reports "success" |
 | Requirements met | Line-by-line checklist | Tests passing |
+| Working in isolation | `git worktree list` + `git rev-parse --show-toplevel` confirm dedicated worktree | "I created a branch" |
+| Worktree cleaned up | `git worktree list` shows only primary; merged branch deleted locally; disk dir gone | "PR merged" alone |
 
 ## Red Flags - STOP
 

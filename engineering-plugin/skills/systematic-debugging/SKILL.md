@@ -78,6 +78,9 @@ Create the minimal failing case:
 Minimal reproduction makes root cause obvious and prevents fixing symptoms.
 
 ### Step 4: Fix the Root Cause
+
+Before the fix touches any file: confirm you are in a worktree (`git worktree list`, `git rev-parse --show-toplevel`). Bug fixes are code changes; they belong on a `fix/<slug>` branch in a dedicated worktree, never on the primary checkout. See **worktrees-by-default**.
+
 Fix the underlying issue, not the symptom:
 
 ```
@@ -197,3 +200,4 @@ After fixing a bug:
 - [ ] All existing tests pass
 - [ ] Build succeeds
 - [ ] Original bug scenario verified end-to-end
+- [ ] Fix lives on a `fix/<slug>` worktree branch, primary checkout untouched
