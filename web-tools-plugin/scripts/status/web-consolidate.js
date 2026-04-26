@@ -27,6 +27,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import fs from "node:fs";
+import { loadCoveredTuples, isCovered, bucketKey } from "../_lib/frontmatter.mjs";
 
 const _require = createRequire(import.meta.url);
 const memory = _require("../_lib/memory.js");
@@ -46,6 +47,8 @@ function parseArgs(argv) {
     else if (a === "--commit") out.flags.commit = true;
     else if (a === "--draft") out.flags.draft = argv[++i];
     else if (a === "--json") out.flags.json = true;
+    else if (a === "--show-covered") out.flags.showCovered = true;
+    else if (a === "--no-skip-covered") out.flags.noSkipCovered = true;
   }
   return out;
 }
@@ -75,12 +78,25 @@ Options:
   --commit             Write notes to ${memory.NOTES} and reindex
   --draft DIR          Save drafts to DIR/ for human review
   --json               Output as JSON
+  --show-covered       List patterns suppressed by existing notes' covers:
+  --no-skip-covered    Do not suppress patterns covered by existing notes
+
+Notes can declare which failure tuples they cover via a YAML frontmatter
+field, e.g.:
+
+  covers:
+    - "youtube.com|youtube-transcript|no_transcript"
+    - "*|search|no_api_key"
+
+By default the consolidator suppresses any bucket matching an existing
+note's covers (with \`*\` as a wildcard).
 
 Examples:
   web-consolidate                              # dry-run all recurring patterns
   web-consolidate --host github.com --op fetch # focus on one tuple
   web-consolidate --commit                     # auto-write all proposals
   web-consolidate --draft ./drafts             # save .md files for review
+  web-consolidate --show-covered               # see what's suppressed and why
 `);
 }
 
@@ -247,25 +263,52 @@ const buckets = bucket(failures, {
   err: args.flags.err,
 });
 
+// Load existing notes' `covers:` declarations so we can suppress
+// proposals for patterns that are already documented.
+const covered = loadCoveredTuples(memory.NOTES);
+const skipCovered = !args.flags.noSkipCovered;
+
 const proposals = [];
+const suppressed = [];
 for (const [key, samples] of buckets.entries()) {
   if (samples.length < threshold) continue;
   const [host, op, errClass] = key.split("\t").map(s => s === "-" ? null : s);
+  const tuple = { host, op, err_class: errClass };
+  if (skipCovered && isCovered(tuple, covered)) {
+    suppressed.push({ host, op, err_class: errClass, samples_count: samples.length });
+    continue;
+  }
   proposals.push(proposeNote(host, op, errClass, samples));
 }
 
 proposals.sort((a, b) => b.samples_count - a.samples_count);
+suppressed.sort((a, b) => b.samples_count - a.samples_count);
 
 if (args.flags.json) {
-  process.stdout.write(JSON.stringify(proposals.map(p => ({
-    ...p,
-    rendered: renderMarkdownProposal(p),
-  })), null, 2) + "\n");
+  process.stdout.write(JSON.stringify({
+    proposals: proposals.map(p => ({ ...p, rendered: renderMarkdownProposal(p) })),
+    suppressed,
+  }, null, 2) + "\n");
   process.exit(0);
 }
 
+if (args.flags.showCovered) {
+  if (!suppressed.length) {
+    console.log(`No buckets suppressed by existing notes' covers: declarations.`);
+  } else {
+    console.log(`# ${suppressed.length} bucket${suppressed.length === 1 ? "" : "s"} suppressed by existing notes:`);
+    for (const s of suppressed) {
+      console.log(`  ${bucketKey(s)}  (${s.samples_count}× pattern)`);
+    }
+    console.log("");
+  }
+}
+
 if (!proposals.length) {
-  console.log(`No recurring failures meet threshold (≥${threshold}) in window.`);
+  const tail = suppressed.length
+    ? ` (${suppressed.length} covered by existing notes; --show-covered to list)`
+    : "";
+  console.log(`No recurring failures meet threshold (≥${threshold}) in window${tail}.`);
   process.exit(0);
 }
 
@@ -302,7 +345,10 @@ if (args.flags.draft) {
 }
 
 // default: dry-run, print to stdout
-console.error(`# ${proposals.length} proposal${proposals.length === 1 ? "" : "s"} (dry-run; threshold=${threshold})`);
+const tailMsg = suppressed.length
+  ? ` (${suppressed.length} covered by existing notes; --show-covered to list)`
+  : "";
+console.error(`# ${proposals.length} proposal${proposals.length === 1 ? "" : "s"} (dry-run; threshold=${threshold})${tailMsg}`);
 console.error(`# Use --commit to write, --draft DIR to save drafts, --json for machine output.`);
 console.error("");
 for (const p of proposals) {

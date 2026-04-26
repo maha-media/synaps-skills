@@ -100,7 +100,37 @@ node scripts/status/web-consolidate.js --commit
 
 # Machine-readable
 node scripts/status/web-consolidate.js --json
+
+# See what was suppressed by existing notes' covers:
+node scripts/status/web-consolidate.js --show-covered
+
+# Disable suppression — re-propose everything, even covered patterns
+node scripts/status/web-consolidate.js --no-skip-covered
 ```
+
+### Suppression via `covers:`
+
+The consolidator suppresses any bucket already documented by an existing
+note. A note opts into this by listing the failure tuples it covers in
+its YAML frontmatter:
+
+```yaml
+---
+status: superseded
+covers:
+  - "youtube.com|youtube-transcript|no_transcript"
+  - "youtube.com|transcript|no_transcript"
+---
+```
+
+Format: `host|op|err_class`, with `*` as a wildcard for any axis. Any number
+of tuples per note. Suppression applies regardless of `status` — a
+`superseded` note (issue resolved at the code level) and an `active` note
+(workaround documented) both prevent duplicate proposals.
+
+When you write a fix note, add a `covers:` entry so future recurrences of
+the same pattern don't generate noise. Use `--show-covered` to verify what's
+currently suppressed.
 
 ### What gets generated
 
