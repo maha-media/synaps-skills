@@ -260,6 +260,45 @@ else
   info "Install: pip install openai-whisper"
 fi
 
+# memkoshi (web plugin self-healing memory)
+if command -v velocirag &>/dev/null; then
+  VR_VER="$(velocirag --version 2>/dev/null | command head -1)"
+  ok "velocirag ${VR_VER:-installed}"
+elif [ "$CHECK_ONLY" = true ]; then
+  warn "velocirag not installed — needed for web plugin self-healing memory"
+  info "Install: pip install --user velocirag (add --break-system-packages on PEP 668 systems)"
+else
+  if command -v pip &>/dev/null || command -v pip3 &>/dev/null; then
+    PIP=$(command -v pip3 || command -v pip)
+    echo "  📦 Installing velocirag..."
+    # Try plain --user first; fall back to --break-system-packages for PEP 668 distros
+    if "$PIP" install --user --quiet velocirag 2>/tmp/vr-install.err; then
+      ok "velocirag installed"
+    elif grep -q "externally-managed\|PEP 668" /tmp/vr-install.err 2>/dev/null && \
+         "$PIP" install --user --quiet --break-system-packages velocirag 2>&1; then
+      ok "velocirag installed (--break-system-packages)"
+    else
+      warn "velocirag install failed — web plugin will run without memory"
+      info "Manual: $PIP install --user --break-system-packages velocirag"
+    fi
+    rm -f /tmp/vr-install.err
+  else
+    warn "pip not found — can't install velocirag"
+    info "Install: pip install --user velocirag"
+  fi
+fi
+
+# web-plugin memory directory
+WEB_MEMORY_ROOT="$HOME/.synaps-cli/memory/web"
+if [ -d "$WEB_MEMORY_ROOT/notes" ] && [ -d "$WEB_MEMORY_ROOT/db" ]; then
+  ok "web memory tree exists ($WEB_MEMORY_ROOT)"
+elif [ "$CHECK_ONLY" = true ]; then
+  warn "web memory tree missing"
+else
+  mkdir -p "$WEB_MEMORY_ROOT/notes" "$WEB_MEMORY_ROOT/db"
+  ok "web memory tree created ($WEB_MEMORY_ROOT/{notes,db})"
+fi
+
 # ─── 4. Shell profile: EXA_API_KEY ───────────────────────────
 
 head "API Keys"
