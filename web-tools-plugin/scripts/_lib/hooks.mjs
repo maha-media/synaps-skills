@@ -25,10 +25,16 @@
  */
 
 import { createRequire } from "node:module";
+import { loadEnvFile } from "./env.mjs";
 
 // memory.js is CommonJS so we use createRequire to load it from this ESM module
 const _require = createRequire(import.meta.url);
 export const memory = _require("./memory.js");
+
+// Auto-load ~/.config/synaps/web-tools.env into process.env for non-interactive
+// shells (bash tool calls don't source ~/.bashrc). Pre-set env wins over file
+// values; missing file is silently ignored. Only warns on loose perms.
+loadEnvFile(undefined, { injectInto: process.env, warnOnLoosePerms: true });
 
 const QUIET = !!process.env.WEB_HOOKS_QUIET;
 

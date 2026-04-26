@@ -21,12 +21,14 @@
 #   8. velocirag (self-healing memory — warn only, plugin still works without).
 #   9. Memory tree at ~/.synaps-cli/memory/web/{notes,db}.
 #  10. Playwright browser binaries (browser capability — warn only).
+#  11. EXA_API_KEY in ~/.config/synaps/web-tools.env (search — warn only).
 #
 # Flags:
-#   --check       report status only, install nothing (exit 0 if all green)
-#   --reinstall   nuke node_modules first, then reinstall
-#   --minimal     only fetch + memory; skip transcribe/pdf/docs/playwright
-#   -h, --help    show this header
+#   --check        report status only, install nothing (exit 0 if all green)
+#   --reinstall    nuke node_modules first, then reinstall
+#   --minimal      only fetch + memory; skip transcribe/pdf/docs/playwright
+#   --exa-key=KEY  write KEY to ~/.config/synaps/web-tools.env (chmod 600)
+#   -h, --help     show this header
 #
 # Exit codes: 0 ok / 1 hard issue (Node missing, npm install failed)
 #                   / 2 unknown flag
@@ -41,14 +43,16 @@ PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CHECK_ONLY=false
 REINSTALL=false
 MINIMAL=false
+EXA_KEY=""
 
 for arg in "$@"; do
     case "$arg" in
-        --check)     CHECK_ONLY=true ;;
-        --reinstall) REINSTALL=true ;;
-        --minimal)   MINIMAL=true ;;
+        --check)        CHECK_ONLY=true ;;
+        --reinstall)    REINSTALL=true ;;
+        --minimal)      MINIMAL=true ;;
+        --exa-key=*)    EXA_KEY="${arg#*=}" ;;
         -h|--help)
-            sed -n '1,30p' "$0"
+            sed -n '1,35p' "$0"
             exit 0
             ;;
         *)
@@ -316,7 +320,7 @@ fi
 section "Self-healing memory"
 
 if command -v velocirag >/dev/null 2>&1; then
-    VR_VER="$(velocirag --version 2>/dev/null | command head -1)"
+    VR_VER="$(velocirag --version 2>/dev/null | command head -1 || true)"
     ok "velocirag ${VR_VER:-installed}"
 elif [ "$CHECK_ONLY" = true ]; then
     warn "velocirag not installed — plugin runs without memory (recall/commit no-op)"
@@ -355,22 +359,87 @@ else
     ok "memory tree created ($WEB_MEMORY_ROOT/{notes,db})"
 fi
 
-# ─── 9. Search API key ───────────────────────────────────────
+# ─── 9. Search API key (env file is canonical) ──────────────
 section "Search capability (optional)"
 
-if [ -n "${EXA_API_KEY:-}" ]; then
-    ok "EXA_API_KEY is set in current shell"
+ENV_FILE="$HOME/.config/synaps/web-tools.env"
+
+write_env_file() {
+    local key="$1"
+    local dir
+    dir="$(dirname "$ENV_FILE")"
+    mkdir -p "$dir"
+    # Preserve any other keys in the file; only update EXA_API_KEY
+    if [ -f "$ENV_FILE" ] && grep -qE '^(export[[:space:]]+)?EXA_API_KEY=' "$ENV_FILE" 2>/dev/null; then
+        # Use a temp file + portable sed (no GNU -i)
+        local tmp
+        tmp="$(mktemp "$ENV_FILE.XXXXXX")"
+        sed -E "s|^(export[[:space:]]+)?EXA_API_KEY=.*|EXA_API_KEY=$key|" "$ENV_FILE" > "$tmp"
+        mv "$tmp" "$ENV_FILE"
+    else
+        # Append (or create)
+        printf 'EXA_API_KEY=%s\n' "$key" >> "$ENV_FILE"
+    fi
+    chmod 600 "$ENV_FILE"
+}
+
+# 1. If user passed --exa-key=KEY, write it (highest priority)
+if [ -n "$EXA_KEY" ]; then
+    if [ "$CHECK_ONLY" = true ]; then
+        info "(would write EXA_API_KEY to $ENV_FILE)"
+    else
+        write_env_file "$EXA_KEY"
+        ok "EXA_API_KEY written to $ENV_FILE (mode 0600)"
+    fi
+fi
+
+# 2. Report status — env file is the canonical location
+if [ -f "$ENV_FILE" ] && grep -qE '^(export[[:space:]]+)?EXA_API_KEY=' "$ENV_FILE" 2>/dev/null; then
+    # Verify the key is non-empty
+    KEY_VAL="$(grep -E '^(export[[:space:]]+)?EXA_API_KEY=' "$ENV_FILE" | head -1 | sed -E 's|^(export[[:space:]]+)?EXA_API_KEY=||; s|^"(.*)"$|\1|; s|^'"'"'(.*)'"'"'$|\1|')"
+    if [ -n "$KEY_VAL" ]; then
+        ok "EXA_API_KEY in $ENV_FILE"
+        # Check perms
+        if [ "$(uname -s)" != "Darwin" ] && [ "$(uname -s)" != "Linux" ]; then
+            : # skip stat on unknown OS
+        else
+            MODE="$(stat -c '%a' "$ENV_FILE" 2>/dev/null || stat -f '%Lp' "$ENV_FILE" 2>/dev/null || echo "")"
+            if [ -n "$MODE" ] && [ "$MODE" != "600" ] && [ "$MODE" != "400" ]; then
+                if [ "$CHECK_ONLY" = true ]; then
+                    warn "$ENV_FILE has mode 0$MODE — should be 0600 (run without --check to fix)"
+                else
+                    chmod 600 "$ENV_FILE"
+                    ok "tightened $ENV_FILE perms → 0600"
+                fi
+            fi
+        fi
+    else
+        warn "$ENV_FILE has empty EXA_API_KEY"
+        info "Re-run with --exa-key=YOUR_KEY"
+    fi
+elif [ -n "${EXA_API_KEY:-}" ]; then
+    # Live env has it but the file doesn't — offer to migrate
+    if [ "$CHECK_ONLY" = true ]; then
+        warn "EXA_API_KEY in current shell but not in $ENV_FILE"
+        info "Migrate: bash setup.sh --exa-key=\"\$EXA_API_KEY\""
+        info "(non-interactive shells can't read shell profiles → file is canonical)"
+    else
+        write_env_file "$EXA_API_KEY"
+        ok "EXA_API_KEY migrated from current shell → $ENV_FILE"
+    fi
 else
-    # Look in common shell profiles (non-interactive shells don't source these)
+    # Last resort: check shell profiles (interactive-only fallback)
     FOUND=false
     for prof in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
-        [ -f "$prof" ] && grep -q "EXA_API_KEY" "$prof" 2>/dev/null && { FOUND=true; break; }
+        [ -f "$prof" ] && grep -qE '^(export[[:space:]]+)?EXA_API_KEY=' "$prof" 2>/dev/null && { FOUND=true; PROFILE="$prof"; break; }
     done
     if [ "$FOUND" = true ]; then
-        ok "EXA_API_KEY in shell profile (restart shell or 'source' to activate)"
+        warn "EXA_API_KEY only in $PROFILE — non-interactive shells (agent bash calls) can't read it"
+        info "Migrate to canonical location: source $PROFILE && bash setup.sh --exa-key=\"\$EXA_API_KEY\""
     else
         warn "EXA_API_KEY not set — search capability via Exa won't work"
-        info "Get a key: https://exa.ai/  →  add to ~/.bashrc: export EXA_API_KEY=…"
+        info "Get a key: https://exa.ai/  →  bash setup.sh --exa-key=YOUR_KEY"
+        info "(stored at $ENV_FILE, mode 0600; auto-loaded by every web capability)"
     fi
 fi
 

@@ -98,6 +98,7 @@ if (!query) {
 	console.log("  --exclude <domain>    Exclude domain (repeatable)");
 	console.log("\nEnvironment:");
 	console.log("  EXA_API_KEY           Required. Your Exa API key.");
+	console.log("                        Set live, or in ~/.config/synaps/web-tools.env");
 	console.log("\nExamples:");
 	console.log('  search.js "javascript async await"');
 	console.log('  search.js "rust programming" -n 10 --content');

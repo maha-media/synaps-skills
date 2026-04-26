@@ -8,9 +8,27 @@ All scripts auto-call memory recall on start and auto-log failures.
 
 ## Setup
 
+The Exa API key is read from **two sources** (in order of precedence):
+
+1. **`process.env.EXA_API_KEY`** — already set in the calling shell.
+2. **`~/.config/synaps/web-tools.env`** — auto-loaded by `_lib/hooks.mjs`
+   on every script invocation. **This is the canonical location** because
+   non-interactive shells (agent bash tool calls, cron, CI) DO NOT source
+   `~/.bashrc`. File format is dotenv-style (`KEY=VALUE` per line).
+
+Recommended: write the key to the canonical file.
+
 ```bash
-export EXA_API_KEY="…"   # https://dashboard.exa.ai/api-keys
+# Easiest — via setup.sh (creates the file with mode 0600):
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh --exa-key=YOUR_KEY
+
+# Equivalent manual:
+mkdir -p ~/.config/synaps
+echo 'EXA_API_KEY=YOUR_KEY' > ~/.config/synaps/web-tools.env
+chmod 600 ~/.config/synaps/web-tools.env
 ```
+
+Get a key at https://dashboard.exa.ai/api-keys.
 
 No `npm install` needed — uses native `fetch`.
 
@@ -84,7 +102,7 @@ browser-content.js     # direct fetch + Readability
 
 | Variable          | Default | Notes                                  |
 |-------------------|---------|----------------------------------------|
-| `EXA_API_KEY`     | —       | **Required**                           |
+| `EXA_API_KEY`     | —       | **Required.** Set live, or in `~/.config/synaps/web-tools.env` |
 | `WEB_HOOKS_QUIET` | unset   | Suppress hook stderr surface           |
 
 ## When to use what

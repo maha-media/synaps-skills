@@ -365,13 +365,48 @@ fi
 
 head "API Keys"
 
-if [ -n "${EXA_API_KEY:-}" ]; then
-  ok "EXA_API_KEY is set in current shell"
+# Canonical location: ~/.config/synaps/web-tools.env (works in non-interactive
+# shells where ~/.bashrc isn't sourced — i.e. agent bash tool calls).
+WEB_ENV_FILE="$HOME/.config/synaps/web-tools.env"
+
+write_web_env_key() {
+  local key_name="$1" key_value="$2"
+  mkdir -p "$(dirname "$WEB_ENV_FILE")"
+  if [ -f "$WEB_ENV_FILE" ] && grep -qE "^(export[[:space:]]+)?$key_name=" "$WEB_ENV_FILE" 2>/dev/null; then
+    local tmp; tmp="$(mktemp "$WEB_ENV_FILE.XXXXXX")"
+    sed -E "s|^(export[[:space:]]+)?$key_name=.*|$key_name=$key_value|" "$WEB_ENV_FILE" > "$tmp"
+    mv "$tmp" "$WEB_ENV_FILE"
+  else
+    printf '%s=%s\n' "$key_name" "$key_value" >> "$WEB_ENV_FILE"
+  fi
+  chmod 600 "$WEB_ENV_FILE"
+}
+
+# 1. If --exa-key= was supplied, that wins — write to canonical file.
+if [ -n "$EXA_KEY" ]; then
+  if [ "$CHECK_ONLY" = true ]; then
+    info "(would write EXA_API_KEY to $WEB_ENV_FILE)"
+  else
+    write_web_env_key "EXA_API_KEY" "$EXA_KEY"
+    ok "EXA_API_KEY written to $WEB_ENV_FILE (mode 0600)"
+  fi
+fi
+
+# 2. Report status.
+if [ -f "$WEB_ENV_FILE" ] && grep -qE '^(export[[:space:]]+)?EXA_API_KEY=' "$WEB_ENV_FILE" 2>/dev/null; then
+  ok "EXA_API_KEY in $WEB_ENV_FILE (auto-loaded by every web capability)"
+elif [ -n "${EXA_API_KEY:-}" ]; then
+  # Live env has it; offer to migrate to the canonical file
+  if [ "$CHECK_ONLY" = true ]; then
+    warn "EXA_API_KEY in current shell but not in $WEB_ENV_FILE"
+    info "Migrate: bash install.sh --exa-key=\"\$EXA_API_KEY\""
+  else
+    write_web_env_key "EXA_API_KEY" "$EXA_API_KEY"
+    ok "EXA_API_KEY migrated from current shell → $WEB_ENV_FILE"
+  fi
 elif in_any_profile "EXA_API_KEY"; then
-  ok "EXA_API_KEY already in shell profile (restart shell to activate)"
-elif [ -n "$EXA_KEY" ]; then
-  write_to_profiles "EXA_API_KEY" "export EXA_API_KEY=\"$EXA_KEY\""
-  ok "EXA_API_KEY added to ${PROFILES[*]}"
+  warn "EXA_API_KEY only in shell profile — non-interactive shells can't read it"
+  info "Migrate: source ${PROFILES[0]} && bash install.sh --exa-key=\"\$EXA_API_KEY\""
 else
   warn "EXA_API_KEY not set — needed for the web/search capability (Exa)"
   info "Re-run with: bash install.sh --exa-key=YOUR_KEY"

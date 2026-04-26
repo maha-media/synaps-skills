@@ -24,6 +24,7 @@ if (urls.length === 0) {
 	console.log("  --fresh         Force livecrawl (ignore cache)");
 	console.log("\nEnvironment:");
 	console.log("  EXA_API_KEY     Required. Your Exa API key.");
+	console.log("                  Set live, or in ~/.config/synaps/web-tools.env");
 	console.log("\nExamples:");
 	console.log("  content.js https://example.com/article");
 	console.log("  content.js https://example.com/a https://example.com/b --highlights");
