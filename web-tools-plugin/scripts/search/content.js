@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { extractHost, recallAndEmit, failAndExit } from "../_lib/hooks.mjs";
+
 const args = process.argv.slice(2);
 
 // Parse --highlights flag
@@ -29,17 +31,28 @@ if (urls.length === 0) {
 	process.exit(1);
 }
 
+const HOST = "api.exa.ai";
+const OP = "search-content";
+
+// PRE — recall any prior fixes for the target host(s)
+const targetHosts = urls.map(extractHost).filter(Boolean);
+const recallTags = targetHosts.map(h => `domain-${h.replace(/\./g, "-")}`);
+recallAndEmit(`content extract ${targetHosts.join(" ")}`, {
+	host: HOST, op: OP, tags: recallTags,
+});
+
 const apiKey = process.env.EXA_API_KEY;
 if (!apiKey) {
-	console.error("Error: EXA_API_KEY environment variable is required.");
-	console.error("Get your API key at: https://dashboard.exa.ai/api-keys");
-	process.exit(1);
+	failAndExit({
+		host: HOST, op: OP,
+		err: new Error("EXA_API_KEY environment variable is required. Get your API key at: https://dashboard.exa.ai/api-keys"),
+		err_class: "no_api_key",
+		cmd: `content.js ${urls.join(" ")}`,
+	});
 }
 
 async function getContents(urls) {
-	const body = {
-		urls,
-	};
+	const body = { urls };
 
 	if (useHighlights) {
 		body.highlights = { max_characters: 4000 };
@@ -47,9 +60,7 @@ async function getContents(urls) {
 		body.text = { max_characters: 20000 };
 	}
 
-	if (forceFresh) {
-		body.maxAgeHours = 0;
-	}
+	if (forceFresh) body.maxAgeHours = 0;
 
 	const response = await fetch("https://api.exa.ai/contents", {
 		method: "POST",
@@ -62,37 +73,34 @@ async function getContents(urls) {
 
 	if (!response.ok) {
 		const errorText = await response.text();
-		throw new Error(`HTTP ${response.status}: ${response.statusText}\n${errorText}`);
+		const e = new Error(`HTTP ${response.status}: ${response.statusText}\n${errorText}`);
+		e.statusCode = response.status;
+		throw e;
 	}
 
 	return response.json();
 }
 
-// Main
 try {
 	const data = await getContents(urls);
 	const results = data.results || [];
 
 	if (results.length === 0) {
-		console.error("Could not extract content from the provided URLs.");
-		process.exit(1);
+		failAndExit({
+			host: HOST, op: OP,
+			err: new Error("Could not extract content from the provided URLs."),
+			err_class: "empty_response",
+			cmd: `content.js ${urls.join(" ")}`,
+		});
 	}
 
 	for (let i = 0; i < results.length; i++) {
 		const r = results[i];
-		if (results.length > 1) {
-			console.log(`--- Page ${i + 1} ---`);
-		}
-		if (r.title) {
-			console.log(`# ${r.title}\n`);
-		}
+		if (results.length > 1) console.log(`--- Page ${i + 1} ---`);
+		if (r.title) console.log(`# ${r.title}\n`);
 		console.log(`URL: ${r.url}`);
-		if (r.author) {
-			console.log(`Author: ${r.author}`);
-		}
-		if (r.publishedDate) {
-			console.log(`Published: ${r.publishedDate}`);
-		}
+		if (r.author) console.log(`Author: ${r.author}`);
+		if (r.publishedDate) console.log(`Published: ${r.publishedDate}`);
 		console.log("");
 		if (r.highlights && r.highlights.length > 0) {
 			console.log(r.highlights.join("\n\n---\n\n"));
@@ -104,6 +112,10 @@ try {
 		if (results.length > 1) console.log("");
 	}
 } catch (e) {
-	console.error(`Error: ${e.message}`);
-	process.exit(1);
+	failAndExit({
+		host: HOST, op: OP,
+		err: e,
+		cmd: `content.js ${urls.slice(0, 3).join(" ")}`,
+		args: { urls, useHighlights, forceFresh },
+	});
 }

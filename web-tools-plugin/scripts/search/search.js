@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { extractHost, recallAndEmit, failAndExit } from "../_lib/hooks.mjs";
+
 const args = process.argv.slice(2);
 
 // Parse --content flag
@@ -107,21 +109,30 @@ if (!query) {
 	process.exit(1);
 }
 
+const HOST = "api.exa.ai";
+const OP = "search";
+
+// PRE — recall on the query itself + domain hints
+const recallTags = [];
+for (const d of includeDomains) {
+	const h = extractHost(d) || d;
+	if (h) recallTags.push(`domain-${h.replace(/\./g, "-")}`);
+}
+recallAndEmit(query, { host: HOST, op: OP, tags: recallTags });
+
 const apiKey = process.env.EXA_API_KEY;
 if (!apiKey) {
-	console.error("Error: EXA_API_KEY environment variable is required.");
-	console.error("Get your API key at: https://dashboard.exa.ai/api-keys");
-	process.exit(1);
+	failAndExit({
+		host: HOST, op: OP,
+		err: new Error("EXA_API_KEY environment variable is required. Get your API key at: https://dashboard.exa.ai/api-keys"),
+		err_class: "no_api_key",
+		cmd: `search.js ${query.slice(0, 60)}`,
+	});
 }
 
 function parseFreshness(value) {
 	const now = new Date();
-	const map = {
-		pd: 1,
-		pw: 7,
-		pm: 30,
-		py: 365,
-	};
+	const map = { pd: 1, pw: 7, pm: 30, py: 365 };
 
 	if (map[value]) {
 		const start = new Date(now);
@@ -129,7 +140,6 @@ function parseFreshness(value) {
 		return { start_published_date: start.toISOString() };
 	}
 
-	// YYYY-MM-DDtoYYYY-MM-DD
 	const match = value.match(/^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/);
 	if (match) {
 		return {
@@ -137,7 +147,6 @@ function parseFreshness(value) {
 			end_published_date: new Date(match[2]).toISOString(),
 		};
 	}
-
 	return {};
 }
 
@@ -148,7 +157,6 @@ async function searchExa() {
 		type: searchType,
 	};
 
-	// Add content extraction
 	if (fetchContent || useHighlights) {
 		body.contents = {};
 		if (useHighlights) {
@@ -158,23 +166,10 @@ async function searchExa() {
 		}
 	}
 
-	// Add date filters
-	if (freshness) {
-		Object.assign(body, parseFreshness(freshness));
-	}
-
-	// Add category
-	if (category) {
-		body.category = category;
-	}
-
-	// Add domain filters
-	if (includeDomains.length > 0) {
-		body.include_domains = includeDomains;
-	}
-	if (excludeDomains.length > 0) {
-		body.exclude_domains = excludeDomains;
-	}
+	if (freshness) Object.assign(body, parseFreshness(freshness));
+	if (category) body.category = category;
+	if (includeDomains.length > 0) body.include_domains = includeDomains;
+	if (excludeDomains.length > 0) body.exclude_domains = excludeDomains;
 
 	const response = await fetch("https://api.exa.ai/search", {
 		method: "POST",
@@ -187,7 +182,9 @@ async function searchExa() {
 
 	if (!response.ok) {
 		const errorText = await response.text();
-		throw new Error(`HTTP ${response.status}: ${response.statusText}\n${errorText}`);
+		const e = new Error(`HTTP ${response.status}: ${response.statusText}\n${errorText}`);
+		e.statusCode = response.status;
+		throw e;
 	}
 
 	return response.json();
@@ -208,24 +205,20 @@ try {
 		console.log(`--- Result ${i + 1} ---`);
 		console.log(`Title: ${r.title || "(no title)"}`);
 		console.log(`Link: ${r.url}`);
-		if (r.publishedDate) {
-			console.log(`Published: ${r.publishedDate}`);
-		}
-		if (r.author) {
-			console.log(`Author: ${r.author}`);
-		}
-		if (r.score != null) {
-			console.log(`Score: ${r.score.toFixed(3)}`);
-		}
+		if (r.publishedDate) console.log(`Published: ${r.publishedDate}`);
+		if (r.author) console.log(`Author: ${r.author}`);
+		if (r.score != null) console.log(`Score: ${r.score.toFixed(3)}`);
 		if (r.highlights && r.highlights.length > 0) {
 			console.log(`Highlights:\n${r.highlights.join("\n---\n")}`);
 		}
-		if (r.text) {
-			console.log(`Content:\n${r.text}`);
-		}
+		if (r.text) console.log(`Content:\n${r.text}`);
 		console.log("");
 	}
 } catch (e) {
-	console.error(`Error: ${e.message}`);
-	process.exit(1);
+	failAndExit({
+		host: HOST, op: OP,
+		err: e,
+		cmd: `search.js ${query.slice(0, 60)}`,
+		args: { query: query.slice(0, 200), numResults, searchType, includeDomains, excludeDomains, fetchContent, useHighlights },
+	});
 }
