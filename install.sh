@@ -285,6 +285,29 @@ else
   esac
 fi
 
+# jq + envsubst (skill-maker plugin)
+if command -v jq &>/dev/null; then
+  ok "jq found"
+else
+  warn "jq not found — needed for skill-maker plugin"
+  case "$OS" in
+    mac)     info "Install: brew install jq" ;;
+    windows) info "Install: https://stedolan.github.io/jq/  (or via WSL: sudo apt install jq)" ;;
+    *)       info "Install: sudo apt install jq" ;;
+  esac
+fi
+
+if command -v envsubst &>/dev/null; then
+  ok "envsubst found"
+else
+  warn "envsubst not found — needed for skill-maker scaffolding"
+  case "$OS" in
+    mac)     info "Install: brew install gettext  (and: brew link --force gettext)" ;;
+    windows) info "Install: WSL → sudo apt install gettext-base" ;;
+    *)       info "Install: sudo apt install gettext-base" ;;
+  esac
+fi
+
 # memkoshi (web plugin self-healing memory)
 if command -v velocirag &>/dev/null; then
   VR_VER="$(velocirag --version 2>/dev/null | command head -1)"

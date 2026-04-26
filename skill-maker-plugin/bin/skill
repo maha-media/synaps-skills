@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# skill — Synaps plugin/skill maker CLI.
+#
+# Subcommands:
+#   new plugin <name>   Scaffold a new plugin
+#   new skill  <name>   Scaffold a new skill in an existing plugin
+#   validate [PATH]     Validate plugin structure
+#   lint     [PATH]     Opinionated quality checks
+#   list     [PATH]     List plugins / skills
+#   --help              This help
+#
+# All MVP functionality lives in pure bash + jq + envsubst.
+
+set -euo pipefail
+
+# ── locate self ────────────────────────────────────────────────────────────
+
+SELF=$(readlink -f "$0")
+PLUGIN_ROOT=$(cd "$(dirname "$SELF")/.." && pwd)
+LIB_DIR="$PLUGIN_ROOT/lib"
+TMPL_DIR="$PLUGIN_ROOT/templates"
+export LIB_DIR TMPL_DIR PLUGIN_ROOT
+
+# shellcheck source=../lib/common.sh
+source "$LIB_DIR/common.sh"
+
+require_cmd jq
+
+# ── help ───────────────────────────────────────────────────────────────────
+
+show_help() {
+  cat <<EOF
+Usage: skill <command> [options]
+
+Commands:
+  new plugin <name>      Scaffold a new plugin
+  new skill  <name>      Scaffold a new skill in an existing plugin
+  validate [PATH]        Validate a plugin (or all plugins under PATH)
+  lint     [PATH]        Opinionated quality checks
+  list     [PATH]        List plugins (or skills inside one plugin)
+  --help, -h             Show this help
+
+Examples:
+  skill new plugin my-tool                     # scaffold ./my-tool-plugin/
+  skill new plugin my-tool --umbrella          # umbrella + docs/ layout
+  skill new plugin my-tool --memory            # add VelociRAG hooks
+  skill new skill helper                       # add skill in current plugin
+  skill validate                               # validate plugin in cwd
+  skill validate ../web-tools-plugin           # validate one plugin
+  skill validate .                             # validate all plugins under .
+  skill lint --strict ../web-tools-plugin
+  skill list                                   # plugins under cwd
+  skill list ../web-tools-plugin               # skills inside a plugin
+
+Conventions reference: skill-maker-plugin/docs/conventions.md
+EOF
+}
+
+# ── subcommand dispatch ────────────────────────────────────────────────────
+
+cmd="${1:-}"; shift || true
+
+case "$cmd" in
+  ""|--help|-h|help)
+    show_help; exit 0
+    ;;
+
+  new)
+    sub="${1:-}"; shift || true
+    case "$sub" in
+      plugin)
+        # shellcheck source=../lib/scaffold.sh
+        source "$LIB_DIR/scaffold.sh"
+        scaffold_plugin "$@"
+        ;;
+      skill)
+        # shellcheck source=../lib/scaffold.sh
+        source "$LIB_DIR/scaffold.sh"
+        scaffold_skill "$@"
+        ;;
+      *)
+        die "unknown 'new' target: '$sub' (expected: plugin | skill)"
+        ;;
+    esac
+    ;;
+
+  validate)
+    # shellcheck source=../lib/validate.sh
+    source "$LIB_DIR/validate.sh"
+    target="${1:-.}"
+    target=$(cd "$target" && pwd)
+
+    total_errors=0
+    plugins_checked=0
+
+    if is_plugin_dir "$target"; then
+      validate_plugin "$target" || total_errors=$((total_errors + $?))
+      plugins_checked=1
+    else
+      while IFS= read -r p; do
+        [[ -z "$p" ]] && continue
+        info "${C_BOLD}→ ${p}${C_OFF}"
+        validate_plugin "$p" || total_errors=$((total_errors + $?))
+        plugins_checked=$((plugins_checked + 1))
+      done < <(enumerate_plugins "$target")
+    fi
+
+    if [[ "$plugins_checked" -eq 0 ]]; then
+      die "no plugins found under $target"
+    fi
+
+    if [[ "$total_errors" -eq 0 ]]; then
+      ok "${plugins_checked} plugin(s) validated cleanly"
+      exit 0
+    else
+      err "${total_errors} error(s) across ${plugins_checked} plugin(s)"
+      exit 1
+    fi
+    ;;
+
+  lint)
+    # shellcheck source=../lib/lint.sh
+    source "$LIB_DIR/lint.sh"
+    lint_main "$@"
+    ;;
+
+  list)
+    target="${1:-.}"
+    target=$(cd "$target" && pwd)
+    if is_plugin_dir "$target"; then
+      info "${C_BOLD}skills in $(basename "$target"):${C_OFF}"
+      while IFS= read -r s; do
+        [[ -z "$s" ]] && continue
+        printf '  %s\n' "$(basename "$s")"
+      done < <(enumerate_skills "$target")
+    else
+      info "${C_BOLD}plugins under $target:${C_OFF}"
+      while IFS= read -r p; do
+        [[ -z "$p" ]] && continue
+        local_name=$(jq -r '.name' "$p/.synaps-plugin/plugin.json" 2>/dev/null || echo '?')
+        local_ver=$(jq -r '.version' "$p/.synaps-plugin/plugin.json" 2>/dev/null || echo '?')
+        printf '  %-30s %s  %s\n' "$local_name" "$local_ver" "${C_DIM}$p${C_OFF}"
+      done < <(enumerate_plugins "$target")
+    fi
+    ;;
+
+  *)
+    err "unknown command: '$cmd'"
+    show_help
+    exit 2
+    ;;
+esac

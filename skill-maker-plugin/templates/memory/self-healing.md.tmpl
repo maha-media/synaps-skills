@@ -1,0 +1,49 @@
+# self-healing protocol — ${NAME}
+
+This plugin uses the same self-healing pattern as `web-tools` (see
+`web-tools-plugin/docs/self-healing.md` in the synaps-skills monorepo
+for the full reference).
+
+## The contract
+
+Every script does:
+
+1. **PRE** — query memory for relevant prior fixes:
+   ```bash
+   source lib/memory.sh
+   memory_recall "$ERR_TEXT" --tag "domain-$HOST" --tag "op-$OP"
+   ```
+
+2. **ACT** — do the real work.
+
+3. **POST** — on failure, log a structured record:
+   ```bash
+   memory_log_failure "$(jq -nc \
+     --arg host "$HOST" --arg op "$OP" --arg cls "$ERR_CLASS" \
+     '{host:$host, op:$op, err_class:$cls, exit:1}')"
+   ```
+
+   On success, exit 0 (no auto-write — agent decides what to commit).
+
+## Tag conventions
+
+Hyphenated, lowercase:
+
+- `kind-fix` — a verified fix
+- `kind-runbook` — a procedure
+- `kind-caveat` — a known gotcha
+- `domain-<host-with-dashes>` (e.g. `domain-github-com`)
+- `op-<operation>` (e.g. `op-fetch`, `op-search`)
+- `err-<class>` (e.g. `err-http_403`, `err-timeout`)
+
+## Storage
+
+```
+~/.synaps-cli/memory/${NAME}/
+  notes/          markdown source of truth
+  db/             VelociRAG index (derived, rebuildable)
+  failures.jsonl  raw failure log (append-only)
+```
+
+`notes/` is the source of truth — `db/` is rebuilt from it via
+`velocirag index`.
