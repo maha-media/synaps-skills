@@ -19,13 +19,22 @@ import argparse
 import json
 import time
 import re
+from pathlib import Path
 from typing import List, Dict, Optional
+
+# Wire in self-healing hooks (sibling _lib package)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from _lib import hooks  # noqa: E402
 
 try:
     import requests
 except ImportError:
     print("Error: 'requests' library required. Install with: pip install requests")
     sys.exit(1)
+
+
+HOST = "api.openalex.org"
+OP = "scholar"
 
 
 class Colors:
@@ -86,26 +95,37 @@ class OpenAlexAPI:
     def _request(self, url: str, params: Dict = None, retries: int = 3) -> Optional[Dict]:
         if params is None:
             params = {}
+        last_err: Optional[Exception] = None
         for attempt in range(retries):
             try:
                 resp = self.session.get(url, params=params, timeout=10)
                 if resp.status_code == 429:
+                    last_err = Exception(f"HTTP 429 rate-limit on {url}")
                     if attempt < retries - 1:
                         delay = (2 ** attempt) + 1
                         time.sleep(delay)
                         continue
-                    print(colors.red("API rate limit exceeded."))
-                    return None
+                    hooks.fail_and_exit(
+                        host=HOST, op=OP, err=last_err,
+                        err_class="http_429",
+                        cmd=f"GET {url}",
+                    )
                 resp.raise_for_status()
                 return resp.json()
             except requests.exceptions.RequestException as e:
+                last_err = e
                 if attempt < retries - 1:
                     continue
-                print(colors.red(f"Network error after {retries} attempts: {e}"))
-                return None
+                hooks.fail_and_exit(
+                    host=HOST, op=OP, err=e,
+                    cmd=f"GET {url}",
+                )
             except json.JSONDecodeError as e:
-                print(colors.red(f"API response parsing error: {e}"))
-                return None
+                hooks.fail_and_exit(
+                    host=HOST, op=OP, err=e,
+                    err_class="bad_json",
+                    cmd=f"GET {url}",
+                )
         return None
 
     def search(self, query: str, limit: int = 10, year_from: Optional[int] = None,
@@ -361,6 +381,10 @@ OpenAlex API: 200M+ works, no API key, 100 req/s rate limit.
         parser.print_help()
         return
 
+    # PRE — recall any prior fixes for openalex
+    intent = getattr(args, "query", None) or getattr(args, "title_or_doi", None) or args.command
+    hooks.recall_and_emit(f"scholar {args.command}: {intent}", host=HOST, op=OP)
+
     api = OpenAlexAPI()
 
     try:
@@ -387,6 +411,12 @@ OpenAlex API: 200M+ works, no API key, 100 req/s rate limit.
                 print_details(paper)
             else:
                 print(colors.red("Paper not found."))
+                hooks.fail_and_exit(
+                    host=HOST, op=OP,
+                    err=f"Paper not found: {args.title_or_doi}",
+                    err_class="not_found",
+                    cmd=f"scholar.py paper {args.title_or_doi}",
+                )
 
         elif args.command == 'cite':
             print(f"Getting citation for: {colors.bold(args.title_or_doi)}\n")
@@ -397,11 +427,23 @@ OpenAlex API: 200M+ works, no API key, 100 req/s rate limit.
                 print(api.bibtex(paper))
             else:
                 print(colors.red("Paper not found."))
+                hooks.fail_and_exit(
+                    host=HOST, op=OP,
+                    err=f"Paper not found: {args.title_or_doi}",
+                    err_class="not_found",
+                    cmd=f"scholar.py cite {args.title_or_doi}",
+                )
 
     except KeyboardInterrupt:
         print(colors.yellow("\nInterrupted."))
+    except SystemExit:
+        raise
     except Exception as e:
-        print(colors.red(f"Error: {e}"))
+        hooks.fail_and_exit(
+            host=HOST, op=OP, err=e,
+            cmd=f"scholar.py {args.command}",
+            args={"command": args.command},
+        )
 
 
 if __name__ == '__main__':
