@@ -155,3 +155,14 @@ See `docs/status.md` for the full workflow.
   - `notes/` — markdown source of truth (git-friendly)
   - `db/` — VelociRAG index (derived, rebuildable)
   - `failures.jsonl` — raw operational log
+
+## Dependencies
+
+| Dep | Required? | Used for |
+|---|---|---|
+| Node ≥ 18 | hard (fetch/browser/youtube) | running scripts |
+| VelociRAG (`pip install velocirag`) | **soft** — recall/commit no-op without it | self-healing memory layer |
+| yt-dlp, pdftotext, whisper, pandoc, Playwright browsers | per-capability soft | see each `docs/<cap>.md` |
+
+The plugin's only stateful surface is `~/.synaps-cli/memory/web/` (its own
+VelociRAG index). It does not share storage with any other tool.

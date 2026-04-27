@@ -42,6 +42,12 @@ VelociRAG (the search engine *underneath* Memkoshi) is a perfect fit:
 So the architecture comes back to almost exactly the markdown-with-YAML system
 we sketched in the first brainstorm — with VelociRAG as the search layer.
 
+> **Implementation state:** the web plugin imports nothing from memkoshi
+> and has no reference to **stelline** (a memkoshi-only optional extra for
+> session-jsonl harvesting). VelociRAG is shared as a transitive technology
+> only — each system owns its own DB directory and there is no integration
+> point, opt-in flag, or env var connecting them.
+
 ## 3. Architecture
 
 ### 3.1 Index skill + progressive disclosure
