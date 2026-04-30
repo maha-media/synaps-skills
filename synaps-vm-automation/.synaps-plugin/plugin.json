@@ -1,0 +1,10 @@
+{
+  "name": "synaps-vm-automation",
+  "version": "0.1.0",
+  "description": "Host-side virsh orchestration and resident guest-agent planning skills for Synaps VM automation.",
+  "author": {"name": "Maha Media", "url": "https://github.com/maha-media"},
+  "repository": "maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "automation",
+  "x-synaps-vm-agent-min-version": "0.1.0"
+}

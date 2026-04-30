@@ -1,0 +1,14 @@
+{
+  "schema_version": "plan-v0",
+  "name": "Open Notepad and type text",
+  "timeout_ms": 30000,
+  "root": {
+    "id": "root",
+    "type": "sequence",
+    "children": [
+      {"id": "open", "type": "action", "op": "process.start", "args": {"command": "notepad.exe"}},
+      {"id": "wait", "type": "wait_until", "timeout_ms": 10000, "interval_ms": 250, "child": {"id": "editor", "type": "action", "op": "ui.exists", "args": {"selector": {"role": "Edit"}}}},
+      {"id": "text", "type": "action", "op": "ui.set_text", "args": {"selector": {"role": "Edit"}, "text": "Hello from Synaps"}}
+    ]
+  }
+}
