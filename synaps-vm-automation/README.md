@@ -24,3 +24,21 @@ python scripts/vmctl.py agent-call windows11 /health
 ```
 
 Destructive operations such as snapshot revert require explicit confirmation flags and should only be used after user confirmation.
+
+## Install/security notes
+
+Windows installer script: `scripts/install-agent.ps1`.
+
+Security behavior:
+
+- Generates an auth token locally.
+- Does not print token unless `-PrintToken` is explicitly requested.
+- Stores config/token under `%LOCALAPPDATA%\SynapsVmAgent` by default.
+- Restricts ACLs to the current user and Administrators.
+- Default `127.0.0.1` bind creates no inbound firewall rule.
+- Non-local bind requires `-AllowNonLocalBind` and an explicit firewall review.
+- Prints verification commands that do not leak the token.
+
+Linux user-service helper: `scripts/install-agent.sh`.
+
+Smoke test checklist: `docs-smoke-test.md`.
