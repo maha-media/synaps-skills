@@ -1,0 +1,27 @@
+[package]
+name = "synaps-voice-plugin"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Local microphone speech-to-text sidecar for Synaps CLI"
+
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+whisper-rs = { version = "0.16.0", optional = true }
+cpal = { version = "0.15", optional = true }
+
+[dev-dependencies]
+tempfile = "3.0"
+
+[features]
+default = []
+voice-stt-whisper = ["dep:whisper-rs"]
+voice-mic = ["voice-stt-whisper", "dep:cpal"]
+local-stt = ["voice-mic"]
+metal = ["voice-stt-whisper", "whisper-rs/metal"]
+cuda = ["voice-stt-whisper", "whisper-rs/cuda"]
+vulkan = ["voice-stt-whisper", "whisper-rs/vulkan"]
+openblas = ["voice-stt-whisper", "whisper-rs/openblas"]

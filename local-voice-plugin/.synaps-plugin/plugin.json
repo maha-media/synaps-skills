@@ -1,0 +1,31 @@
+{
+  "name": "local-voice",
+  "version": "0.1.0",
+  "description": "Opt-in local voice dictation provider for Synaps CLI. Builds a sidecar binary that streams microphone speech-to-text through the Synaps voice protocol.",
+  "author": {
+    "name": "JR Morton",
+    "url": "https://github.com/maha-media"
+  },
+  "repository": "maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "productivity",
+  "provides": {
+    "voice_sidecar": {
+      "command": "bin/synaps-voice-plugin",
+      "setup": "scripts/setup.sh",
+      "protocol_version": 1,
+      "model": {
+        "default_path": "~/.synaps-cli/models/whisper/ggml-base.en.bin",
+        "required_for_real_stt": true
+      }
+    }
+  },
+  "keybinds": [
+    {
+      "key": "F8",
+      "action": "slash_command",
+      "command": "voice toggle",
+      "description": "Toggle local voice dictation"
+    }
+  ]
+}
