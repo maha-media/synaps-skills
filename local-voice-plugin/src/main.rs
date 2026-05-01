@@ -8,6 +8,7 @@ use crate::protocol::{
 };
 #[cfg(all(feature = "voice-stt-whisper", feature = "voice-mic"))]
 mod audio;
+mod build_info;
 mod protocol;
 #[cfg(all(feature = "voice-stt-whisper", feature = "voice-mic"))]
 mod vad;
@@ -151,6 +152,12 @@ impl LocalVoiceSidecar {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    if std::env::args().skip(1).any(|a| a == "--print-build-info") {
+        let info = build_info::current();
+        println!("{}", serde_json::to_string(&info).unwrap());
+        return Ok(());
+    }
+
     let (voice_tx, mut voice_rx) = tokio::sync::mpsc::channel::<VoiceEvent>(128);
     let mut sidecar = LocalVoiceSidecar::new(voice_tx);
     let stdin = tokio::io::BufReader::new(tokio::io::stdin());
