@@ -20,12 +20,5 @@
       }
     }
   },
-  "keybinds": [
-    {
-      "key": "F8",
-      "action": "slash_command",
-      "command": "voice toggle",
-      "description": "Toggle local voice dictation"
-    }
-  ]
+  "keybinds": []
 }
