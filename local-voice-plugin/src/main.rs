@@ -9,6 +9,7 @@ use crate::protocol::{
 #[cfg(all(feature = "voice-stt-whisper", feature = "voice-mic"))]
 mod audio;
 mod build_info;
+mod commands;
 mod extension_rpc;
 mod protocol;
 #[cfg(all(feature = "voice-stt-whisper", feature = "voice-mic"))]
