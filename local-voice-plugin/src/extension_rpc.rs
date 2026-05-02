@@ -50,14 +50,16 @@ fn info_result() -> Value {
             {"id": "ggml-base.en.bin", "display_name": "Base English", "installed": false},
             {"id": "ggml-small.en.bin", "display_name": "Small English", "installed": false},
             {"id": "ggml-medium.en.bin", "display_name": "Medium English", "installed": false}
-        ]
+        ],
+        "settings": crate::settings::settings_payload(),
     })
 }
 
 fn initialize_result() -> Value {
     // Keep the existing `protocol_version` and `capabilities.tools` shape so
     // downstream consumers (and tests) that only check those fields keep
-    // working. Additionally advertise interactive capabilities for Phase 2/3.
+    // working. Additionally advertise interactive capabilities for Phase 2/3
+    // and the Phase 4 settings surface.
     json!({
         "protocol_version": 1,
         "capabilities": {
@@ -65,6 +67,12 @@ fn initialize_result() -> Value {
             "commands": ["voice"],
             "tasks": true,
             "command_output": true,
+            "settings": true,
+            "settings_methods": [
+                "settings.editor.open",
+                "settings.editor.key",
+                "settings.editor.commit",
+            ],
         }
     })
 }
@@ -121,6 +129,73 @@ fn handle_command_invoke(id: Value, params: &Value) -> io::Result<Value> {
     Ok(response(id, outcome.result))
 }
 
+fn handle_settings_editor_open(id: Value, params: &Value) -> Value {
+    let category = params.get("category").and_then(Value::as_str).unwrap_or("");
+    let field = params.get("field").and_then(Value::as_str).unwrap_or("");
+    if category.is_empty() || field.is_empty() {
+        return error(id, -32602, "settings.editor.open requires `category` and `field`");
+    }
+    match crate::settings::open_editor(category, field) {
+        Some(render) => response(
+            id,
+            json!({
+                "category": category,
+                "field": field,
+                "render": render,
+            }),
+        ),
+        None => error(
+            id,
+            -32004,
+            format!("no custom editor for {category}.{field}"),
+        ),
+    }
+}
+
+fn handle_settings_editor_key(id: Value, params: &Value) -> Value {
+    // Phase 4 preparation stub: the plugin's model browser is currently
+    // stateless (rows are computed on demand) so any key event simply
+    // re-renders the same payload. Synaps drives the cursor itself for
+    // now; the additive method is here so callers can wire it up without
+    // crashing and so tests can verify the surface.
+    let category = params.get("category").and_then(Value::as_str).unwrap_or("voice");
+    let field = params.get("field").and_then(Value::as_str).unwrap_or("model_path");
+    let render = crate::settings::open_editor(category, field).unwrap_or(json!({"rows": [], "cursor": 0}));
+    response(
+        id,
+        json!({
+            "category": category,
+            "field": field,
+            "render": render,
+        }),
+    )
+}
+
+fn handle_settings_editor_commit(id: Value, params: &Value) -> Value {
+    let value = params.get("value").cloned().unwrap_or(Value::Null);
+    let data = value.as_str().unwrap_or("");
+    // `download:<id>` is interpreted by Synaps as "kick off a download
+    // task for this model id"; `model:<id>` is "set the active model".
+    // The plugin reports back which intent the commit value carries so
+    // Synaps knows whether to invoke `voice download` or write the
+    // config key directly. Real wiring lives in core Phase 4.
+    let intent = if let Some(rest) = data.strip_prefix("download:") {
+        json!({"kind": "download", "model_id": rest})
+    } else if let Some(rest) = data.strip_prefix("model:") {
+        json!({"kind": "select", "model_id": rest})
+    } else {
+        json!({"kind": "raw"})
+    };
+    response(
+        id,
+        json!({
+            "ok": true,
+            "value": value,
+            "intent": intent,
+        }),
+    )
+}
+
 pub async fn run() -> io::Result<()> {
     let mut reader = BufReader::new(tokio::io::stdin());
     while let Some(request) = read_frame(&mut reader).await? {
@@ -134,6 +209,9 @@ pub async fn run() -> io::Result<()> {
                 let reply = handle_command_invoke(id, &params)?;
                 frame(&reply)?;
             }
+            "settings.editor.open" => frame(&handle_settings_editor_open(id, &params))?,
+            "settings.editor.key" => frame(&handle_settings_editor_key(id, &params))?,
+            "settings.editor.commit" => frame(&handle_settings_editor_commit(id, &params))?,
             "shutdown" => {
                 frame(&response(id, Value::Null))?;
                 break;

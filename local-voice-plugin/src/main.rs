@@ -12,6 +12,7 @@ mod build_info;
 mod commands;
 mod extension_rpc;
 mod protocol;
+mod settings;
 #[cfg(all(feature = "voice-stt-whisper", feature = "voice-mic"))]
 mod vad;
 #[cfg(feature = "voice-stt-whisper")]
