@@ -9,6 +9,15 @@
   "repository": "maha-media/synaps-skills",
   "license": "MIT",
   "category": "productivity",
+  "extension": {
+    "protocol_version": 1,
+    "runtime": "process",
+    "command": "bin/synaps-voice-plugin",
+    "args": ["--extension-rpc"],
+    "permissions": ["audio.input", "config.subscribe"],
+    "hooks": [],
+    "config": []
+  },
   "provides": {
     "voice_sidecar": {
       "command": "bin/synaps-voice-plugin",

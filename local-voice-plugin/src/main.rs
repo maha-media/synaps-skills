@@ -4,11 +4,12 @@ use std::path::PathBuf;
 
 use crate::protocol::{
     voice_event_to_sidecar_event, SidecarCapability, SidecarCommand, SidecarEvent, SidecarProviderState,
-    SpeechToTextProvider, VoiceEvent, VOICE_SIDECAR_PROTOCOL_VERSION,
+    VoiceEvent, VOICE_SIDECAR_PROTOCOL_VERSION,
 };
 #[cfg(all(feature = "voice-stt-whisper", feature = "voice-mic"))]
 mod audio;
 mod build_info;
+mod extension_rpc;
 mod protocol;
 #[cfg(all(feature = "voice-stt-whisper", feature = "voice-mic"))]
 mod vad;
@@ -152,6 +153,10 @@ impl LocalVoiceSidecar {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    if std::env::args().skip(1).any(|a| a == "--extension-rpc") {
+        return extension_rpc::run().await;
+    }
+
     if std::env::args().skip(1).any(|a| a == "--print-build-info") {
         let info = build_info::current();
         println!("{}", serde_json::to_string(&info).unwrap());
