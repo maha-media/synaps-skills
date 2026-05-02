@@ -63,15 +63,28 @@
     ]
   },
   "provides": {
-    "voice_sidecar": {
+    "sidecar": {
       "command": "bin/synaps-voice-plugin",
       "setup": "scripts/setup.sh",
       "protocol_version": 1,
       "model": {
         "default_path": "~/.synaps-cli/models/whisper/ggml-base.en.bin",
         "required_for_real_stt": true
+      },
+      "lifecycle": {
+        "command": "voice",
+        "settings_category": "voice",
+        "display_name": "Voice",
+        "importance": 50
       }
     }
   },
-  "keybinds": []
+  "keybinds": [
+    {
+      "key": "C-Space",
+      "action": "slash_command",
+      "command": "voice toggle",
+      "description": "Toggle local voice dictation on/off"
+    }
+  ]
 }
