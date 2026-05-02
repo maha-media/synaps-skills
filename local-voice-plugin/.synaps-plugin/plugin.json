@@ -18,6 +18,14 @@
     "hooks": [],
     "config": []
   },
+  "commands": [
+    {
+      "name": "voice",
+      "description": "Manage local voice dictation models and sidecar builds.",
+      "interactive": true,
+      "subcommands": ["help", "models", "download", "rebuild"]
+    }
+  ],
   "provides": {
     "voice_sidecar": {
       "command": "bin/synaps-voice-plugin",
