@@ -153,47 +153,32 @@ fn handle_settings_editor_open(id: Value, params: &Value) -> Value {
 }
 
 fn handle_settings_editor_key(id: Value, params: &Value) -> Value {
-    // Phase 4 preparation stub: the plugin's model browser is currently
-    // stateless (rows are computed on demand) so any key event simply
-    // re-renders the same payload. Synaps drives the cursor itself for
-    // now; the additive method is here so callers can wire it up without
-    // crashing and so tests can verify the surface.
     let category = params.get("category").and_then(Value::as_str).unwrap_or("voice");
     let field = params.get("field").and_then(Value::as_str).unwrap_or("model_path");
-    let render = crate::settings::open_editor(category, field).unwrap_or(json!({"rows": [], "cursor": 0}));
-    response(
-        id,
-        json!({
-            "category": category,
-            "field": field,
-            "render": render,
-        }),
-    )
+    let key_name = params.get("key").and_then(Value::as_str).unwrap_or("");
+    match crate::settings::key_editor(category, field, key_name) {
+        Some(render) => response(
+            id,
+            json!({
+                "category": category,
+                "field": field,
+                "render": render,
+            }),
+        ),
+        None => error(
+            id,
+            -32004,
+            format!("no custom editor for {category}.{field}"),
+        ),
+    }
 }
 
 fn handle_settings_editor_commit(id: Value, params: &Value) -> Value {
-    let value = params.get("value").cloned().unwrap_or(Value::Null);
-    let data = value.as_str().unwrap_or("");
-    // `download:<id>` is interpreted by Synaps as "kick off a download
-    // task for this model id"; `model:<id>` is "set the active model".
-    // The plugin reports back which intent the commit value carries so
-    // Synaps knows whether to invoke `voice download` or write the
-    // config key directly. Real wiring lives in core Phase 4.
-    let intent = if let Some(rest) = data.strip_prefix("download:") {
-        json!({"kind": "download", "model_id": rest})
-    } else if let Some(rest) = data.strip_prefix("model:") {
-        json!({"kind": "select", "model_id": rest})
-    } else {
-        json!({"kind": "raw"})
-    };
-    response(
-        id,
-        json!({
-            "ok": true,
-            "value": value,
-            "intent": intent,
-        }),
-    )
+    let category = params.get("category").and_then(Value::as_str).unwrap_or("voice");
+    let field = params.get("field").and_then(Value::as_str).unwrap_or("model_path");
+    let value = params.get("value");
+    let payload = crate::settings::commit_editor(category, field, value);
+    response(id, payload)
 }
 
 pub async fn run() -> io::Result<()> {
