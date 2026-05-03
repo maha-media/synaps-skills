@@ -14,6 +14,7 @@
     "runtime": "process",
     "command": "extensions/memory-manager/target/release/memory-manager",
     "args": [],
+    "setup": "scripts/setup.sh",
     "permissions": [
       "tools.intercept",
       "privacy.llm_content",
