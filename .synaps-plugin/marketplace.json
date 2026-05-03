@@ -62,6 +62,17 @@
       },
       "source": "./skill-maker-plugin",
       "category": "developer-tools"
+    },
+    {
+      "name": "local-voice",
+      "description": "Opt-in local voice dictation sidecar plugin. Owns microphone capture, VAD, and Whisper STT outside the Synaps CLI core.",
+      "version": "0.1.0",
+      "author": {
+        "name": "JR Morton",
+        "url": "https://github.com/maha-media"
+      },
+      "source": "./local-voice-plugin",
+      "category": "productivity"
     }
   ]
 }

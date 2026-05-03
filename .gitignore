@@ -1,2 +1,4 @@
 node_modules/
 .DS_Store
+local-voice-plugin/bin/synaps-voice-plugin
+local-voice-plugin/target/

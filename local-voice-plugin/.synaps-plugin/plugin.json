@@ -1,0 +1,90 @@
+{
+  "name": "local-voice",
+  "version": "0.1.0",
+  "description": "Opt-in local voice dictation provider for Synaps CLI. Builds a sidecar binary that streams microphone speech-to-text through the Synaps voice protocol.",
+  "author": {
+    "name": "JR Morton",
+    "url": "https://github.com/maha-media"
+  },
+  "repository": "maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "productivity",
+  "extension": {
+    "protocol_version": 1,
+    "runtime": "process",
+    "command": "bin/synaps-voice-plugin",
+    "args": ["--extension-rpc"],
+    "permissions": ["audio.input", "config.subscribe"],
+    "hooks": [],
+    "config": []
+  },
+  "commands": [
+    {
+      "name": "voice",
+      "description": "Manage local voice dictation models and sidecar builds.",
+      "interactive": true,
+      "subcommands": ["help", "models", "download", "rebuild"]
+    }
+  ],
+  "settings": {
+    "categories": [
+      {
+        "id": "voice",
+        "label": "Voice",
+        "description": "Local Whisper speech-to-text settings.",
+        "fields": [
+          {
+            "key": "model_path",
+            "label": "STT model",
+            "editor": "custom",
+            "description": "Whisper model used for local dictation. Opens the plugin's model browser.",
+            "config_key": "local-voice.model_path"
+          },
+          {
+            "key": "backend",
+            "label": "STT backend",
+            "editor": "cycler",
+            "options": ["auto", "cpu", "cuda", "metal", "vulkan", "openblas"],
+            "default": "auto",
+            "description": "Compute backend the sidecar was compiled against. Changing this requires `voice rebuild`.",
+            "config_key": "local-voice.backend"
+          },
+          {
+            "key": "language",
+            "label": "Voice language",
+            "editor": "cycler",
+            "options": ["auto", "en", "es", "fr", "de", "it", "pt", "nl", "ja", "zh", "ko", "ru"],
+            "default": "auto",
+            "description": "Spoken language hint passed to whisper.",
+            "config_key": "local-voice.language"
+          }
+        ]
+      }
+    ]
+  },
+  "provides": {
+    "sidecar": {
+      "command": "bin/synaps-voice-plugin",
+      "setup": "scripts/setup.sh",
+      "protocol_version": 1,
+      "model": {
+        "default_path": "~/.synaps-cli/models/whisper/ggml-base.en.bin",
+        "required_for_real_stt": true
+      },
+      "lifecycle": {
+        "command": "voice",
+        "settings_category": "voice",
+        "display_name": "Voice",
+        "importance": 50
+      }
+    }
+  },
+  "keybinds": [
+    {
+      "key": "C-Space",
+      "action": "slash_command",
+      "command": "voice toggle",
+      "description": "Toggle local voice dictation on/off"
+    }
+  ]
+}

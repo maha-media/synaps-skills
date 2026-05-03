@@ -1,0 +1,88 @@
+{
+  "name": "extension-showcase",
+  "version": "0.1.0",
+  "description": "Proof-of-concept plugin showing hooks, registered tools, config, and an extension model provider in one standalone extension.",
+  "author": {
+    "name": "Maha Media",
+    "url": "https://github.com/maha-media"
+  },
+  "repository": "maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "examples",
+  "compatibility": {
+    "synaps": ">=0.1.0",
+    "extension_protocol": "1"
+  },
+  "commands": [
+    {
+      "name": "demo",
+      "description": "Show what the extension-showcase plugin installs.",
+      "command": "cat",
+      "args": [
+        "docs/demo.md"
+      ]
+    }
+  ],
+  "extension": {
+    "protocol_version": 1,
+    "runtime": "process",
+    "command": "python3",
+    "args": [
+      "extensions/showcase.py"
+    ],
+    "permissions": [
+      "tools.register",
+      "tools.intercept",
+      "privacy.llm_content",
+      "session.lifecycle",
+      "providers.register"
+    ],
+    "hooks": [
+      {
+        "hook": "before_tool_call",
+        "tool": "bash",
+        "match": {
+          "input_contains": "rm -rf"
+        }
+      },
+      {
+        "hook": "after_tool_call"
+      },
+      {
+        "hook": "on_message_complete"
+      },
+      {
+        "hook": "on_session_start"
+      },
+      {
+        "hook": "on_session_end"
+      }
+    ],
+    "config": [
+      {
+        "key": "response_prefix",
+        "description": "Prefix used by the showcase provider model.",
+        "required": false,
+        "default": "showcase"
+      },
+      {
+        "key": "notes_file",
+        "description": "Relative file under SYNAPS_BASE_DIR used for extension audit notes.",
+        "required": false,
+        "default": "memory/extension-showcase.jsonl"
+      }
+    ],
+    "providers": [
+      {
+        "id": "showcase",
+        "display_name": "Showcase Provider",
+        "models": [
+          {
+            "id": "demo-small",
+            "display_name": "Demo Small"
+          }
+        ]
+      }
+    ]
+  }
+}
