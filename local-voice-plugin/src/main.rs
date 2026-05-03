@@ -6,6 +6,8 @@ use crate::protocol::{
     voice_event_to_sidecar_event, SidecarCapability, SidecarCommand, SidecarEvent, SidecarProviderState,
     VoiceEvent, VOICE_SIDECAR_PROTOCOL_VERSION,
 };
+#[cfg(feature = "voice-stt-whisper")]
+use crate::protocol::SpeechToTextProvider;
 #[cfg(all(feature = "voice-stt-whisper", feature = "voice-mic"))]
 mod audio;
 mod build_info;
