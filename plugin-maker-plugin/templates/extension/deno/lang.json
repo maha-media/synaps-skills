@@ -1,0 +1,1 @@
+{"language":"deno","surface":"extension","description":"Deno/TypeScript extension template","requires":["deno"],"template":"ext.tmpl","output":"extensions/${NAME}_ext.ts","command":"deno","args":["run","${OUTPUT}"],"executable":true,"syntax_check":["deno","check","${OUTPUT}"]}

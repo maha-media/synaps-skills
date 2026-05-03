@@ -17,7 +17,22 @@ source "$LIB_DIR/languages.sh"
 _pm_expand_sidecar_lang_value() {
   local value="$1"
   value="${value//\$\{NAME\}/$NAME}"
+  if [[ -n "${rel_output:-}" ]]; then
+    value="${value//\$\{OUTPUT\}/$rel_output}"
+  fi
   printf '%s\n' "$value"
+}
+
+_pm_expand_sidecar_json_array() {
+  local surface="$1" lang="$2" expr="$3"
+  local manifest item expanded out='[]'
+  manifest="$(lang_manifest_path "$surface" "$lang")"
+  while IFS= read -r item; do
+    [[ -z "$item" ]] && continue
+    expanded="$(_pm_expand_sidecar_lang_value "$item")"
+    out="$(jq -c --arg v "$expanded" '. + [$v]' <<<"$out")"
+  done < <(jq -r "$expr // [] | .[]" "$manifest")
+  printf '%s\n' "$out"
 }
 
 _scaffold_sidecar_in() {
@@ -28,11 +43,12 @@ _scaffold_sidecar_in() {
 
   require_template_language sidecar "$lang"
 
-  local manifest template rel_output template_path output_path sidecar_cmd
+  local manifest template rel_output template_path output_path sidecar_cmd sidecar_args_json
   manifest="$(lang_manifest_path sidecar "$lang")"
   template="$(jq -r '.template' "$manifest")"
   rel_output="$(_pm_expand_sidecar_lang_value "$(jq -r '.output' "$manifest")")"
   sidecar_cmd="$(_pm_expand_sidecar_lang_value "$(jq -r '.command' "$manifest")")"
+  sidecar_args_json="$(_pm_expand_sidecar_json_array sidecar "$lang" '.args')"
   template_path="$(dirname "$manifest")/$template"
   output_path="$plugin_dir/$rel_output"
 
@@ -53,10 +69,12 @@ _scaffold_sidecar_in() {
   fi
 
   jq --arg bin "$sidecar_cmd" \
+     --argjson args "$sidecar_args_json" \
      --argjson proto "$proto" \
      --argjson lifecycle "$lifecycle_block" \
      '.provides = (.provides // {}) | .provides.sidecar = {
         command: $bin,
+        args: $args,
         protocol_version: $proto
       } | (if $lifecycle != null then .provides.sidecar.lifecycle = $lifecycle else . end)' \
      "$pj" > "$pj.tmp" && mv "$pj.tmp" "$pj"

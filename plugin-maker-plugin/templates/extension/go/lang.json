@@ -1,0 +1,12 @@
+{
+  "language": "go",
+  "surface": "extension",
+  "description": "Go source extension template (runs with go run)",
+  "requires": ["go"],
+  "template": "main.go.tmpl",
+  "output": "extensions/${NAME}_ext.go",
+  "command": "go",
+  "args": ["run", "${OUTPUT}"],
+  "executable": false,
+  "syntax_check": ["go", "fmt", "${OUTPUT}"]
+}

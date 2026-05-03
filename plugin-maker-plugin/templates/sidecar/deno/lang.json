@@ -1,0 +1,18 @@
+{
+  "language": "deno",
+  "surface": "sidecar",
+  "description": "Deno/TypeScript sidecar template",
+  "requires": [
+    "deno"
+  ],
+  "template": "sidecar.tmpl",
+  "output": "bin/${NAME}-sidecar",
+  "command": "bin/${NAME}-sidecar",
+  "args": [],
+  "executable": true,
+  "syntax_check": [
+    "deno",
+    "check",
+    "${OUTPUT}"
+  ]
+}

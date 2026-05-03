@@ -1,0 +1,1 @@
+{"language":"rust","surface":"sidecar","description":"Rust sidecar wrapper template (compiles source on launch)","requires":["rustc"],"template":"sidecar.tmpl","output":"bin/${NAME}-sidecar","command":"bin/${NAME}-sidecar","executable":true,"syntax_check":["bash","-n","${OUTPUT}"]}

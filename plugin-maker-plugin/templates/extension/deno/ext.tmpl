@@ -1,0 +1,86 @@
+#!/usr/bin/env -S deno run
+// ${NAME} — SynapsCLI extension in Deno.
+// JSON-RPC 2.0 over LSP-style Content-Length framing.
+
+const NAME = "${NAME}";
+let buffer = Buffer.alloc(0);
+
+function send(obj) {
+  const body = Buffer.from(JSON.stringify(obj), "utf8");
+  process.stdout.write(`Content-Length: ${body.length}\r\n\r\n`);
+  process.stdout.write(body);
+}
+
+function reply(id, result) {
+  send({ jsonrpc: "2.0", id, result });
+}
+
+function replyError(id, code, message) {
+  send({ jsonrpc: "2.0", id, error: { code, message } });
+}
+
+function handleInitialize(params) {
+  return { protocol_version: 1, extension: NAME, capabilities: [] };
+}
+
+function handleHook(params) {
+  return { action: "continue" };
+}
+
+function handleCommand(params) {
+  const command = params.name || "";
+  const args = (params.args || []).join(" ");
+  return { output: `${NAME}: ${command} ${args} (stub)` };
+}
+
+function handleShutdown(_params) {
+  return { ok: true };
+}
+
+const handlers = {
+  initialize: handleInitialize,
+  "hook.handle": handleHook,
+  "command.invoke": handleCommand,
+  shutdown: handleShutdown,
+};
+
+function processBuffer() {
+  while (true) {
+    const headerEnd = buffer.indexOf("\r\n\r\n");
+    if (headerEnd < 0) return;
+    const header = buffer.slice(0, headerEnd).toString("ascii");
+    const match = header.match(/Content-Length:\s*(\d+)/i);
+    if (!match) {
+      buffer = buffer.slice(headerEnd + 4);
+      continue;
+    }
+    const len = Number(match[1]);
+    const bodyStart = headerEnd + 4;
+    const bodyEnd = bodyStart + len;
+    if (buffer.length < bodyEnd) return;
+    const body = buffer.slice(bodyStart, bodyEnd).toString("utf8");
+    buffer = buffer.slice(bodyEnd);
+    handleMessage(JSON.parse(body));
+  }
+}
+
+function handleMessage(msg) {
+  const method = msg.method || "";
+  const handler = handlers[method];
+  if (!handler) {
+    if (msg.id !== undefined) replyError(msg.id, -32601, `method not found: ${method}`);
+    return;
+  }
+  try {
+    const result = handler(msg.params || {});
+    if (msg.id !== undefined) reply(msg.id, result);
+  } catch (err) {
+    if (msg.id !== undefined) replyError(msg.id, -32000, String(err && err.message || err));
+  }
+  if (method === "shutdown") process.exit(0);
+}
+
+process.stdin.on("data", (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  processBuffer();
+});

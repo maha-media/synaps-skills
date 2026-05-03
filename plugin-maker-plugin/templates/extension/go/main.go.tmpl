@@ -1,0 +1,77 @@
+package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"strconv"
+	"strings"
+)
+
+const name = "${NAME}"
+
+type Request struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      any             `json:"id,omitempty"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
+
+func writeFrame(v any) {
+	body, _ := json.Marshal(v)
+	fmt.Fprintf(os.Stdout, "Content-Length: %d\r\n\r\n", len(body))
+	os.Stdout.Write(body)
+}
+
+func readFrame(r *bufio.Reader) (*Request, error) {
+	length := -1
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil { return nil, err }
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" { break }
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) == 2 && strings.EqualFold(strings.TrimSpace(parts[0]), "Content-Length") {
+			length, _ = strconv.Atoi(strings.TrimSpace(parts[1]))
+		}
+	}
+	if length < 0 { return nil, fmt.Errorf("missing Content-Length") }
+	body := make([]byte, length)
+	_, err := io.ReadFull(r, body)
+	if err != nil { return nil, err }
+	var req Request
+	if err := json.Unmarshal(body, &req); err != nil { return nil, err }
+	return &req, nil
+}
+
+func resultFor(req *Request) any {
+	switch req.Method {
+	case "initialize":
+		return map[string]any{"protocol_version": 1, "extension": name, "capabilities": []string{}}
+	case "hook.handle":
+		return map[string]any{"action": "continue"}
+	case "command.invoke":
+		return map[string]any{"output": name + ": command.invoke (stub)"}
+	case "shutdown":
+		return map[string]any{"ok": true}
+	default:
+		return nil
+	}
+}
+
+func main() {
+	r := bufio.NewReader(os.Stdin)
+	for {
+		req, err := readFrame(r)
+		if err != nil { return }
+		res := resultFor(req)
+		if res == nil {
+			writeFrame(map[string]any{"jsonrpc":"2.0", "id": req.ID, "error": map[string]any{"code": -32601, "message": "method not found: " + req.Method}})
+			continue
+		}
+		writeFrame(map[string]any{"jsonrpc":"2.0", "id": req.ID, "result": res})
+		if req.Method == "shutdown" { return }
+	}
+}

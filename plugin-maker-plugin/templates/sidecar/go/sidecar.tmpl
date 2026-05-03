@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+src="$(mktemp -t ${NAME}-sidecar.XXXXXX.go)"
+trap 'rm -f "$src"' EXIT
+cat >"$src" <<'GO'
+package main
+import ("bufio"; "encoding/json"; "os")
+const name = "${NAME}"
+func emit(v any) { b, _ := json.Marshal(v); os.Stdout.Write(append(b, '\n')) }
+func main() {
+  emit(map[string]any{"type":"hello", "protocol_version":2, "extension":name, "capabilities": []string{}})
+  emit(map[string]any{"type":"status", "state":"idle", "label": name + " ready", "capabilities": []string{}})
+  s := bufio.NewScanner(os.Stdin)
+  for s.Scan() {
+    var frame map[string]any
+    if err := json.Unmarshal(s.Bytes(), &frame); err != nil { emit(map[string]any{"type":"error", "message": err.Error()}); continue }
+    switch frame["type"] {
+    case "init": emit(map[string]any{"type":"status", "state":"idle", "label": name + " ready", "capabilities": []string{}})
+    case "trigger": emit(map[string]any{"type":"insert_text", "text": name + ": trigger received", "mode":"final"})
+    case "shutdown": return
+    default: emit(map[string]any{"type":"error", "message":"unknown frame type"})
+    }
+  }
+}
+GO
+exec go run "$src"

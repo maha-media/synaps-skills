@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PM="$ROOT/bin/plugin-maker"
+source "$ROOT/lib/languages.sh"
 
 fail() { printf '✗ %s\n' "$*" >&2; exit 1; }
 ok() { printf '✓ %s\n' "$*" >&2; }
@@ -33,9 +34,11 @@ assert_sidecar_protocol() {
   local lang="$1" tmp plugin cmd out
   tmp="$(mktemp -d -t pm-proto-sc.XXXXXX)"
   (cd "$tmp" && "$PM" new plugin demo --sidecar "$lang" >/dev/null)
-  plugin="$tmp/demo-plugin"
+  local plugin="$tmp/demo-plugin"
+  local -a args
   cmd="$(jq -r '.provides.sidecar.command' "$plugin/.synaps-plugin/plugin.json")"
-  out="$(cd "$plugin" && { printf '{"type":"init","config":{}}\n'; printf '{"type":"shutdown"}\n'; } | timeout 5s "$cmd" 2>/dev/null || true)"
+  mapfile -t args < <(jq -r '.provides.sidecar.args // [] | .[]' "$plugin/.synaps-plugin/plugin.json")
+  out="$(cd "$plugin" && { printf '{"type":"init","config":{}}\n'; printf '{"type":"shutdown"}\n'; } | timeout 5s "$cmd" "${args[@]}" 2>/dev/null || true)"
   grep -q '"type"[[:space:]]*:[[:space:]]*"hello"' <<<"$out" || fail "sidecar $lang did not emit hello"
   grep -q '"protocol_version"[[:space:]]*:[[:space:]]*2' <<<"$out" || fail "sidecar $lang missing protocol_version 2"
   rm -rf "$tmp"
@@ -46,11 +49,19 @@ main() {
   local lang
   while IFS= read -r lang; do
     [[ -z "$lang" ]] && continue
+    if [[ "$lang" == "go" || "$lang" == "deno" ]] || ! lang_interpreter_available extension "$lang"; then
+      ok "extension protocol: $lang (skipped; missing deps)"
+      continue
+    fi
     assert_extension_protocol "$lang"
   done < <(find "$ROOT/templates/extension" -mindepth 1 -maxdepth 1 -type d ! -name '_*' -printf '%f\n' | sort)
 
   while IFS= read -r lang; do
     [[ -z "$lang" ]] && continue
+    if [[ "$lang" == "deno" ]] || ! lang_interpreter_available sidecar "$lang"; then
+      ok "sidecar protocol: $lang (skipped; missing deps)"
+      continue
+    fi
     assert_sidecar_protocol "$lang"
   done < <(find "$ROOT/templates/sidecar" -mindepth 1 -maxdepth 1 -type d ! -name '_*' -printf '%f\n' | sort)
 }

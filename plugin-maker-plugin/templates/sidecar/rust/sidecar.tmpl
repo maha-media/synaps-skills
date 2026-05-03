@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+src="$(mktemp -t ${NAME}-sidecar.XXXXXX.rs)"
+bin="$(mktemp -t ${NAME}-sidecar-bin.XXXXXX)"
+trap 'rm -f "$src" "$bin"' EXIT
+cat >"$src" <<'RS'
+use std::io::{self, BufRead, Write};
+const NAME: &str = "${NAME}";
+fn emit(s: &str) { println!("{}", s); let _ = io::stdout().flush(); }
+fn main() {
+    emit(&format!(r#"{{"type":"hello","protocol_version":2,"extension":"{}","capabilities":[]}}"#, NAME));
+    emit(&format!(r#"{{"type":"status","state":"idle","label":"{} ready","capabilities":[]}}"#, NAME));
+    for line in io::stdin().lock().lines() {
+        let Ok(line) = line else { break; };
+        if line.contains("shutdown") { break; }
+        if line.contains("trigger") { emit(&format!(r#"{{"type":"insert_text","text":"{}: trigger received","mode":"final"}}"#, NAME)); }
+    }
+}
+RS
+rustc --crate-name "${NAME}_sidecar" "$src" -o "$bin"
+exec "$bin"
