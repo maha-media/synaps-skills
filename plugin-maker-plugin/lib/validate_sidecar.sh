@@ -14,12 +14,24 @@ validate_sidecar() {
   local errs=0
 
   # S001 — command non-empty
-  local cmd
+  local cmd inferred_lang=""
   cmd=$(pj_get "$file" '.provides.sidecar.command')
   if [[ -z "$cmd" ]]; then
     err "S001: provides.sidecar.command is empty"
     errs=$((errs + 1))
   fi
+
+  case "$cmd" in
+    *.js) inferred_lang="node" ;;
+    *)
+      if [[ -f "$plugin_dir/$cmd" ]]; then
+        case "$(head -n 1 "$plugin_dir/$cmd" 2>/dev/null || true)" in
+          *python*) inferred_lang="python" ;;
+          *bash*|*sh*) inferred_lang="bash" ;;
+        esac
+      fi
+      ;;
+  esac
 
   # S004 — protocol_version (P010 already covers value range; we ensure presence)
   if ! pj_has "$file" '.provides.sidecar.protocol_version'; then
@@ -49,6 +61,44 @@ validate_sidecar() {
       fi
     fi
   fi
+
+
+
+  # S008 — language-template syntax checks for known generated sidecar files.
+  source "$LIB_DIR/languages.sh"
+  local lang output check_json
+  local -a check_cmd
+  while IFS= read -r lang; do
+    [[ -z "$lang" ]] && continue
+    [[ -n "$inferred_lang" && "$lang" != "$inferred_lang" ]] && continue
+    output="$(lang_get sidecar "$lang" '.output')"
+    output="${output//\$\{NAME\}/$(jq -r '.name' "$file")}" 
+    if [[ ! -f "$plugin_dir/$output" ]]; then
+      continue
+    fi
+    manifest_cmd="$(pj_get "$file" '.provides.sidecar.command')"
+    tpl_cmd="$(lang_get sidecar "$lang" '.command')"
+    tpl_cmd="${tpl_cmd//\$\{NAME\}/$(jq -r '.name' "$file")}"
+    if [[ "$manifest_cmd" != "$tpl_cmd" || "$cmd" != "$tpl_cmd" ]]; then
+      continue
+    fi
+    check_json="$(lang_json sidecar "$lang" '.syntax_check // []')"
+    [[ "$check_json" == "[]" || "$check_json" == "null" ]] && continue
+    mapfile -t check_cmd < <(jq -r '.[]' <<<"$check_json")
+    local i
+    for i in "${!check_cmd[@]}"; do
+      check_cmd[$i]="${check_cmd[$i]//\$\{OUTPUT\}/$plugin_dir/$output}"
+      check_cmd[$i]="${check_cmd[$i]//\$\{NAME\}/$(jq -r '.name' "$file")}"
+    done
+    if command -v "${check_cmd[0]}" >/dev/null 2>&1; then
+      if ! "${check_cmd[@]}" >/dev/null 2>&1; then
+        err "S008: syntax check failed for generated $lang sidecar: $output"
+        errs=$((errs + 1))
+      fi
+    else
+      warn "S008: skipping $lang sidecar syntax check; missing ${check_cmd[0]}"
+    fi
+  done < <(list_template_languages sidecar)
 
   return $errs
 }

@@ -90,6 +90,8 @@ scaffold_sidecar() {
     die "unsupported sidecar protocol_version: $proto (must be 1 or 2)"
   fi
 
+  require_template_language sidecar "$lang"
+
   NAME=$(jq -r '.name' "$plugin_path/.synaps-plugin/plugin.json")
   FORCE="$force"
   SIDECAR_LANG="$lang"

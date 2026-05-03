@@ -148,5 +148,44 @@ validate_extension() {
     fi
   fi
 
+
+
+  # X013 — language-template syntax checks for known generated extension files.
+  source "$LIB_DIR/languages.sh"
+  local lang output check_json
+  local -a check_cmd
+  while IFS= read -r lang; do
+    [[ -z "$lang" ]] && continue
+    output="$(lang_get extension "$lang" '.output')"
+    output="${output//\$\{NAME\}/$(jq -r '.name' "$file")}" 
+    if [[ ! -f "$plugin_dir/$output" ]]; then
+      continue
+    fi
+    manifest_cmd="$(pj_get "$file" '.extension.command')"
+    manifest_args="$(jq -r '.extension.args // [] | join(" ")' "$file" 2>/dev/null || true)"
+    tpl_cmd="$(lang_get extension "$lang" '.command')"
+    tpl_args="$(lang_json extension "$lang" '.args // []' | jq -r 'join(" ")')"
+    tpl_args="${tpl_args//\$\{OUTPUT\}/$output}"
+    if [[ "$manifest_cmd $manifest_args" != "$tpl_cmd $tpl_args" ]]; then
+      continue
+    fi
+    check_json="$(lang_json extension "$lang" '.syntax_check // []')"
+    [[ "$check_json" == "[]" || "$check_json" == "null" ]] && continue
+    mapfile -t check_cmd < <(jq -r '.[]' <<<"$check_json")
+    local i
+    for i in "${!check_cmd[@]}"; do
+      check_cmd[$i]="${check_cmd[$i]//\$\{OUTPUT\}/$plugin_dir/$output}"
+      check_cmd[$i]="${check_cmd[$i]//\$\{NAME\}/$(jq -r '.name' "$file")}"
+    done
+    if command -v "${check_cmd[0]}" >/dev/null 2>&1; then
+      if ! "${check_cmd[@]}" >/dev/null 2>&1; then
+        err "X013: syntax check failed for generated $lang extension: $output"
+        errs=$((errs + 1))
+      fi
+    else
+      warn "X013: skipping $lang extension syntax check; missing ${check_cmd[0]}"
+    fi
+  done < <(list_template_languages extension)
+
   return $errs
 }

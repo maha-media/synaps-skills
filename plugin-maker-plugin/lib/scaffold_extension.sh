@@ -119,6 +119,8 @@ scaffold_extension() {
     is_reserved_permission "$p" && die "permission '$p' is reserved and not yet implemented"
   done
 
+  require_template_language extension "$lang"
+
   NAME=$(jq -r '.name' "$plugin_path/.synaps-plugin/plugin.json")
   FORCE="$force"
   EXT_LANG="$lang"
