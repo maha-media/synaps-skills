@@ -75,7 +75,6 @@ check_binary() {
     echo "setup.sh: missing executable: $BIN" >&2
     return 1
   fi
-  "$BIN" --version >/dev/null 2>&1 || true
   echo "✓ axel-memory-manager binary installed: $BIN ($(du -h "$BIN" | cut -f1))"
 }
 
