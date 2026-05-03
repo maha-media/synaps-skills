@@ -13,18 +13,23 @@
     "synaps": ">=0.1.0",
     "extension_protocol": "1"
   },
-
   "commands": [
     {
       "name": "plugin-maker",
       "description": "Plugin Maker — scaffold, validate, lint, and inspect plugins.",
       "interactive": true,
       "subcommands": [
-        "new", "validate", "lint", "doctor", "info", "list", "catalog", "help"
+        "new",
+        "validate",
+        "lint",
+        "doctor",
+        "info",
+        "list",
+        "catalog",
+        "help"
       ]
     }
   ],
-
   "keybinds": [
     {
       "key": "C-S-p",
@@ -33,7 +38,6 @@
       "description": "Run plugin-maker doctor on the current directory"
     }
   ],
-
   "help_entries": [
     {
       "id": "plugin-maker-overview",
@@ -43,13 +47,31 @@
       "category": "Plugin",
       "topic": "Branch",
       "common": true,
-      "keywords": ["plugin", "scaffold", "validate", "lint", "skill", "extension", "sidecar"],
+      "keywords": [
+        "plugin",
+        "scaffold",
+        "validate",
+        "lint",
+        "skill",
+        "extension",
+        "sidecar"
+      ],
       "usage": "/plugin-maker <subcommand> [args]",
       "examples": [
-        {"command": "/plugin-maker new plugin my-tool",  "description": "Scaffold a new plugin in ./my-tool-plugin/"},
-        {"command": "/plugin-maker doctor .",           "description": "Validate + lint every plugin under the current directory"}
+        {
+          "command": "/plugin-maker new plugin my-tool",
+          "description": "Scaffold a new plugin in ./my-tool-plugin/"
+        },
+        {
+          "command": "/plugin-maker doctor .",
+          "description": "Validate + lint every plugin under the current directory"
+        }
       ],
-      "related": ["/plugin-maker new", "/plugin-maker validate", "/plugin-maker doctor"]
+      "related": [
+        "/plugin-maker new",
+        "/plugin-maker validate",
+        "/plugin-maker doctor"
+      ]
     },
     {
       "id": "plugin-maker-new",
@@ -58,14 +80,31 @@
       "summary": "Scaffold a plugin, skill, extension, sidecar, command, keybind, or settings entry.",
       "category": "Plugin",
       "topic": "Command",
-      "keywords": ["new", "scaffold", "create", "generate"],
+      "keywords": [
+        "new",
+        "scaffold",
+        "create",
+        "generate"
+      ],
       "usage": "/plugin-maker new <plugin|skill|extension|sidecar|command|keybind|settings|field> ...",
       "examples": [
-        {"command": "/plugin-maker new plugin my-tool --umbrella",          "description": "Umbrella-layout plugin with docs/ progressive disclosure"},
-        {"command": "/plugin-maker new extension --hooks before_tool_call", "description": "Add an extension stub with a hook subscription"},
-        {"command": "/plugin-maker new sidecar --lifecycle-cmd capture",    "description": "Add a sidecar with the Phase-8 lifecycle UX"}
+        {
+          "command": "/plugin-maker new plugin my-tool --umbrella",
+          "description": "Umbrella-layout plugin with docs/ progressive disclosure"
+        },
+        {
+          "command": "/plugin-maker new extension --hooks before_tool_call",
+          "description": "Add an extension stub with a hook subscription"
+        },
+        {
+          "command": "/plugin-maker new sidecar --lifecycle-cmd capture",
+          "description": "Add a sidecar with the Phase-8 lifecycle UX"
+        }
       ],
-      "related": ["/plugin-maker validate", "/plugin-maker doctor"]
+      "related": [
+        "/plugin-maker validate",
+        "/plugin-maker doctor"
+      ]
     },
     {
       "id": "plugin-maker-validate",
@@ -74,13 +113,27 @@
       "summary": "Structural validation. Errors → exit 1.",
       "category": "Plugin",
       "topic": "Command",
-      "keywords": ["validate", "check", "structure", "schema"],
+      "keywords": [
+        "validate",
+        "check",
+        "structure",
+        "schema"
+      ],
       "usage": "/plugin-maker validate [PATH]",
       "examples": [
-        {"command": "/plugin-maker validate",   "description": "Validate the plugin in cwd"},
-        {"command": "/plugin-maker validate .", "description": "Validate every plugin found under cwd"}
+        {
+          "command": "/plugin-maker validate",
+          "description": "Validate the plugin in cwd"
+        },
+        {
+          "command": "/plugin-maker validate .",
+          "description": "Validate every plugin found under cwd"
+        }
       ],
-      "related": ["/plugin-maker lint", "/plugin-maker doctor"]
+      "related": [
+        "/plugin-maker lint",
+        "/plugin-maker doctor"
+      ]
     },
     {
       "id": "plugin-maker-lint",
@@ -89,13 +142,26 @@
       "summary": "Quality checks (warnings; --strict promotes to errors).",
       "category": "Plugin",
       "topic": "Command",
-      "keywords": ["lint", "quality", "style"],
+      "keywords": [
+        "lint",
+        "quality",
+        "style"
+      ],
       "usage": "/plugin-maker lint [--strict] [PATH]",
       "examples": [
-        {"command": "/plugin-maker lint",          "description": "Lint cwd plugin"},
-        {"command": "/plugin-maker lint --strict", "description": "Fail on any warning"}
+        {
+          "command": "/plugin-maker lint",
+          "description": "Lint cwd plugin"
+        },
+        {
+          "command": "/plugin-maker lint --strict",
+          "description": "Fail on any warning"
+        }
       ],
-      "related": ["/plugin-maker validate", "/plugin-maker doctor"]
+      "related": [
+        "/plugin-maker validate",
+        "/plugin-maker doctor"
+      ]
     },
     {
       "id": "plugin-maker-doctor",
@@ -104,12 +170,24 @@
       "summary": "Full health check — validate + lint + install-readiness.",
       "category": "Plugin",
       "topic": "Command",
-      "keywords": ["doctor", "health", "audit", "diagnose"],
+      "keywords": [
+        "doctor",
+        "health",
+        "audit",
+        "diagnose"
+      ],
       "usage": "/plugin-maker doctor [PATH]",
       "examples": [
-        {"command": "/plugin-maker doctor .", "description": "Audit every plugin under cwd"}
+        {
+          "command": "/plugin-maker doctor .",
+          "description": "Audit every plugin under cwd"
+        }
       ],
-      "related": ["/plugin-maker validate", "/plugin-maker lint", "/plugin-maker info"]
+      "related": [
+        "/plugin-maker validate",
+        "/plugin-maker lint",
+        "/plugin-maker info"
+      ]
     },
     {
       "id": "plugin-maker-info",
@@ -118,9 +196,16 @@
       "summary": "Rich summary of a plugin — skills, extension, hooks, sidecar, settings, keybinds.",
       "category": "Plugin",
       "topic": "Command",
-      "keywords": ["info", "inspect", "describe"],
+      "keywords": [
+        "info",
+        "inspect",
+        "describe"
+      ],
       "usage": "/plugin-maker info [PATH]",
-      "related": ["/plugin-maker list", "/plugin-maker doctor"]
+      "related": [
+        "/plugin-maker list",
+        "/plugin-maker doctor"
+      ]
     },
     {
       "id": "plugin-maker-catalog",
@@ -129,15 +214,25 @@
       "summary": "Print the canonical catalog: hooks, permissions, hook→permission map, sidecar frames, editor kinds, action types.",
       "category": "Plugin",
       "topic": "Command",
-      "keywords": ["catalog", "reference", "hooks", "permissions"],
+      "keywords": [
+        "catalog",
+        "reference",
+        "hooks",
+        "permissions"
+      ],
       "usage": "/plugin-maker catalog <hooks|permissions|hook-permissions|sidecar-frames|editor-kinds|action-types>",
       "examples": [
-        {"command": "/plugin-maker catalog hooks",       "description": "List the 7 hook kinds with required permissions"},
-        {"command": "/plugin-maker catalog permissions", "description": "List the 12 extension permissions"}
+        {
+          "command": "/plugin-maker catalog hooks",
+          "description": "List the 7 hook kinds with required permissions"
+        },
+        {
+          "command": "/plugin-maker catalog permissions",
+          "description": "List the 12 extension permissions"
+        }
       ]
     }
   ],
-
   "settings": {
     "categories": [
       {
@@ -148,7 +243,11 @@
             "key": "default_layout",
             "label": "Default scaffold layout",
             "editor": "cycler",
-            "options": ["single", "umbrella", "memory"],
+            "options": [
+              "single",
+              "umbrella",
+              "memory"
+            ],
             "default": "single",
             "help": "Layout used by `plugin-maker new plugin` when no flag is passed."
           },
@@ -163,7 +262,13 @@
             "key": "default_license",
             "label": "Default license",
             "editor": "cycler",
-            "options": ["MIT", "Apache-2.0", "GPL-3.0", "BSD-3-Clause", "UNLICENSED"],
+            "options": [
+              "MIT",
+              "Apache-2.0",
+              "GPL-3.0",
+              "BSD-3-Clause",
+              "UNLICENSED"
+            ],
             "default": "MIT",
             "help": "Seed for the `license` field in newly scaffolded plugin.json files."
           },
@@ -171,7 +276,10 @@
             "key": "strict_lint",
             "label": "Strict lint by default",
             "editor": "cycler",
-            "options": ["off", "on"],
+            "options": [
+              "off",
+              "on"
+            ],
             "default": "off",
             "help": "When `on`, `plugin-maker lint` runs as if `--strict` was passed."
           },
@@ -185,12 +293,14 @@
       }
     ]
   },
-
   "extension": {
     "protocol_version": 1,
     "runtime": "process",
     "command": "python3",
-    "args": ["extensions/plugin_maker_ext.py"],
+    "args": [
+      "-u",
+      "extensions/plugin_maker_ext.py"
+    ],
     "permissions": [
       "tools.intercept",
       "session.lifecycle",
@@ -198,16 +308,22 @@
       "config.subscribe"
     ],
     "hooks": [
-      {"hook": "on_session_start"},
+      {
+        "hook": "on_session_start"
+      },
       {
         "hook": "before_tool_call",
         "tool": "bash",
-        "match": {"input_contains": "plugin.json"}
+        "match": {
+          "input_contains": "plugin.json"
+        }
       },
       {
         "hook": "after_tool_call",
         "tool": "bash",
-        "match": {"input_contains": "plugin.json"}
+        "match": {
+          "input_contains": "plugin.json"
+        }
       }
     ],
     "config": [

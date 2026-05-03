@@ -39,14 +39,43 @@ PROTOCOL_VERSION = 1
 EXT_NAME = "plugin-maker"
 EXT_VERSION = "0.1.0"
 
-# ── stdio JSON-RPC plumbing ─────────────────────────────────────────────────
+# ── stdio JSON-RPC plumbing (LSP-style Content-Length framing) ──────────────
 _lock = threading.Lock()
 
 
 def _send(obj: dict[str, Any]) -> None:
+    body = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    header = b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n\r\n"
     with _lock:
-        sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
-        sys.stdout.flush()
+        sys.stdout.buffer.write(header + body)
+        sys.stdout.buffer.flush()
+
+
+def _read_frame() -> dict[str, Any] | None:
+    """Read one Content-Length-framed JSON-RPC message from stdin. Returns None on EOF."""
+    content_length: int | None = None
+    while True:
+        line = sys.stdin.buffer.readline()
+        if line == b"":  # EOF
+            return None
+        if line in (b"\r\n", b"\n"):
+            break
+        name, _, value = line.decode("ascii", errors="replace").partition(":")
+        if name.strip().lower() == "content-length":
+            try:
+                content_length = int(value.strip())
+            except ValueError:
+                content_length = None
+    if content_length is None:
+        # Malformed frame — skip and try again rather than crashing the loop.
+        return {}
+    body = sys.stdin.buffer.read(content_length)
+    if len(body) < content_length:
+        return None  # EOF mid-frame
+    try:
+        return json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError:
+        return {}
 
 
 def _ok(req_id: Any, result: Any) -> None:
@@ -122,27 +151,26 @@ def h_shutdown(_params: dict) -> dict:
 
 # ── hooks ───────────────────────────────────────────────────────────────────
 def h_on_session_start(_params: dict) -> dict:
-    """Fire a quick `validate` over the local synaps-skills monorepo and emit
-    a system-message banner if anything is broken."""
+    """Synaps' OnSessionStart hook only accepts `continue` — we cannot inject
+    a message from here. We log the health summary to stderr (visible in the
+    Synaps debug log) and stay out of the way."""
     repo = os.environ.get("SYNAPS_SKILLS_REPO") or str(Path.home() / "Projects/Maha-Media/synaps-skills")
-    if not Path(repo).is_dir():
-        return {"action": "continue"}
-    res = _run_cli("validate", repo, timeout=10)
-    if res["exit"] == 0:
-        return {"action": "continue"}
-    # Extract last error count line if present
-    summary = ""
-    for line in res["stdout"].splitlines() + res["stderr"].splitlines():
-        if "error(s)" in line:
-            summary = line.strip()
-            break
-    if not summary:
-        summary = "plugin-maker found issues; run `/plugin-maker doctor`."
-    return {
-        "action": "inject_message",
-        "role": "system",
-        "content": f"⚠ plugin-maker: {summary}",
-    }
+    if Path(repo).is_dir():
+        # Fire-and-forget: don't block the session boot on a full validate.
+        try:
+            res = _run_cli("validate", repo, timeout=5)
+            if res["exit"] != 0:
+                summary = ""
+                for line in (res["stdout"] + "\n" + res["stderr"]).splitlines():
+                    if "error(s)" in line:
+                        summary = line.strip()
+                        break
+                _log(f"session-start health: {summary or 'plugin-maker found issues'}")
+            else:
+                _log("session-start health: all installed plugins clean")
+        except Exception as e:  # noqa: BLE001
+            _log(f"session-start health check failed: {e!r}")
+    return {"action": "continue"}
 
 
 def _bash_targets_plugin_json(params: dict) -> str | None:
@@ -157,31 +185,33 @@ def _bash_targets_plugin_json(params: dict) -> str | None:
 
 
 def h_before_tool_call(params: dict) -> dict:
+    # before_tool_call only accepts: continue, block, confirm, modify.
+    # We just observe and continue — no `annotate` field exists.
     if (params.get("tool") or "") != "bash":
         return {"action": "continue"}
     plugin = _bash_targets_plugin_json(params)
-    if not plugin:
-        return {"action": "continue"}
-    return {
-        "action": "continue",
-        "annotate": f"plugin-maker: about to touch {Path(plugin).name}/.synaps-plugin/plugin.json — will validate after.",
-    }
+    if plugin:
+        _log(f"observe: bash about to touch {Path(plugin).name}/.synaps-plugin/plugin.json")
+    return {"action": "continue"}
 
 
 def h_after_tool_call(params: dict) -> dict:
+    # after_tool_call only accepts: continue.
     if (params.get("tool") or "") != "bash":
         return {"action": "continue"}
     plugin = _bash_targets_plugin_json(params)
     if not plugin:
         return {"action": "continue"}
-    res = _run_cli("validate", plugin, timeout=10)
-    if res["exit"] == 0:
-        return {"action": "continue", "annotate": f"plugin-maker ✓ {Path(plugin).name} still valid."}
-    tail = (res["stdout"] + res["stderr"]).strip().splitlines()[-6:]
-    return {
-        "action": "continue",
-        "annotate": "plugin-maker ✗ validate failed:\n" + "\n".join(tail),
-    }
+    try:
+        res = _run_cli("validate", plugin, timeout=8)
+        if res["exit"] == 0:
+            _log(f"post-bash: {Path(plugin).name} still validates ✓")
+        else:
+            tail = (res["stdout"] + res["stderr"]).strip().splitlines()[-3:]
+            _log(f"post-bash: {Path(plugin).name} validate ✗ — " + " | ".join(tail))
+    except Exception as e:  # noqa: BLE001
+        _log(f"post-bash validate failed: {e!r}")
+    return {"action": "continue"}
 
 
 # ── command.invoke (interactive /plugin-maker subcommands) ──────────────────
@@ -298,15 +328,31 @@ def h_settings_editor_commit(_params: dict) -> dict:
 
 
 # ── dispatch table ──────────────────────────────────────────────────────────
-HANDLERS: dict[str, Any] = {
-    "initialize": h_initialize,
-    "shutdown": h_shutdown,
+# Hook handlers are dispatched via the single `hook.handle` method using the
+# `kind` field in params (per Synaps protocol). Top-level methods are the
+# RPC verbs Synaps actually sends to the extension process.
+_HOOK_HANDLERS: dict[str, Any] = {
     "on_session_start": h_on_session_start,
     "before_tool_call": h_before_tool_call,
     "after_tool_call": h_after_tool_call,
+}
+
+
+def h_hook_handle(params: dict) -> dict:
+    kind = params.get("kind") or ""
+    handler = _HOOK_HANDLERS.get(kind)
+    if handler is None:
+        # Unknown hook kind — return continue so we don't break the session.
+        return {"action": "continue"}
+    return handler(params)
+
+
+HANDLERS: dict[str, Any] = {
+    "initialize": h_initialize,
+    "shutdown": h_shutdown,
+    "hook.handle": h_hook_handle,
     "command.invoke": h_command_invoke,
     "settings.editor.open": h_settings_editor_open,
-    "settings.editor.render": h_settings_editor_render,
     "settings.editor.key": h_settings_editor_key,
     "settings.editor.commit": h_settings_editor_commit,
 }
@@ -316,14 +362,12 @@ def main() -> int:
     _log(f"started v{EXT_VERSION} (cli={CLI})")
     if not CLI.is_file() or not os.access(CLI, os.X_OK):
         _log(f"warning: bash CLI not executable at {CLI}")
-    for raw in sys.stdin:
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            req = json.loads(raw)
-        except json.JSONDecodeError as e:
-            _err(None, -32700, f"parse error: {e}")
+    # LSP-style Content-Length framing — Synaps does not use line-delimited JSON.
+    while True:
+        req = _read_frame()
+        if req is None:  # EOF — parent closed stdin
+            break
+        if not req:  # malformed frame, skip
             continue
         method = req.get("method")
         params = req.get("params") or {}
