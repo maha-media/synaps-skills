@@ -48,16 +48,16 @@ jobs:
       - name: Stage binary (Unix)
         if: runner.os != 'Windows'
         run: |
-          mkdir -p ../../../dist
-          cp target/release/memory-manager ../../../dist/${{ matrix.asset }}
-          chmod 0755 ../../../dist/${{ matrix.asset }}
+          mkdir -p ../../dist
+          cp target/release/memory-manager ../../dist/${{ matrix.asset }}
+          chmod 0755 ../../dist/${{ matrix.asset }}
 
       - name: Stage binary (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force ../../../dist | Out-Null
-          Copy-Item target/release/memory-manager.exe ../../../dist/${{ matrix.asset }}
+          New-Item -ItemType Directory -Force ../../dist | Out-Null
+          Copy-Item target/release/memory-manager.exe ../../dist/${{ matrix.asset }}
 
       - uses: actions/upload-artifact@v4
         with:
