@@ -1,0 +1,84 @@
+name: axel-memory-manager release binaries
+
+on:
+  push:
+    tags:
+      - 'axel-memory-manager-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to create/update, e.g. axel-memory-manager-v0.1.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: memory-manager-linux-x86_64
+          - os: ubuntu-24.04-arm
+            asset: memory-manager-linux-aarch64
+          - os: macos-14
+            asset: memory-manager-macos-aarch64
+          - os: windows-latest
+            asset: memory-manager-windows-x86_64.exe
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: axel-memory-manager-plugin/extensions/memory-manager
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: axel-memory-manager-plugin/extensions/memory-manager
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Stage binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p ../../../dist
+          cp target/release/memory-manager ../../../dist/${{ matrix.asset }}
+          chmod 0755 ../../../dist/${{ matrix.asset }}
+
+      - name: Stage binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force ../../../dist | Out-Null
+          Copy-Item target/release/memory-manager.exe ../../../dist/${{ matrix.asset }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: axel-memory-manager-plugin/dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release assets
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Axel Memory Manager ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/*
+          fail_on_unmatched_files: true
