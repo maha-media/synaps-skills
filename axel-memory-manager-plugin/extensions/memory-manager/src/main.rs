@@ -1,11 +1,9 @@
 //! Axel memory-manager extension for Synaps CLI.
 //!
-//! Speaks JSON-RPC 2.0 over **line-delimited** stdio (one JSON object per
-//! line — the Synaps CLI extension protocol).
-//!
-//! Note: upstream Axel ships its own `axel extension` binary, but it speaks
-//! Content-Length framed JSON-RPC (LSP-style). Synaps uses line-delimited
-//! framing, so we keep our own loop here and call `AxelBrain` as a library.
+//! Speaks JSON-RPC 2.0 with **LSP-style Content-Length framing** over stdio
+//! (the actual Synaps CLI extension wire format — the public docs incorrectly
+//! call it "line-delimited"; the working plugin-maker extension confirms
+//! Content-Length is what Synaps sends/expects).
 //!
 //! Hooks: before_message, on_message_complete, after_tool_call,
 //!        on_session_start, on_session_end.
@@ -33,6 +31,7 @@ const RECALL_LIMIT: usize = 5;
 fn main() -> anyhow::Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
+    let mut reader = stdin.lock();
     let mut out = stdout.lock();
 
     let brain_path = resolve_brain_path();
@@ -47,32 +46,29 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    for line in stdin.lock().lines() {
-        let line = match line {
-            Ok(l) if !l.trim().is_empty() => l,
-            Ok(_) => continue,
+    loop {
+        let frame = match read_frame(&mut reader) {
+            Ok(Some(v)) => v,
+            Ok(None) => break, // EOF — parent closed stdin
             Err(e) => {
-                eprintln!("axel: stdin read error: {e}");
-                break;
-            }
-        };
-
-        let req: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("axel: bad JSON frame: {e}");
+                eprintln!("axel: frame read error: {e}");
                 continue;
             }
         };
 
-        let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
-        let params = req.get("params").cloned().unwrap_or(json!({}));
-        let id = req.get("id").cloned();
+        // Empty object = malformed frame; skip without crashing the loop.
+        if frame.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+            continue;
+        }
+
+        let method = frame.get("method").and_then(|m| m.as_str()).unwrap_or("");
+        let params = frame.get("params").cloned().unwrap_or(json!({}));
+        let id = frame.get("id").cloned();
 
         let result = dispatch(brain.as_mut(), method, &params);
 
         if let Some(id) = id {
-            let frame = match result {
+            let response = match result {
                 Ok(v) => json!({ "jsonrpc": "2.0", "id": id, "result": v }),
                 Err(e) => json!({
                     "jsonrpc": "2.0",
@@ -80,8 +76,7 @@ fn main() -> anyhow::Result<()> {
                     "error": { "code": -32603, "message": e.to_string() }
                 }),
             };
-            writeln!(out, "{}", frame)?;
-            out.flush()?;
+            write_frame(&mut out, &response)?;
         }
 
         if method == "shutdown" {
@@ -93,6 +88,54 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Read one LSP-style Content-Length-framed JSON-RPC message.
+/// Returns Ok(None) on EOF before any frame, Ok(Some({})) on a malformed frame
+/// the caller should skip, Ok(Some(value)) on success.
+fn read_frame<R: BufRead>(reader: &mut R) -> io::Result<Option<Value>> {
+    let mut content_length: Option<usize> = None;
+
+    // Header section — lines terminated with CRLF or LF, ends on blank line.
+    loop {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            return Ok(None); // EOF before any header
+        }
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            break; // end of header section
+        }
+        if let Some((name, value)) = trimmed.split_once(':') {
+            if name.trim().eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse::<usize>().ok();
+            }
+        }
+    }
+
+    let len = match content_length {
+        Some(n) => n,
+        None => return Ok(Some(json!({}))), // malformed: skip
+    };
+
+    let mut body = vec![0u8; len];
+    std::io::Read::read_exact(reader, &mut body)?;
+    match serde_json::from_slice::<Value>(&body) {
+        Ok(v) => Ok(Some(v)),
+        Err(e) => {
+            eprintln!("axel: bad JSON body: {e}");
+            Ok(Some(json!({})))
+        }
+    }
+}
+
+/// Write one Content-Length-framed JSON-RPC message.
+fn write_frame<W: Write>(out: &mut W, value: &Value) -> io::Result<()> {
+    let body = serde_json::to_vec(value).expect("serialize JSON-RPC frame");
+    write!(out, "Content-Length: {}\r\n\r\n", body.len())?;
+    out.write_all(&body)?;
+    out.flush()
 }
 
 /// Resolve the .r8 brain file path. First match wins:
