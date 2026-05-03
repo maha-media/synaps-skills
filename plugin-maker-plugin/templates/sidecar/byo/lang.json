@@ -1,0 +1,1 @@
+{"language":"byo","surface":"sidecar","description":"Bring-your-own sidecar command placeholder","requires":[],"template":"sidecar.tmpl","output":"bin/${NAME}-sidecar","command":"bin/${NAME}-sidecar","executable":true,"syntax_check":["bash","-n","${OUTPUT}"]}

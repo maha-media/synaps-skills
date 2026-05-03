@@ -49,7 +49,7 @@ main() {
   local lang
   while IFS= read -r lang; do
     [[ -z "$lang" ]] && continue
-    if [[ "$lang" == "go" || "$lang" == "deno" ]] || ! lang_interpreter_available extension "$lang"; then
+    if [[ "$lang" == "byo" || "$lang" == "go" || "$lang" == "deno" ]] || ! lang_interpreter_available extension "$lang"; then
       ok "extension protocol: $lang (skipped; missing deps)"
       continue
     fi
@@ -58,7 +58,7 @@ main() {
 
   while IFS= read -r lang; do
     [[ -z "$lang" ]] && continue
-    if [[ "$lang" == "deno" ]] || ! lang_interpreter_available sidecar "$lang"; then
+    if [[ "$lang" == "byo" || "$lang" == "deno" ]] || ! lang_interpreter_available sidecar "$lang"; then
       ok "sidecar protocol: $lang (skipped; missing deps)"
       continue
     fi

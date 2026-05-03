@@ -1,0 +1,1 @@
+{"language":"byo","surface":"extension","description":"Bring-your-own extension command placeholder","requires":[],"template":"ext.tmpl","output":"extensions/${NAME}_ext","command":"extensions/${NAME}_ext","args":[],"executable":true,"syntax_check":["bash","-n","${OUTPUT}"]}
