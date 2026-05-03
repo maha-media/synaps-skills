@@ -65,6 +65,17 @@ fn main() -> anyhow::Result<()> {
         let params = frame.get("params").cloned().unwrap_or(json!({}));
         let id = frame.get("id").cloned();
 
+        // Prewarm the embedding model during `initialize` so the first
+        // `before_message` hook (capped at 5s by Synaps) doesn't hit a
+        // model download. `initialize` has no Synaps-side timeout, so we
+        // can take as long as we need (~minutes on first run for the
+        // 86 MB model download; instant once cached).
+        if method == "initialize" {
+            if let Some(b) = brain.as_mut() {
+                prewarm_brain(b);
+            }
+        }
+
         let result = dispatch(brain.as_mut(), method, &params);
 
         if let Some(id) = id {
@@ -88,6 +99,27 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Force the embedding model to load by issuing a tiny dummy search.
+///
+/// Why: `before_message` runs `contextual_recall`, which lazily loads (and
+/// on first run, downloads) the 86 MB ONNX embedding model. Synaps caps
+/// every hook handler at 5 s, so a cold first message would always time
+/// out. `initialize` has no Synaps-side timeout — we move the cost there.
+///
+/// Errors are non-fatal: the extension still works in passthrough mode if
+/// warm-up fails (network down, disk full, etc.).
+fn prewarm_brain(brain: &mut AxelBrain) {
+    eprintln!("axel: prewarming embedding model (may download ~86 MB on first run)");
+    let started = std::time::Instant::now();
+    match brain.search("warmup", 1) {
+        Ok(_) => eprintln!("axel: brain warm in {:.1}s", started.elapsed().as_secs_f32()),
+        Err(e) => eprintln!(
+            "axel: prewarm failed after {:.1}s: {e} — recall will be a no-op",
+            started.elapsed().as_secs_f32()
+        ),
+    }
 }
 
 /// Read one LSP-style Content-Length-framed JSON-RPC message.
