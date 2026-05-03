@@ -53,14 +53,14 @@
       "category": "productivity"
     },
     {
-      "name": "skill-maker",
-      "description": "Scaffold, validate, and lint Synaps CLI plugins and skills. Bash-based (no Node/Python), encoding the conventions used across the synaps-skills monorepo.",
+      "name": "plugin-maker",
+      "description": "Scaffold, validate, lint, and inspect Synaps CLI plugins. Knows the full surface — manifests, skills, extensions, sidecars, settings, keybinds, commands, hooks, and the lightbox/help integration. Use when starting a new plugin, adding any feature to an existing plugin, or auditing the installed plugin set.",
       "version": "0.1.0",
       "author": {
         "name": "JR Morton",
         "url": "https://github.com/maha-media"
       },
-      "source": "./skill-maker-plugin",
+      "source": "./plugin-maker-plugin",
       "category": "developer-tools"
     },
     {

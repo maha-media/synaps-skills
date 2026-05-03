@@ -299,11 +299,11 @@ else
   esac
 fi
 
-# jq + envsubst (skill-maker plugin)
+# jq + envsubst (plugin-maker plugin)
 if command -v jq &>/dev/null; then
   ok "jq found"
 else
-  warn "jq not found — needed for skill-maker plugin"
+  warn "jq not found — needed for plugin-maker plugin"
   case "$OS" in
     mac)     info "Install: brew install jq" ;;
     windows) info "Install: https://stedolan.github.io/jq/  (or via WSL: sudo apt install jq)" ;;
@@ -314,7 +314,7 @@ fi
 if command -v envsubst &>/dev/null; then
   ok "envsubst found"
 else
-  warn "envsubst not found — needed for skill-maker scaffolding"
+  warn "envsubst not found — needed for plugin-maker scaffolding"
   case "$OS" in
     mac)     info "Install: brew install gettext  (and: brew link --force gettext)" ;;
     windows) info "Install: WSL → sudo apt install gettext-base" ;;

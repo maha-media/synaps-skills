@@ -2,7 +2,7 @@
 
 This is the onboarding doc for any agent (Claude Code, Cursor, Aider, or Synaps CLI itself) working in this repo. Read this first.
 
-`synaps-skills` is the **plugin marketplace** for [Synaps CLI](https://github.com/maha-media/SynapsCLI). It is *not* a Rust codebase — it's a collection of agent plugins (skills + scripts) consumed by Synaps' `/plugins` UI. Five plugins ship today: `web-tools`, `engineering`, `memkoshi`, `tmux-tools`, `skill-maker`.
+`synaps-skills` is the **plugin marketplace** for [Synaps CLI](https://github.com/maha-media/SynapsCLI). It is *not* a Rust codebase — it's a collection of agent plugins (skills + scripts) consumed by Synaps' `/plugins` UI. Six plugins ship today: `web-tools`, `engineering`, `memkoshi`, `tmux-tools`, `plugin-maker`, `local-voice`.
 
 ---
 
@@ -13,7 +13,7 @@ This is the onboarding doc for any agent (Claude Code, Cursor, Aider, or Synaps 
 1. The user has explicitly asked you to read a specific plan file (e.g. "look at `docs/plans/2026-04-08-bbe-multi-agent-plan.md`").
 2. You are actively authoring or editing a plan file that lives in `docs/plans/` (e.g. drafting a new spec, updating an in-progress plan).
 
-This directory contains historical and in-progress design docs. Reading them by default pollutes your context with stale designs, alternative paths that were rejected, and detail that is rarely relevant to the current task. The same rule applies to per-plugin `docs/specs/` directories (e.g. `web-tools-plugin/docs/specs/`, `skill-maker-plugin/docs/specs/`).
+This directory contains historical and in-progress design docs. Reading them by default pollutes your context with stale designs, alternative paths that were rejected, and detail that is rarely relevant to the current task. The same rule applies to per-plugin `docs/specs/` directories (e.g. `web-tools-plugin/docs/specs/`, `plugin-maker-plugin/docs/specs/`).
 
 If you find yourself wanting to read a plan file because "it might have context" — don't. Ask the user if it's relevant first.
 
@@ -53,8 +53,8 @@ There is no compile step. Validation is per-plugin and lightweight:
 # Repo-level installer / health check
 bash install.sh --check
 
-# Per-plugin smoke (skill-maker provides a generic linter)
-bash skill-maker-plugin/scripts/test.sh
+# Per-plugin smoke (plugin-maker provides a generic linter)
+bash plugin-maker-plugin/scripts/test.sh
 
 # Memkoshi plugin has its own setup verifier
 bash memkoshi-plugin/scripts/memkoshi/setup.sh --check
@@ -138,8 +138,8 @@ When editing JSON via Python, **always** pass `ensure_ascii=False` to `json.dump
 ## Adding a new skill to an existing plugin
 
 ```bash
-# Use the skill-maker plugin if it's installed:
-~/.synaps-cli/plugins/skill-maker/lib/scaffold.sh new-skill <plugin-name> <skill-name>
+# Use the plugin-maker plugin if it's installed:
+~/.synaps-cli/plugins/plugin-maker/bin/plugin-maker new skill <skill-name> --plugin <plugin-name>-plugin
 
 # Otherwise, manually:
 mkdir -p <plugin>-plugin/skills/<skill-name>
@@ -204,7 +204,7 @@ The marketplace entry mirrors most of these fields — keep them in sync (descri
 | Drive `/plugins` UI from a script | `tmux-tools-plugin/scripts/tmux/synaps.sh` (subcommands: `refresh`, `install`, `update`, `sync`, `status`) |
 | Spawn / drive a worker pane | `tmux-tools-plugin/scripts/tmux/pane.sh` (subcommands: `spawn`, `run`, `send`, `keys`, `poll`, `wait`, `close`, `list`, `id`) |
 | Persistent agent memory CLI | `~/.local/bin/memkoshi` (pipx-managed venv at `~/.local/share/pipx/venvs/memkoshi/`) |
-| Generic skill linter / scaffolder | `skill-maker-plugin/lib/{lint,validate,scaffold}.sh` |
+| Generic skill linter / scaffolder | `plugin-maker-plugin/lib/{lint,validate,scaffold}.sh` |
 | User-facing repo docs | `README.md` (top-level), `<plugin>-plugin/README.md` (per-plugin) |
 | Agent-facing behaviour | `<plugin>-plugin/skills/<skill>/SKILL.md` |
 
