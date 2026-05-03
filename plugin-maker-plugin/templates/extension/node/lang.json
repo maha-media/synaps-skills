@@ -1,0 +1,12 @@
+{
+  "language": "node",
+  "surface": "extension",
+  "description": "Node.js stdlib extension template",
+  "requires": ["node"],
+  "template": "ext.tmpl",
+  "output": "extensions/${NAME}_ext.js",
+  "command": "node",
+  "args": ["${OUTPUT}"],
+  "executable": true,
+  "syntax_check": ["node", "--check", "${OUTPUT}"]
+}

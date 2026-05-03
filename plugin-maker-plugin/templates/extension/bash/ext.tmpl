@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# ${NAME} — SynapsCLI extension in Bash.
+#
+# Implements JSON-RPC 2.0 over LSP-style Content-Length framing.
+
+set -euo pipefail
+
+NAME="${NAME}"
+PROTOCOL_VERSION=1
+
+send_json() {
+  local body="$1"
+  printf 'Content-Length: %s\r\n\r\n%s' "$(printf '%s' "$body" | wc -c)" "$body"
+}
+
+reply() {
+  local id="$1" result="$2"
+  jq -nc --argjson id "$id" --argjson result "$result" '{jsonrpc:"2.0",id:$id,result:$result}' | while IFS= read -r body; do send_json "$body"; done
+}
+
+reply_error() {
+  local id="$1" code="$2" msg="$3"
+  jq -nc --argjson id "$id" --argjson code "$code" --arg msg "$msg" '{jsonrpc:"2.0",id:$id,error:{code:$code,message:$msg}}' | while IFS= read -r body; do send_json "$body"; done
+}
+
+read_frame() {
+  local line name value len=""
+  while IFS= read -r line; do
+    line="${line%$'\r'}"
+    [[ -z "$line" ]] && break
+    name="${line%%:*}"
+    value="${line#*:}"
+    if [[ "${name,,}" == "content-length" ]]; then
+      len="${value//[[:space:]]/}"
+    fi
+  done
+  [[ -n "$len" ]] || return 1
+  local body
+  IFS= read -r -N "$len" body || true
+  printf '%s' "$body"
+}
+
+handle_initialize() {
+  jq -nc --arg name "$NAME" '{protocol_version:1,extension:$name,capabilities:[]}'
+}
+
+handle_hook() {
+  jq -nc '{action:"continue"}'
+}
+
+handle_command() {
+  local params="$1" command args
+  command=$(jq -r '.name // ""' <<<"$params")
+  args=$(jq -r '(.args // []) | join(" ")' <<<"$params")
+  jq -nc --arg out "$NAME: $command $args (stub)" '{output:$out}'
+}
+
+handle_shutdown() {
+  jq -nc '{ok:true}'
+}
+
+main() {
+  local msg method id params result
+  while msg="$(read_frame)"; do
+    [[ -n "$msg" ]] || continue
+    method=$(jq -r '.method // ""' <<<"$msg")
+    id=$(jq -c '.id // null' <<<"$msg")
+    params=$(jq -c '.params // {}' <<<"$msg")
+    case "$method" in
+      initialize) result="$(handle_initialize "$params")" ;;
+      hook.handle) result="$(handle_hook "$params")" ;;
+      command.invoke) result="$(handle_command "$params")" ;;
+      shutdown) result="$(handle_shutdown "$params")" ;;
+      *)
+        [[ "$id" != "null" ]] && reply_error "$id" -32601 "method not found: $method"
+        continue
+        ;;
+    esac
+    [[ "$id" != "null" ]] && reply "$id" "$result"
+    [[ "$method" == "shutdown" ]] && break
+  done
+}
+
+main "$@"

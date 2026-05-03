@@ -1,0 +1,11 @@
+{
+  "language": "bash",
+  "surface": "sidecar",
+  "description": "Bash + jq sidecar template",
+  "requires": ["bash", "jq"],
+  "template": "sidecar.tmpl",
+  "output": "bin/${NAME}-sidecar",
+  "command": "bin/${NAME}-sidecar",
+  "executable": true,
+  "syntax_check": ["bash", "-n", "${OUTPUT}"]
+}

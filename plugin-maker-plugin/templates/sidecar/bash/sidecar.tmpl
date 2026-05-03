@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# ${NAME}-sidecar — SynapsCLI sidecar in Bash.
+
+set -euo pipefail
+
+NAME="${NAME}"
+PROTOCOL_VERSION=2
+
+emit() { jq -c . <<<"$1"; }
+
+hello() {
+  emit "$(jq -nc --arg name "$NAME" '{type:"hello",protocol_version:2,extension:$name,capabilities:[]}')"
+}
+
+status() {
+  emit "$(jq -nc --arg state "$1" --arg label "$2" '{type:"status",state:$state,label:$label,capabilities:[]}')"
+}
+
+trigger() {
+  local frame="$1" name
+  name=$(jq -r '.name // "trigger"' <<<"$frame")
+  status busy "$NAME working"
+  emit "$(jq -nc --arg text "$NAME: trigger '$name' received" '{type:"insert_text",text:$text,mode:"final"}')"
+  status idle "$NAME ready"
+}
+
+hello
+status idle "$NAME ready"
+
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  type=$(jq -r '.type // ""' <<<"$line")
+  case "$type" in
+    init) status idle "$NAME ready" ;;
+    trigger) trigger "$line" ;;
+    shutdown) break ;;
+    *) emit "$(jq -nc --arg msg "unknown frame type: $type" '{type:"error",message:$msg}')" ;;
+  esac
+done

@@ -1,0 +1,12 @@
+{
+  "language": "bash",
+  "surface": "extension",
+  "description": "Bash + jq extension template",
+  "requires": ["bash", "jq"],
+  "template": "ext.tmpl",
+  "output": "extensions/${NAME}_ext.sh",
+  "command": "bash",
+  "args": ["${OUTPUT}"],
+  "executable": true,
+  "syntax_check": ["bash", "-n", "${OUTPUT}"]
+}

@@ -8,7 +8,7 @@
 #   doctor   [PATH]
 #   info     [PATH]
 #   list     [PATH]
-#   catalog  <hooks|permissions|hook-permissions|sidecar-frames|editor-kinds|action-types|command-kinds>
+#   catalog  <hooks|permissions|hook-permissions|sidecar-frames|editor-kinds|action-types|command-kinds|languages>
 #   --help
 #
 # Knows the full SynapsCLI plugin surface — see docs/specs/plugin-maker.md.
@@ -40,8 +40,8 @@ ${C_BOLD}USAGE${C_OFF}
 ${C_BOLD}SCAFFOLDING${C_OFF}
   new plugin <name> [--umbrella] [--memory] [--extension LANG] [--sidecar LANG] [--desc TEXT]
   new skill  <name>           [--plugin PATH] [--umbrella]
-  new extension               [--plugin PATH] [--lang python] [--hooks h1,h2] [--perms p1,p2]
-  new sidecar                 [--plugin PATH] [--lang python] [--lifecycle-cmd NAME] [--protocol 2]
+  new extension               [--plugin PATH] [--lang python|bash|node] [--hooks h1,h2] [--perms p1,p2]
+  new sidecar                 [--plugin PATH] [--lang python|bash|node] [--lifecycle-cmd NAME] [--protocol 2]
   new command <kind> <name>   [--plugin PATH] ...     # kind: shell|extension|skill|interactive
   new keybind <key>           --action <kind> [--command|--skill|--prompt|--script V]
   new settings category <id>  --label LABEL [--plugin PATH]
@@ -55,7 +55,7 @@ ${C_BOLD}AUDITING${C_OFF}
   list     [PATH]                # list plugins (or skills inside one plugin)
 
 ${C_BOLD}REFERENCE${C_OFF}
-  catalog  <hooks|permissions|hook-permissions|sidecar-frames|editor-kinds|action-types|command-kinds>
+  catalog  <hooks|permissions|hook-permissions|sidecar-frames|editor-kinds|action-types|command-kinds|languages>
 
 ${C_BOLD}EXAMPLES${C_OFF}
   plugin-maker new plugin my-tool --umbrella --extension python

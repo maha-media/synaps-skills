@@ -1,0 +1,11 @@
+{
+  "language": "node",
+  "surface": "sidecar",
+  "description": "Node.js stdlib sidecar template",
+  "requires": ["node"],
+  "template": "sidecar.tmpl",
+  "output": "bin/${NAME}-sidecar.js",
+  "command": "bin/${NAME}-sidecar.js",
+  "executable": true,
+  "syntax_check": ["node", "--check", "${OUTPUT}"]
+}
