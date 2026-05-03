@@ -24,13 +24,21 @@ PROFILE="release"
 CHECK=0
 FROM_SOURCE=0
 
-for arg in "$@"; do
+while [[ $# -gt 0 ]]; do
+  arg="$1"
   case "$arg" in
     --debug)       PROFILE="debug"; FROM_SOURCE=1 ;;
     --release)     PROFILE="release" ;;
     --from-source) FROM_SOURCE=1 ;;
     --check)       CHECK=1 ;;
     --version=*)   VERSION="${arg#--version=}" ;;
+    --version)
+      if [[ $# -lt 2 ]]; then
+        echo "setup.sh: --version requires a tag" >&2
+        exit 2
+      fi
+      VERSION="$2"
+      shift ;;
     -h|--help)
       sed -n '2,13p' "$0" | sed 's/^# \?//'
       exit 0 ;;
@@ -38,6 +46,7 @@ for arg in "$@"; do
       echo "setup.sh: unknown arg: $arg" >&2
       exit 2 ;;
   esac
+  shift
 done
 
 platform() {
