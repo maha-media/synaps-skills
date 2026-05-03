@@ -24,19 +24,26 @@ fn mock_sidecar_protocol_smoke() {
     let mut stdin = child.stdin.take().expect("sidecar stdin");
     let mut stdout = BufReader::new(child.stdout.take().expect("sidecar stdout"));
 
-    writeln!(stdin, r#"{{"type":"init","config":{{"mode":"dictation","language":null,"protocol_version":1}}}}"#).unwrap();
+    writeln!(stdin, r#"{{"type":"init","config":{{"protocol_version":2}}}}"#).unwrap();
     assert_eq!(next_event(&mut stdout)["type"], "hello");
     assert_eq!(next_event(&mut stdout)["type"], "status");
 
-    writeln!(stdin, r#"{{"type":"voice_control_pressed"}}"#).unwrap();
-    assert_eq!(next_event(&mut stdout)["type"], "listening_started");
+    writeln!(stdin, r#"{{"type":"trigger","name":"press"}}"#).unwrap();
+    let active = next_event(&mut stdout);
+    assert_eq!(active["type"], "status");
+    assert_eq!(active["state"], "listening");
 
-    writeln!(stdin, r#"{{"type":"voice_control_released"}}"#).unwrap();
-    assert_eq!(next_event(&mut stdout)["type"], "listening_stopped");
-    assert_eq!(next_event(&mut stdout)["type"], "transcribing_started");
-    let final_transcript = next_event(&mut stdout);
-    assert_eq!(final_transcript["type"], "final_transcript");
-    assert_eq!(final_transcript["text"], "hello from smoke");
+    writeln!(stdin, r#"{{"type":"trigger","name":"release"}}"#).unwrap();
+    let stopped = next_event(&mut stdout);
+    assert_eq!(stopped["type"], "status");
+    assert_eq!(stopped["state"], "stopped");
+    let processing = next_event(&mut stdout);
+    assert_eq!(processing["type"], "status");
+    assert_eq!(processing["state"], "processing");
+    let insert_text = next_event(&mut stdout);
+    assert_eq!(insert_text["type"], "insert_text");
+    assert_eq!(insert_text["mode"], "final");
+    assert_eq!(insert_text["text"], "hello from smoke");
 
     writeln!(stdin, r#"{{"type":"shutdown"}}"#).unwrap();
     drop(stdin);

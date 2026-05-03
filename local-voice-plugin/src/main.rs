@@ -3,8 +3,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use crate::protocol::{
-    voice_event_to_sidecar_event, SidecarCapability, SidecarCommand, SidecarEvent, SidecarProviderState,
-    VoiceEvent, VOICE_SIDECAR_PROTOCOL_VERSION,
+    voice_event_to_sidecar_frame, InsertTextMode, SidecarCommand, SidecarFrame, VoiceEvent,
 };
 #[cfg(feature = "voice-stt-whisper")]
 use crate::protocol::SpeechToTextProvider;
@@ -22,27 +21,25 @@ mod stt_whisper;
 #[cfg(feature = "voice-stt-whisper")]
 use stt_whisper::{expand_whisper_model_path, WhisperSttProvider};
 
-fn emit(event: &SidecarEvent) -> io::Result<()> {
+fn emit(frame: &SidecarFrame) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
-    serde_json::to_writer(&mut stdout, event)?;
+    serde_json::to_writer(&mut stdout, frame)?;
     stdout.write_all(b"\n")?;
     stdout.flush()
 }
 
 fn emit_ready() -> io::Result<()> {
-    emit(&SidecarEvent::Hello {
-        protocol_version: VOICE_SIDECAR_PROTOCOL_VERSION,
-        extension: "synaps-voice-plugin".to_string(),
-        capabilities: vec![SidecarCapability::Stt],
+    emit(&SidecarFrame::Hello {
+        capabilities: vec!["insert-text".to_string(), "status".to_string()],
     })?;
-    emit(&SidecarEvent::Status {
-        state: SidecarProviderState::Ready,
-        capabilities: vec![SidecarCapability::Stt],
+    emit(&SidecarFrame::Status {
+        state: "ready".to_string(),
+        label: None,
     })
 }
 
 fn emit_error(message: impl Into<String>) -> io::Result<()> {
-    emit(&SidecarEvent::Error {
+    emit(&SidecarFrame::Error {
         message: message.into(),
     })
 }
@@ -91,7 +88,10 @@ impl LocalVoiceSidecar {
     fn handle_press(&mut self) -> io::Result<()> {
         eprintln!("synaps-voice-local: voice_control_pressed");
         if self.mock_transcript.is_some() {
-            return emit(&SidecarEvent::ListeningStarted);
+            return emit(&SidecarFrame::Status {
+                state: "listening".to_string(),
+                label: Some("Listening".to_string()),
+            });
         }
         self.start_real_stt()
     }
@@ -99,11 +99,23 @@ impl LocalVoiceSidecar {
     fn handle_release(&mut self) -> io::Result<()> {
         eprintln!("synaps-voice-local: voice_control_released");
         if let Some(text) = &self.mock_transcript {
-            emit(&SidecarEvent::ListeningStopped)?;
-            emit(&SidecarEvent::TranscribingStarted)?;
-            return emit(&SidecarEvent::FinalTranscript { text: text.clone() });
+            emit(&SidecarFrame::Status {
+                state: "stopped".to_string(),
+                label: None,
+            })?;
+            emit(&SidecarFrame::Status {
+                state: "processing".to_string(),
+                label: Some("Processing".to_string()),
+            })?;
+            return emit(&SidecarFrame::InsertText {
+                text: text.clone(),
+                mode: InsertTextMode::Final,
+            });
         }
-        emit(&SidecarEvent::TranscribingStarted)?;
+        emit(&SidecarFrame::Status {
+            state: "processing".to_string(),
+            label: Some("Processing".to_string()),
+        })?;
         self.stop_real_stt()
     }
 
@@ -189,15 +201,18 @@ async fn main() -> io::Result<()> {
 
                 match command {
                     SidecarCommand::Init { .. } => sidecar.handle_init()?,
-                    SidecarCommand::VoiceControlPressed => sidecar.handle_press()?,
-                    SidecarCommand::VoiceControlReleased => sidecar.handle_release()?,
+                    SidecarCommand::Trigger { name, .. } if name == "press" => sidecar.handle_press()?,
+                    SidecarCommand::Trigger { name, .. } if name == "release" => sidecar.handle_release()?,
+                    SidecarCommand::Trigger { name, .. } => {
+                        emit_error(format!("unsupported trigger: {name}"))?;
+                    }
                     SidecarCommand::Shutdown => break,
                 }
             }
             maybe_voice = voice_rx.recv(), if !voice_rx.is_closed() => {
-            if let Some(event) = maybe_voice.and_then(voice_event_to_sidecar_event) {
-                eprintln!("synaps-voice-local: emitting {:?}", event);
-                emit(&event)?;
+            if let Some(frame) = maybe_voice.and_then(voice_event_to_sidecar_frame) {
+                eprintln!("synaps-voice-local: emitting {:?}", frame);
+                emit(&frame)?;
             }
             }
         }

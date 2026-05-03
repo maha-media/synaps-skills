@@ -66,10 +66,10 @@
     "sidecar": {
       "command": "bin/synaps-voice-plugin",
       "setup": "scripts/setup.sh",
-      "protocol_version": 1,
+      "protocol_version": 2,
       "model": {
         "default_path": "~/.synaps-cli/models/whisper/ggml-base.en.bin",
-        "required_for_real_stt": true
+        "required": true
       },
       "lifecycle": {
         "command": "voice",

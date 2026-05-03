@@ -14,71 +14,51 @@ impl VoicePluginError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum VoiceSidecarMode {
-    Dictation,
-    Command,
-    Conversation,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SidecarConfig {
-    pub mode: VoiceSidecarMode,
-    pub language: Option<String>,
-    pub protocol_version: u16,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SidecarCommand {
-    Init { config: SidecarConfig },
-    VoiceControlPressed,
-    VoiceControlReleased,
+    Init { config: serde_json::Value },
+    Trigger {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        payload: Option<serde_json::Value>,
+    },
     Shutdown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SidecarCapability {
-    Stt,
-    BargeIn,
+pub enum InsertTextMode {
+    Append,
+    Final,
+    Replace,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SidecarProviderState {
-    Ready,
-    Listening,
-    Transcribing,
-    Speaking,
-    Stopped,
-    Error,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum SidecarEvent {
+pub enum SidecarFrame {
     Hello {
-        protocol_version: u16,
-        extension: String,
-        capabilities: Vec<SidecarCapability>,
+        capabilities: Vec<String>,
     },
     Status {
-        state: SidecarProviderState,
-        capabilities: Vec<SidecarCapability>,
+        state: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
     },
-    ListeningStarted,
-    ListeningStopped,
-    TranscribingStarted,
-    PartialTranscript { text: String },
-    FinalTranscript { text: String },
-    VoiceCommand { command: String },
-    BargeIn,
-    Error { message: String },
+    InsertText {
+        text: String,
+        mode: InsertTextMode,
+    },
+    Error {
+        message: String,
+    },
+    Custom {
+        event_type: String,
+        payload: serde_json::Value,
+    },
 }
 
-pub const VOICE_SIDECAR_PROTOCOL_VERSION: u16 = 1;
+pub const SIDECAR_PROTOCOL_VERSION: u16 = 2;
 
 #[derive(Debug, Clone)]
 pub enum VoiceEvent {
@@ -97,12 +77,24 @@ pub trait SpeechToTextProvider: fmt::Debug + Send {
     fn is_running(&self) -> bool;
 }
 
-pub fn voice_event_to_sidecar_event(event: VoiceEvent) -> Option<SidecarEvent> {
+pub fn voice_event_to_sidecar_frame(event: VoiceEvent) -> Option<SidecarFrame> {
     match event {
-        VoiceEvent::ListeningStarted => Some(SidecarEvent::ListeningStarted),
-        VoiceEvent::ListeningStopped => Some(SidecarEvent::ListeningStopped),
-        VoiceEvent::PartialTranscript(text) => Some(SidecarEvent::PartialTranscript { text }),
-        VoiceEvent::FinalTranscript(text) => Some(SidecarEvent::FinalTranscript { text }),
-        VoiceEvent::Error(message) => Some(SidecarEvent::Error { message }),
+        VoiceEvent::ListeningStarted => Some(SidecarFrame::Status {
+            state: "listening".to_string(),
+            label: Some("Listening".to_string()),
+        }),
+        VoiceEvent::ListeningStopped => Some(SidecarFrame::Status {
+            state: "stopped".to_string(),
+            label: None,
+        }),
+        VoiceEvent::PartialTranscript(text) => Some(SidecarFrame::InsertText {
+            text,
+            mode: InsertTextMode::Append,
+        }),
+        VoiceEvent::FinalTranscript(text) => Some(SidecarFrame::InsertText {
+            text,
+            mode: InsertTextMode::Final,
+        }),
+        VoiceEvent::Error(message) => Some(SidecarFrame::Error { message }),
     }
 }
