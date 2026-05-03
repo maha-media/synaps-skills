@@ -30,6 +30,7 @@ section "1. CLI surface"
 "$PM" catalog perms >/dev/null && pass "catalog perms (alias)" || fail "catalog perms"
 "$PM" catalog frames >/dev/null && pass "catalog frames" || fail "catalog frames"
 "$PM" catalog actions >/dev/null && pass "catalog actions" || fail "catalog actions"
+"$PM" catalog languages >/dev/null && pass "catalog languages" || fail "catalog languages"
 
 section "2. Self-validation"
 "$PM" validate "$ROOT" >/dev/null 2>&1 && pass "plugin-maker validates itself" || fail "self-validate"
@@ -48,6 +49,12 @@ cd "$TMP/demo-plugin"
 "$PM" new keybind C-S-d --action slash_command --command "demo --help" --description "Demo keybind." >/dev/null && pass "new keybind" || fail "new keybind"
 "$PM" new settings category demo --label "Demo Settings" >/dev/null && pass "new settings category" || fail "new settings"
 "$PM" new settings field demo theme --label Theme --type cycler --options dark,light --default dark >/dev/null && pass "new settings field cycler" || fail "new settings field"
+
+if "$PM" new extension --lang fortran >/tmp/pm-unknown-lang.out 2>&1; then
+  fail "unknown extension language rejected"
+else
+  grep -q "unknown extension language" /tmp/pm-unknown-lang.out && pass "unknown extension language rejected" || fail "unknown extension language message"
+fi
 
 "$PM" validate . >/dev/null 2>&1 && pass "scaffolded plugin validates" || fail "scaffolded validate"
 "$PM" lint     . >/dev/null 2>&1 && pass "scaffolded plugin lints"     || fail "scaffolded lint"
