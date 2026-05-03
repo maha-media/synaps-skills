@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""
+${NAME} — SynapsCLI extension.
+
+Implements the v1 extension protocol over JSON-RPC 2.0 on stdio.
+Each frame is a single JSON object on its own line. SynapsCLI calls:
+
+  initialize(config)                  → returns {protocol_version, capabilities}
+  tools.list()                        → list of tools we register (if any)
+  tools.invoke(name, input)           → invoke one
+  hooks.dispatch(kind, payload)       → fires for every subscribed hook
+  command.invoke(name, args, …)       → for `interactive: true` slash commands
+  settings.editor.open(field)         → open a `editor: custom` overlay
+  settings.editor.render()            → re-render after a key
+  settings.editor.key(key)            → forward a keypress
+  settings.editor.commit()            → persist & close
+  shutdown()                          → graceful exit
+
+Reference: src/extensions/manifest.rs and the host-side runtime in
+src/extensions/runtime/process.rs.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import traceback
+from typing import Any
+
+
+# ── JSON-RPC plumbing ──────────────────────────────────────────────────────
+
+def send(obj: dict[str, Any]) -> None:
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def reply(req_id: Any, result: Any) -> None:
+    send({"jsonrpc": "2.0", "id": req_id, "result": result})
+
+
+def reply_error(req_id: Any, code: int, message: str, data: Any = None) -> None:
+    err = {"code": code, "message": message}
+    if data is not None:
+        err["data"] = data
+    send({"jsonrpc": "2.0", "id": req_id, "error": err})
+
+
+def notify(method: str, params: Any) -> None:
+    send({"jsonrpc": "2.0", "method": method, "params": params})
+
+
+# ── Handlers ───────────────────────────────────────────────────────────────
+
+CONFIG: dict[str, Any] = {}
+
+
+def handle_initialize(params: dict) -> dict:
+    """Receive the host-resolved config and declare what we support."""
+    global CONFIG
+    CONFIG = params.get("config", {}) or {}
+    return {
+        "protocol_version": 1,
+        "extension": "${NAME}",
+        "capabilities": [],   # add "tools" / "providers" if you register them
+    }
+
+
+def handle_hook(params: dict) -> dict:
+    """Generic hook dispatcher.
+
+    `params["kind"]` tells you which hook fired. Permissions and tool filters
+    are pre-validated by the host — you only see hooks you subscribed to.
+
+    Return one of:
+      {"action": "continue"}                         (always allowed)
+      {"action": "block",   "reason": "..."}         (before_tool_call)
+      {"action": "modify",  "input": {...}}          (before_tool_call)
+      {"action": "confirm", "prompt": "..."}         (before_tool_call)
+      {"action": "inject",  "content": "..."}        (before_message)
+    """
+    kind = params.get("kind", "")
+    # event = params.get("event", {})
+
+    # Example: log session lifecycle to stderr.
+    if kind in ("on_session_start", "on_session_end"):
+        sys.stderr.write(f"[${NAME}] {kind}\n")
+
+    return {"action": "continue"}
+
+
+def handle_command_invoke(params: dict) -> dict:
+    """Handle interactive slash commands routed here.
+
+    `params` shape: {"name": str, "args": list[str], "tty_cols": int, ...}.
+    Return: {"output": str}  (rendered as a system message).
+    """
+    name = params.get("name", "")
+    args = params.get("args", [])
+    return {"output": f"${NAME}: {name} {' '.join(args)} (stub)"}
+
+
+def handle_shutdown(_params: dict) -> dict:
+    return {"ok": True}
+
+
+# ── Dispatcher ─────────────────────────────────────────────────────────────
+
+HANDLERS = {
+    "initialize":     handle_initialize,
+    "hooks.dispatch": handle_hook,
+    "command.invoke": handle_command_invoke,
+    "shutdown":       handle_shutdown,
+}
+
+
+def main() -> None:
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError as e:
+            sys.stderr.write(f"[${NAME}] bad JSON: {e}\n")
+            continue
+
+        method = msg.get("method", "")
+        req_id = msg.get("id")
+        params = msg.get("params") or {}
+
+        handler = HANDLERS.get(method)
+        if handler is None:
+            if req_id is not None:
+                reply_error(req_id, -32601, f"method not found: {method}")
+            continue
+
+        try:
+            result = handler(params)
+            if req_id is not None:
+                reply(req_id, result)
+        except Exception as exc:  # noqa: BLE001
+            tb = traceback.format_exc()
+            sys.stderr.write(f"[${NAME}] handler error: {tb}\n")
+            if req_id is not None:
+                reply_error(req_id, -32000, str(exc), {"traceback": tb})
+
+        if method == "shutdown":
+            return
+
+
+if __name__ == "__main__":
+    main()

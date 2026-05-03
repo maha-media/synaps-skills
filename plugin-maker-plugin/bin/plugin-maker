@@ -1,0 +1,256 @@
+#!/usr/bin/env bash
+# plugin-maker — Synaps CLI plugin scaffolder, validator, linter, and inspector.
+#
+# Subcommands:
+#   new <plugin|skill|extension|sidecar|command|keybind|settings|field> ...
+#   validate [PATH]
+#   lint     [PATH] [--strict]
+#   doctor   [PATH]
+#   info     [PATH]
+#   list     [PATH]
+#   catalog  <hooks|permissions|hook-permissions|sidecar-frames|editor-kinds|action-types|command-kinds>
+#   --help
+#
+# Knows the full SynapsCLI plugin surface — see docs/specs/plugin-maker.md.
+
+set -euo pipefail
+
+# ── locate self ────────────────────────────────────────────────────────────
+
+SELF=$(readlink -f "$0")
+PLUGIN_ROOT=$(cd "$(dirname "$SELF")/.." && pwd)
+LIB_DIR="$PLUGIN_ROOT/lib"
+TMPL_DIR="$PLUGIN_ROOT/templates"
+export LIB_DIR TMPL_DIR PLUGIN_ROOT
+
+# shellcheck source=../lib/common.sh
+source "$LIB_DIR/common.sh"
+
+require_cmd jq
+
+# ── help ───────────────────────────────────────────────────────────────────
+
+show_help() {
+  cat <<EOF
+${C_BOLD}plugin-maker${C_OFF} — Scaffold, validate, lint, and inspect Synaps CLI plugins.
+
+${C_BOLD}USAGE${C_OFF}
+  plugin-maker <command> [options]
+
+${C_BOLD}SCAFFOLDING${C_OFF}
+  new plugin <name> [--umbrella] [--memory] [--extension LANG] [--sidecar LANG] [--desc TEXT]
+  new skill  <name>           [--plugin PATH] [--umbrella]
+  new extension               [--plugin PATH] [--lang python] [--hooks h1,h2] [--perms p1,p2]
+  new sidecar                 [--plugin PATH] [--lang python] [--lifecycle-cmd NAME] [--protocol 2]
+  new command <kind> <name>   [--plugin PATH] ...     # kind: shell|extension|skill|interactive
+  new keybind <key>           --action <kind> [--command|--skill|--prompt|--script V]
+  new settings category <id>  --label LABEL [--plugin PATH]
+  new settings field <cat> <key> --label L --type <text|toggle|cycler|editor> [--options o1,o2] [--default V]
+
+${C_BOLD}AUDITING${C_OFF}
+  validate [PATH]                # structural — exit 1 on any error
+  lint     [PATH] [--strict]     # quality — warnings only unless --strict
+  doctor   [PATH]                # validate + lint + install-readiness
+  info     [PATH]                # rich summary
+  list     [PATH]                # list plugins (or skills inside one plugin)
+
+${C_BOLD}REFERENCE${C_OFF}
+  catalog  <hooks|permissions|hook-permissions|sidecar-frames|editor-kinds|action-types|command-kinds>
+
+${C_BOLD}EXAMPLES${C_OFF}
+  plugin-maker new plugin my-tool --umbrella --extension python
+  plugin-maker new sidecar --lifecycle-cmd capture
+  plugin-maker new command interactive my-tool --subcommands help,status
+  plugin-maker new keybind C-S-p --action slash_command --command "my-tool doctor"
+  plugin-maker new settings category appearance --label "Appearance"
+  plugin-maker new settings field    appearance theme --label "Theme" --type cycler --options light,dark
+  plugin-maker validate .
+  plugin-maker doctor   .
+  plugin-maker catalog  hooks
+
+Conventions reference: docs/conventions.md
+Full spec:             docs/specs/plugin-maker.md
+EOF
+}
+
+# ── subcommand dispatch ────────────────────────────────────────────────────
+
+cmd="${1:-}"; shift || true
+
+case "$cmd" in
+  ""|--help|-h|help)
+    show_help; exit 0
+    ;;
+
+  new)
+    sub="${1:-}"; shift || true
+    case "$sub" in
+      plugin)
+        # shellcheck source=../lib/scaffold.sh
+        source "$LIB_DIR/scaffold.sh"
+        scaffold_plugin "$@"
+        ;;
+      skill)
+        # shellcheck source=../lib/scaffold.sh
+        source "$LIB_DIR/scaffold.sh"
+        scaffold_skill "$@"
+        ;;
+      extension)
+        source "$LIB_DIR/scaffold.sh"
+        source "$LIB_DIR/scaffold_extension.sh"
+        scaffold_extension "$@"
+        ;;
+      sidecar)
+        source "$LIB_DIR/scaffold.sh"
+        source "$LIB_DIR/scaffold_sidecar.sh"
+        scaffold_sidecar "$@"
+        ;;
+      command)
+        source "$LIB_DIR/scaffold_command.sh"
+        scaffold_command "$@"
+        ;;
+      keybind)
+        source "$LIB_DIR/scaffold_keybind.sh"
+        scaffold_keybind "$@"
+        ;;
+      settings)
+        source "$LIB_DIR/scaffold_settings.sh"
+        # Two modes: `new settings category <id> ...` or `new settings field <cat> <key> ...`
+        sub2="${1:-}"
+        case "$sub2" in
+          category)
+            shift
+            scaffold_settings_category "$@"
+            ;;
+          field)
+            shift
+            scaffold_settings_field "$@"
+            ;;
+          "")
+            die "usage: plugin-maker new settings <category|field> …"
+            ;;
+          *)
+            # Back-compat: treat 'new settings <id> --label ...' as a category shorthand.
+            scaffold_settings_category "$@"
+            ;;
+        esac
+        ;;
+      field)
+        # Legacy: `new field <cat-id> <key> …` — kept for back-compat.
+        source "$LIB_DIR/scaffold_settings.sh"
+        scaffold_settings_field "$@"
+        ;;
+      *)
+        die "unknown 'new' target: '$sub' (expected: plugin|skill|extension|sidecar|command|keybind|settings|field)"
+        ;;
+    esac
+    ;;
+
+  validate)
+    source "$LIB_DIR/validate.sh"
+    target="${1:-.}"
+    target=$(cd "$target" && pwd)
+
+    total_errors=0
+    plugins_checked=0
+
+    if is_plugin_dir "$target"; then
+      validate_plugin "$target" || total_errors=$((total_errors + $?))
+      plugins_checked=1
+    else
+      while IFS= read -r p; do
+        [[ -z "$p" ]] && continue
+        info "${C_BOLD}→ ${p}${C_OFF}"
+        validate_plugin "$p" || total_errors=$((total_errors + $?))
+        plugins_checked=$((plugins_checked + 1))
+      done < <(enumerate_plugins "$target")
+    fi
+
+    if [[ "$plugins_checked" -eq 0 ]]; then
+      die "no plugins found under $target"
+    fi
+
+    if [[ "$total_errors" -eq 0 ]]; then
+      ok "${plugins_checked} plugin(s) validated cleanly"
+      exit 0
+    else
+      err "${total_errors} error(s) across ${plugins_checked} plugin(s)"
+      exit 1
+    fi
+    ;;
+
+  lint)
+    source "$LIB_DIR/lint.sh"
+    lint_main "$@"
+    ;;
+
+  doctor)
+    source "$LIB_DIR/info.sh"
+    target="${1:-.}"
+    target=$(cd "$target" && pwd)
+    plugins_checked=0
+    failed=0
+    if is_plugin_dir "$target"; then
+      doctor_plugin "$target" || failed=$((failed + 1))
+      plugins_checked=1
+    else
+      while IFS= read -r p; do
+        [[ -z "$p" ]] && continue
+        doctor_plugin "$p" || failed=$((failed + 1))
+        plugins_checked=$((plugins_checked + 1))
+        printf '\n'
+      done < <(enumerate_plugins "$target")
+    fi
+    if [[ "$plugins_checked" -eq 0 ]]; then
+      die "no plugins found under $target"
+    fi
+    if [[ "$failed" -gt 0 ]]; then
+      exit 1
+    fi
+    ;;
+
+  info)
+    source "$LIB_DIR/info.sh"
+    target="${1:-.}"
+    target=$(cd "$target" && pwd)
+    if is_plugin_dir "$target"; then
+      info_plugin "$target"
+    else
+      while IFS= read -r p; do
+        [[ -z "$p" ]] && continue
+        info_plugin "$p"
+      done < <(enumerate_plugins "$target")
+    fi
+    ;;
+
+  list)
+    target="${1:-.}"
+    target=$(cd "$target" && pwd)
+    if is_plugin_dir "$target"; then
+      info "${C_BOLD}skills in $(basename "$target"):${C_OFF}"
+      while IFS= read -r s; do
+        [[ -z "$s" ]] && continue
+        printf '  %s\n' "$(basename "$s")"
+      done < <(enumerate_skills "$target")
+    else
+      info "${C_BOLD}plugins under $target:${C_OFF}"
+      while IFS= read -r p; do
+        [[ -z "$p" ]] && continue
+        local_name=$(jq -r '.name' "$p/.synaps-plugin/plugin.json" 2>/dev/null || echo '?')
+        local_ver=$(jq -r '.version' "$p/.synaps-plugin/plugin.json" 2>/dev/null || echo '?')
+        printf '  %-30s %s  %s\n' "$local_name" "$local_ver" "${C_DIM}$p${C_OFF}"
+      done < <(enumerate_plugins "$target")
+    fi
+    ;;
+
+  catalog)
+    source "$LIB_DIR/catalog.sh"
+    catalog_dispatch "$@"
+    ;;
+
+  *)
+    err "unknown command: '$cmd'"
+    show_help
+    exit 2
+    ;;
+esac

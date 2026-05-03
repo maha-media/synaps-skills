@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# memory.sh — VelociRAG memory wrapper for the ${NAME} plugin.
+#
+# Public functions:
+#   memory_query "<query>" [--tag t1,t2] → top-k matches as JSONL
+#   memory_append "<text>" [--tag t1,t2]  → append a memory entry
+#   memory_self_heal "<error>" "<context>" → look for prior fixes
+#
+# All operations route through the local memory store (see docs/self-healing.md).
+
+if [[ -n "\${_MEMORY_LOADED:-}" ]]; then return 0; fi
+_MEMORY_LOADED=1
+
+# Adjust to your project's memory CLI / endpoint.
+MEMORY_CMD="\${MEMORY_CMD:-memkoshi}"
+
+memory_query() {
+  local q="\$1"; shift || true
+  "\$MEMORY_CMD" query "\$q" "\$@"
+}
+
+memory_append() {
+  local text="\$1"; shift || true
+  "\$MEMORY_CMD" append "\$text" "\$@"
+}
+
+memory_self_heal() {
+  local error="\$1"
+  local context="\${2:-}"
+  memory_query "\$error" --tag kind-fix
+}

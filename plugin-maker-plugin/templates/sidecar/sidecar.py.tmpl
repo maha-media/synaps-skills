@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""
+${NAME}-sidecar — SynapsCLI sidecar process.
+
+Implements the line-JSON sidecar protocol v2 (src/sidecar/protocol.rs). One
+JSON object per line on stdin/stdout. On startup, send a Hello frame.
+
+Host → sidecar commands:
+  {"type":"init","config":{...}}                         once at startup
+  {"type":"trigger","name":"<plugin-defined>","payload":{...}}
+  {"type":"shutdown"}
+
+Sidecar → host frames:
+  {"type":"hello","protocol_version":2,"extension":"${NAME}","capabilities":[]}
+  {"type":"status","state":"idle|busy","label":"…","capabilities":[]}
+  {"type":"insert_text","text":"…","mode":"append|final|replace"}
+  {"type":"error","message":"…"}
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from typing import Any
+
+
+PROTOCOL_VERSION = 2
+
+
+def emit(obj: dict[str, Any]) -> None:
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def hello() -> None:
+    emit({
+        "type": "hello",
+        "protocol_version": PROTOCOL_VERSION,
+        "extension": "${NAME}",
+        "capabilities": [],   # e.g. ["text.insert"] if you push text
+    })
+
+
+def status(state: str, label: str | None = None) -> None:
+    frame: dict[str, Any] = {"type": "status", "state": state}
+    if label is not None:
+        frame["label"] = label
+    emit(frame)
+
+
+def insert_text(text: str, mode: str = "final") -> None:
+    emit({"type": "insert_text", "text": text, "mode": mode})
+
+
+def error(message: str) -> None:
+    emit({"type": "error", "message": message})
+
+
+# ── command handlers ──────────────────────────────────────────────────────
+
+def on_init(config: dict) -> None:
+    sys.stderr.write(f"[${NAME}-sidecar] init config={config}\n")
+    status("idle", label="${NAME} ready")
+
+
+def on_trigger(name: str, payload: dict | None) -> None:
+    sys.stderr.write(f"[${NAME}-sidecar] trigger name={name} payload={payload}\n")
+    status("busy", label="${NAME}…")
+    # Plugin-specific work goes here. Echo trigger as final text:
+    insert_text(f"${NAME}: trigger '{name}' received", mode="final")
+    status("idle", label="${NAME} ready")
+
+
+def on_shutdown() -> None:
+    sys.stderr.write(f"[${NAME}-sidecar] shutdown\n")
+
+
+# ── main loop ─────────────────────────────────────────────────────────────
+
+def main() -> None:
+    hello()
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError as e:
+            error(f"bad JSON: {e}")
+            continue
+
+        kind = msg.get("type", "")
+        if kind == "init":
+            on_init(msg.get("config") or {})
+        elif kind == "trigger":
+            on_trigger(msg.get("name") or "", msg.get("payload"))
+        elif kind == "shutdown":
+            on_shutdown()
+            return
+        else:
+            error(f"unknown command type: {kind!r}")
+
+
+if __name__ == "__main__":
+    main()
