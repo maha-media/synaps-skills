@@ -1,0 +1,12 @@
+{
+  "language": "python",
+  "surface": "extension",
+  "description": "Python 3 stdlib extension template",
+  "requires": ["python3"],
+  "template": "ext.tmpl",
+  "output": "extensions/${NAME}_ext.py",
+  "command": "python3",
+  "args": ["-u", "${OUTPUT}"],
+  "executable": true,
+  "syntax_check": ["python3", "-c", "import ast,sys; ast.parse(open(sys.argv[1]).read())", "${OUTPUT}"]
+}

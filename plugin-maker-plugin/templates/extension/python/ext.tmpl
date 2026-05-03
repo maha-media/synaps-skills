@@ -3,12 +3,12 @@
 ${NAME} — SynapsCLI extension.
 
 Implements the v1 extension protocol over JSON-RPC 2.0 on stdio.
-Each frame is a single JSON object on its own line. SynapsCLI calls:
+Frames use LSP-style Content-Length framing over stdio. SynapsCLI calls:
 
   initialize(config)                  → returns {protocol_version, capabilities}
   tools.list()                        → list of tools we register (if any)
   tools.invoke(name, input)           → invoke one
-  hooks.dispatch(kind, payload)       → fires for every subscribed hook
+  hook.handle({kind, ...})             → fires for every subscribed hook
   command.invoke(name, args, …)       → for `interactive: true` slash commands
   settings.editor.open(field)         → open a `editor: custom` overlay
   settings.editor.render()            → re-render after a key
@@ -29,11 +29,29 @@ import traceback
 from typing import Any
 
 
-# ── JSON-RPC plumbing ──────────────────────────────────────────────────────
+# ── JSON-RPC plumbing (LSP-style Content-Length framing) ──────────────
 
 def send(obj: dict[str, Any]) -> None:
-    sys.stdout.write(json.dumps(obj) + "\n")
-    sys.stdout.flush()
+    body = json.dumps(obj, separators=(",", ":")).encode("utf-8")
+    sys.stdout.buffer.write(b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n\r\n")
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+
+
+def read_frame() -> dict[str, Any] | None:
+    content_length: int | None = None
+    while True:
+        line = sys.stdin.buffer.readline()
+        if line == b"":
+            return None
+        if line in (b"\r\n", b"\n"):
+            break
+        name, _, value = line.decode("ascii", "replace").partition(":")
+        if name.lower() == "content-length":
+            content_length = int(value.strip())
+    if content_length is None:
+        raise RuntimeError("missing Content-Length header")
+    return json.loads(sys.stdin.buffer.read(content_length).decode("utf-8"))
 
 
 def reply(req_id: Any, result: Any) -> None:
@@ -109,21 +127,20 @@ def handle_shutdown(_params: dict) -> dict:
 
 HANDLERS = {
     "initialize":     handle_initialize,
-    "hooks.dispatch": handle_hook,
+    "hook.handle":    handle_hook,
     "command.invoke": handle_command_invoke,
     "shutdown":       handle_shutdown,
 }
 
 
 def main() -> None:
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
+    while True:
         try:
-            msg = json.loads(line)
-        except json.JSONDecodeError as e:
-            sys.stderr.write(f"[${NAME}] bad JSON: {e}\n")
+            msg = read_frame()
+            if msg is None:
+                return
+        except Exception as exc:  # noqa: BLE001
+            sys.stderr.write(f"[${NAME}] bad frame: {exc}\n")
             continue
 
         method = msg.get("method", "")

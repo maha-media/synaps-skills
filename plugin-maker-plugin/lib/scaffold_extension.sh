@@ -2,7 +2,7 @@
 # scaffold_extension.sh — add an extension stub + manifest block to a plugin.
 #
 # Public:
-#   scaffold_extension --plugin PATH [--lang python|node] [--hooks h1,h2,…] [--perms p1,p2,…] [--force]
+#   scaffold_extension --plugin PATH [--lang python|bash|node|...] [--hooks h1,h2,…] [--perms p1,p2,…] [--force]
 
 if [[ -n "${_PM_SCAFFOLD_EXT_LOADED:-}" ]]; then return 0; fi
 _PM_SCAFFOLD_EXT_LOADED=1
@@ -13,6 +13,27 @@ TMPL_DIR="${TMPL_DIR:-$(cd "$LIB_DIR/../templates" && pwd)}"
 source "$LIB_DIR/common.sh"
 # shellcheck source=catalog.sh
 source "$LIB_DIR/catalog.sh"
+# shellcheck source=languages.sh
+source "$LIB_DIR/languages.sh"
+
+_pm_expand_lang_value() {
+  local value="$1" output="$2"
+  value="${value//\$\{NAME\}/$NAME}"
+  value="${value//\$\{OUTPUT\}/$output}"
+  printf '%s\n' "$value"
+}
+
+_pm_expand_json_array() {
+  local surface="$1" lang="$2" expr="$3" output="$4"
+  local manifest item expanded out='[]'
+  manifest="$(lang_manifest_path "$surface" "$lang")"
+  while IFS= read -r item; do
+    [[ -z "$item" ]] && continue
+    expanded="$(_pm_expand_lang_value "$item" "$output")"
+    out="$(jq -c --arg v "$expanded" '. + [$v]' <<<"$out")"
+  done < <(jq -r "$expr // [] | .[]" "$manifest")
+  printf '%s\n' "$out"
+}
 
 # Internal helper used by `scaffold_plugin --extension LANG`.
 _scaffold_extension_in() {
@@ -21,48 +42,46 @@ _scaffold_extension_in() {
   local hooks_csv="${3:-on_session_start}"
   local perms_csv="${4:-session.lifecycle}"
 
-  mkdir -p "$plugin_dir/extensions"
+  require_template_language extension "$lang"
 
-  case "$lang" in
-    python)
-      render_template "$TMPL_DIR/extension/ext.py.tmpl" "$plugin_dir/extensions/${NAME}_ext.py"
-      chmod +x "$plugin_dir/extensions/${NAME}_ext.py"
-      ;;
-    node)
-      die "node extension template not implemented yet (only --lang python)"
-      ;;
-    *)
-      die "unknown extension language: '$lang' (supported: python)"
-      ;;
-  esac
+  local manifest template output rel_output cmd args_json template_path output_path
+  manifest="$(lang_manifest_path extension "$lang")"
+  template="$(jq -r '.template' "$manifest")"
+  rel_output="$(jq -r '.output' "$manifest")"
+  rel_output="$(_pm_expand_lang_value "$rel_output" "")"
+  output="$rel_output"
+  template_path="$(dirname "$manifest")/$template"
+  output_path="$plugin_dir/$output"
 
-  # Patch plugin.json — add an extension block.
-  local pj="$plugin_dir/.synaps-plugin/plugin.json"
+  mkdir -p "$(dirname "$output_path")"
+  render_template "$template_path" "$output_path"
+  if [[ "$(jq -r '.executable // false' "$manifest")" == "true" ]]; then
+    chmod +x "$output_path"
+  fi
+
   local hooks_json perms_json
   hooks_json=$(awk -F, '{ for(i=1;i<=NF;i++) printf "{\"hook\":\"%s\"}%s", $i, (i<NF?",":""); }' <<<"$hooks_csv")
   perms_json=$(awk -F, '{ for(i=1;i<=NF;i++) printf "\"%s\"%s", $i, (i<NF?",":""); }' <<<"$perms_csv")
 
-  local cmd
-  case "$lang" in
-    python) cmd='python3' ;;
-    node)   cmd='node' ;;
-  esac
+  cmd="$(_pm_expand_lang_value "$(jq -r '.command' "$manifest")" "$output")"
+  args_json="$(_pm_expand_json_array extension "$lang" '.args' "$output")"
 
+  local pj="$plugin_dir/.synaps-plugin/plugin.json"
   jq --arg cmd "$cmd" \
-     --arg ext_path "extensions/${NAME}_ext.py" \
+     --argjson args "$args_json" \
      --argjson perms "[$perms_json]" \
      --argjson hooks "[$hooks_json]" \
      '.extension = {
         protocol_version: 1,
         runtime: "process",
         command: $cmd,
-        args: [$ext_path],
+        args: $args,
         permissions: $perms,
         hooks: $hooks,
         config: []
       }' "$pj" > "$pj.tmp" && mv "$pj.tmp" "$pj"
 
-  ok "added extension block + extensions/${NAME}_ext.py"
+  ok "added extension block + $output"
   info "  language:   $lang"
   info "  hooks:      $hooks_csv"
   info "  perms:      $perms_csv"
@@ -90,7 +109,6 @@ scaffold_extension() {
   fi
   is_plugin_dir "$plugin_path" || die "not a plugin: $plugin_path"
 
-  # Validate hooks + perms against the catalog
   local h
   for h in ${HOOKS_CSV//,/ }; do
     is_known_hook "$h" || die "unknown hook kind: '$h' (try: plugin-maker catalog hooks)"

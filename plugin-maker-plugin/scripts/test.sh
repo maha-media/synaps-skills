@@ -52,26 +52,8 @@ cd "$TMP/demo-plugin"
 "$PM" validate . >/dev/null 2>&1 && pass "scaffolded plugin validates" || fail "scaffolded validate"
 "$PM" lint     . >/dev/null 2>&1 && pass "scaffolded plugin lints"     || fail "scaffolded lint"
 
-section "4. Extension JSON-RPC handshake"
-EXT="$ROOT/extensions/plugin_maker_ext.py"
-if [[ -x "$EXT" ]]; then
-  out="$(printf '%s\n%s\n' \
-    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
-    '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":{}}' \
-    | "$EXT" 2>/dev/null)"
-  if grep -q '"protocol_version":1' <<<"$out"; then
-    pass "extension responds to initialize"
-  else
-    fail "extension initialize response"
-  fi
-  if grep -q '"id":2' <<<"$out"; then
-    pass "extension responds to shutdown"
-  else
-    fail "extension shutdown response"
-  fi
-else
-  yellow "skip — extension not executable"
-fi
+section "4. Extension/sidecar protocol conformance"
+"$ROOT/scripts/test_protocol.sh" >/dev/null 2>&1 && pass "template protocol conformance" || fail "template protocol conformance"
 
 section "5. Cleanup"
 rm -rf "$TMP" && pass "tmp removed" || fail "tmp removed"

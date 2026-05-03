@@ -2,7 +2,7 @@
 # scaffold_sidecar.sh — add a sidecar binary stub + provides.sidecar block.
 #
 # Public:
-#   scaffold_sidecar --plugin PATH [--lang python|rust] [--lifecycle-cmd NAME] [--protocol 2] [--force]
+#   scaffold_sidecar --plugin PATH [--lang python|bash|node|...] [--lifecycle-cmd NAME] [--protocol 2] [--force]
 
 if [[ -n "${_PM_SCAFFOLD_SC_LOADED:-}" ]]; then return 0; fi
 _PM_SCAFFOLD_SC_LOADED=1
@@ -11,6 +11,14 @@ LIB_DIR="${LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 TMPL_DIR="${TMPL_DIR:-$(cd "$LIB_DIR/../templates" && pwd)}"
 # shellcheck source=common.sh
 source "$LIB_DIR/common.sh"
+# shellcheck source=languages.sh
+source "$LIB_DIR/languages.sh"
+
+_pm_expand_sidecar_lang_value() {
+  local value="$1"
+  value="${value//\$\{NAME\}/$NAME}"
+  printf '%s\n' "$value"
+}
 
 _scaffold_sidecar_in() {
   local plugin_dir="$1"
@@ -18,21 +26,21 @@ _scaffold_sidecar_in() {
   local lc_cmd="${3:-}"
   local proto="${4:-2}"
 
-  mkdir -p "$plugin_dir/bin"
+  require_template_language sidecar "$lang"
 
-  local bin_name="${NAME}-sidecar"
-  case "$lang" in
-    python)
-      render_template "$TMPL_DIR/sidecar/sidecar.py.tmpl" "$plugin_dir/bin/$bin_name"
-      chmod +x "$plugin_dir/bin/$bin_name"
-      ;;
-    rust)
-      die "rust sidecar template not implemented yet (only --lang python)"
-      ;;
-    *)
-      die "unknown sidecar language: '$lang' (supported: python)"
-      ;;
-  esac
+  local manifest template rel_output template_path output_path sidecar_cmd
+  manifest="$(lang_manifest_path sidecar "$lang")"
+  template="$(jq -r '.template' "$manifest")"
+  rel_output="$(_pm_expand_sidecar_lang_value "$(jq -r '.output' "$manifest")")"
+  sidecar_cmd="$(_pm_expand_sidecar_lang_value "$(jq -r '.command' "$manifest")")"
+  template_path="$(dirname "$manifest")/$template"
+  output_path="$plugin_dir/$rel_output"
+
+  mkdir -p "$(dirname "$output_path")"
+  render_template "$template_path" "$output_path"
+  if [[ "$(jq -r '.executable // false' "$manifest")" == "true" ]]; then
+    chmod +x "$output_path"
+  fi
 
   local pj="$plugin_dir/.synaps-plugin/plugin.json"
   local lifecycle_block='null'
@@ -44,7 +52,7 @@ _scaffold_sidecar_in() {
     }')
   fi
 
-  jq --arg bin "bin/$bin_name" \
+  jq --arg bin "$sidecar_cmd" \
      --argjson proto "$proto" \
      --argjson lifecycle "$lifecycle_block" \
      '.provides = (.provides // {}) | .provides.sidecar = {
@@ -53,7 +61,7 @@ _scaffold_sidecar_in() {
       } | (if $lifecycle != null then .provides.sidecar.lifecycle = $lifecycle else . end)' \
      "$pj" > "$pj.tmp" && mv "$pj.tmp" "$pj"
 
-  ok "added sidecar block + bin/$bin_name"
+  ok "added sidecar block + $rel_output"
   info "  language:    $lang"
   info "  protocol:    v$proto"
   if [[ -n "$lc_cmd" ]]; then info "  lifecycle:   /$lc_cmd toggle"; fi

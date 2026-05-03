@@ -140,6 +140,32 @@ End
 EOF
 }
 
+
+# ── template language catalogs ─────────────────────────────────────────────
+catalog_template_languages() {
+  local surface="${1:-}"
+  source "$LIB_DIR/languages.sh"
+  case "$surface" in
+    extension|sidecar)
+      while IFS= read -r lang; do
+        [[ -z "$lang" ]] && continue
+        local manifest desc reqs status
+        manifest="$(lang_manifest_path "$surface" "$lang")"
+        desc=$(jq -r '.description // ""' "$manifest")
+        reqs=$(jq -r '.requires // [] | join(",")' "$manifest")
+        status="available"
+        if ! lang_interpreter_available "$surface" "$lang"; then status="missing-deps"; fi
+        printf '%s	%s	%s	%s	%s
+' "$surface" "$lang" "${reqs:-none}" "$status" "$desc"
+      done < <(list_template_languages "$surface")
+      ;;
+    *)
+      catalog_template_languages extension
+      catalog_template_languages sidecar
+      ;;
+  esac
+}
+
 # ── lookup helpers ─────────────────────────────────────────────────────────
 
 # is_known_permission NAME → 0 if known
@@ -223,6 +249,7 @@ catalog_dispatch() {
     editors|fields)    what=editor-kinds ;;
     actions|keybinds)  what=action-types ;;
     commands|cmds)     what=command-kinds ;;
+    langs|lang)         what=languages ;;
   esac
   case "$what" in
     hooks)
@@ -254,6 +281,10 @@ catalog_dispatch() {
       print_catalog_table "Command shapes (4)" \
         $'KIND\tREQUIRES\tDESCRIPTION' catalog_command_kinds
       ;;
+    languages)
+      print_catalog_table "Template languages" \
+        $'SURFACE\tLANGUAGE\tREQUIRES\tSTATUS\tDESCRIPTION' catalog_template_languages
+      ;;
     ""|--help|-h|help)
       cat <<EOF
 Usage: plugin-maker catalog <name>
@@ -266,6 +297,7 @@ Available catalogs:
   editor-kinds        — settings editor kinds (text/cycler/picker/custom)
   action-types        — keybind action kinds (slash_command/load_skill/inject_prompt/run_script)
   command-kinds       — slash-command shapes (shell/extension/skill/interactive)
+  languages           — scaffold template languages for extensions and sidecars
 EOF
       ;;
     *)

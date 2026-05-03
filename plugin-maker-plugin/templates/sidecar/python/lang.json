@@ -1,0 +1,11 @@
+{
+  "language": "python",
+  "surface": "sidecar",
+  "description": "Python 3 stdlib sidecar template",
+  "requires": ["python3"],
+  "template": "sidecar.tmpl",
+  "output": "bin/${NAME}-sidecar",
+  "command": "bin/${NAME}-sidecar",
+  "executable": true,
+  "syntax_check": ["python3", "-c", "import ast,sys; ast.parse(open(sys.argv[1]).read())", "${OUTPUT}"]
+}
