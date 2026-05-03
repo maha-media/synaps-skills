@@ -7,29 +7,47 @@ entire brain.** It searches, remembers, and gets smarter the more you use it.
 
 ## Install
 
-The plugin ships **source-only** through the marketplace; the Rust extension
-binary is built locally on first install (the upstream Axel stack pulls in
-ONNX Runtime, usearch HNSW, and tokenizers — ~33 MB stripped binary).
+The plugin installs a prebuilt Rust extension binary by default; users do **not**
+need a Rust toolchain for supported platforms. Current release assets are named:
+
+- `memory-manager-linux-x86_64`
+- `memory-manager-linux-aarch64`
+- `memory-manager-macos-aarch64`
+- `memory-manager-windows-x86_64.exe`
 
 1. Install via Synaps `/plugins` (or `synaps-skills` marketplace).
-2. Build the extension:
+2. Install/verify the extension binary:
 
    ```bash
    cd ~/.synaps-cli/plugins/axel-memory-manager
    ./scripts/setup.sh
    ```
 
-   First build is ~1–2 minutes (mostly fetching the Axel git workspace and
-   compiling its dependency tree). Subsequent rebuilds are seconds.
+   `setup.sh` downloads the matching binary from the latest GitHub release into
+   `extensions/memory-manager/target/release/memory-manager`, which is the path
+   declared in the plugin manifest. If no matching prebuilt binary exists and
+   Cargo is installed, it falls back to a local release build.
 
 3. Restart Synaps. The extension will load with 5 hooks registered.
 
 ### Requirements
 
-- Rust toolchain (`cargo` ≥ 1.75 — install via [rustup.rs](https://rustup.rs))
+- Supported platform with a published prebuilt binary, or Rust/Cargo only for
+  `./scripts/setup.sh --from-source` fallback builds.
 - An internet connection on first run — the embedding model (~86 MB
   `model.onnx` for VolciRAG search) downloads on first use and is cached
   under `~/.cache/velocirag/models/`.
+
+### Maintainer: publishing prebuilts
+
+Push a tag matching `axel-memory-manager-v*` or run the
+`axel-memory-manager release binaries` GitHub Actions workflow manually. It
+builds release binaries and attaches them to the GitHub release. Example:
+
+```bash
+git tag axel-memory-manager-v0.1.0
+git push origin axel-memory-manager-v0.1.0
+```
 
 ### What gets created
 
