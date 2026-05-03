@@ -182,6 +182,20 @@ fn dispatch(
 
         "shutdown" => json!({ "ok": true }),
 
+        // Synaps dispatches every hook through a single "hook.handle" RPC,
+        // with the actual kind in `params.kind`. The hook-kind strings are
+        // never sent as method names directly.
+        "hook.handle" => {
+            let kind = params.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+            handle_hook(brain, kind, params)
+        }
+
+        _ => anyhow::bail!("method not found: {method}"),
+    })
+}
+
+fn handle_hook(brain: Option<&mut AxelBrain>, kind: &str, params: &Value) -> Value {
+    match kind {
         "on_session_start" => {
             // Inject Tier-0 handoff + Tier-1 memories as a system preamble.
             if let Some(b) = brain {
@@ -213,7 +227,7 @@ fn dispatch(
             // VolciRAG contextual recall on the user's incoming message.
             let user_text = extract_text(params);
             if user_text.trim().len() < 5 {
-                return Ok(json!({ "action": "continue" }));
+                return json!({ "action": "continue" });
             }
             if let Some(b) = brain {
                 match b.contextual_recall(&user_text, RECALL_LIMIT) {
@@ -256,8 +270,9 @@ fn dispatch(
             json!({ "action": "continue" })
         }
 
-        _ => anyhow::bail!("method not found: {method}"),
-    })
+        // Unknown hook kind — return continue so we don't break the session.
+        _ => json!({ "action": "continue" }),
+    }
 }
 
 /// Pull a text payload out of hook params. Synaps passes message content under
