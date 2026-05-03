@@ -38,6 +38,8 @@ pub enum InsertTextMode {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SidecarFrame {
     Hello {
+        protocol_version: u16,
+        extension: String,
         capabilities: Vec<String>,
     },
     Status {

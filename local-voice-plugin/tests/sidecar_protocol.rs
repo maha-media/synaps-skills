@@ -25,7 +25,10 @@ fn mock_sidecar_protocol_smoke() {
     let mut stdout = BufReader::new(child.stdout.take().expect("sidecar stdout"));
 
     writeln!(stdin, r#"{{"type":"init","config":{{"protocol_version":2}}}}"#).unwrap();
-    assert_eq!(next_event(&mut stdout)["type"], "hello");
+    let hello = next_event(&mut stdout);
+    assert_eq!(hello["type"], "hello");
+    assert_eq!(hello["protocol_version"], 2);
+    assert_eq!(hello["extension"], "local-voice");
     assert_eq!(next_event(&mut stdout)["type"], "status");
 
     writeln!(stdin, r#"{{"type":"trigger","name":"press"}}"#).unwrap();

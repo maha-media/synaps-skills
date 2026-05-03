@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use crate::protocol::{
     voice_event_to_sidecar_frame, InsertTextMode, SidecarCommand, SidecarFrame, VoiceEvent,
+    SIDECAR_PROTOCOL_VERSION,
 };
 #[cfg(feature = "voice-stt-whisper")]
 use crate::protocol::SpeechToTextProvider;
@@ -30,6 +31,8 @@ fn emit(frame: &SidecarFrame) -> io::Result<()> {
 
 fn emit_ready() -> io::Result<()> {
     emit(&SidecarFrame::Hello {
+        protocol_version: SIDECAR_PROTOCOL_VERSION,
+        extension: "local-voice".to_string(),
         capabilities: vec!["insert-text".to_string(), "status".to_string()],
     })?;
     emit(&SidecarFrame::Status {
