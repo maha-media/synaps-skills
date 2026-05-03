@@ -1,0 +1,31 @@
+# Self-healing memory pattern
+
+When the **axel-memory-manager** plugin hits an error it doesn't know how to recover from,
+it should:
+
+1. Search the local memory store for prior fixes tagged `kind-fix` plus the
+   error class (e.g. `err-http_403`).
+2. If no match, escalate to the user with a structured prompt.
+3. After the user supplies a fix, append it to memory tagged
+   `kind-fix domain-<host> op-<op> err-<class>`.
+
+## Tags
+
+Use hyphenated, lowercase tags. Standard prefixes:
+
+- `kind-fix` — verified fix
+- `kind-runbook` — procedure
+- `kind-caveat` — known gotcha
+- `domain-<host-with-dashes>` (e.g. `domain-github-com`)
+- `op-<operation>` (e.g. `op-fetch`)
+- `err-<class>` (e.g. `err-http_403`)
+
+## API
+
+Source `lib/memory.sh` and call:
+
+```bash
+memory_query "404 from api.github.com" --tag kind-fix
+memory_append "Add User-Agent header to bypass cloudflare" --tag kind-fix,domain-github-com
+memory_self_heal "HTTP 403 on /repos" "fetching readme"
+```

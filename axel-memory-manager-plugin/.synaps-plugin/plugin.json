@@ -1,0 +1,30 @@
+{
+  "name": "axel-memory-manager",
+  "version": "0.1.0",
+  "description": "Axel — portable agent intelligence (search, memory, self-organizing knowledge) backed by VolciRAG, Memkoshi, and Consolidation. One .r8 file is the agent's entire brain.",
+  "author": {
+    "name": "J.R. Morton",
+    "url": "https://github.com/maha-media"
+  },
+  "repository": "https://github.com/maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "productivity",
+  "extension": {
+    "name": "memory-manager",
+    "runtime": "process",
+    "command": "extensions/memory-manager/target/release/memory-manager",
+    "args": [],
+    "permissions": [
+      "tools.intercept",
+      "privacy.llm_content",
+      "session.lifecycle"
+    ],
+    "hooks": [
+      { "hook": "before_message" },
+      { "hook": "on_message_complete" },
+      { "hook": "after_tool_call" },
+      { "hook": "on_session_start" },
+      { "hook": "on_session_end" }
+    ]
+  }
+}
