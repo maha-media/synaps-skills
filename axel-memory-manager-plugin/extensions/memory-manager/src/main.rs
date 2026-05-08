@@ -10,6 +10,7 @@
 
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -17,7 +18,9 @@ use serde_json::{json, Value};
 use axel::AxelBrain;
 
 mod settings;
+mod timer;
 use settings::Settings;
+use timer::{spawn_consolidation_timer, TimerCmd};
 
 const PROTOCOL_VERSION: u32 = 1;
 const NAME: &str = "memory-manager";
@@ -35,19 +38,13 @@ fn main() -> anyhow::Result<()> {
     let mut reader = stdin.lock();
     let mut out = stdout.lock();
 
-    // Settings — shared between the dispatch loop and (Phase 2) the future
-    // background consolidation timer. Loaded from
+    // Settings — shared between the dispatch loop and the background
+    // consolidation timer. Loaded from
     // `$SYNAPS_BASE_DIR/plugins/axel-memory-manager/config` if present.
     let settings = Arc::new(Mutex::new(Settings::load_or_default()));
 
-    // Spawn the file-watcher BEFORE we block on stdin. The watcher logs to
-    // stderr only — stdout is reserved for JSON-RPC frames. We hold both the
-    // JoinHandle and the Watcher for the lifetime of `main` (the Watcher
-    // stops on drop). The thread is detached at process exit; we don't join.
-    let _watcher_guard = settings::spawn_watcher(settings.clone());
-
     let brain_path = resolve_brain_path();
-    // Brain is shared between the dispatch loop and (Phase 2) the background
+    // Brain is shared between the dispatch loop and the background
     // consolidation timer. `Option` lets shutdown explicitly take + drop the
     // brain so SQLite closes cleanly. `Mutex` serialises concurrent writes
     // so the timer's `consolidate` cannot race a `remember`.
@@ -62,6 +59,18 @@ fn main() -> anyhow::Result<()> {
         }
     };
     let brain: Arc<Mutex<Option<AxelBrain>>> = Arc::new(Mutex::new(initial_brain));
+
+    // Background consolidation timer. The channel is the single point of
+    // truth for re-arm + shutdown signals; the file-watcher (below) sends
+    // `Rearm` after applying changes, and `main` sends `Shutdown` on EOF.
+    let (timer_tx, timer_rx) = mpsc::channel::<TimerCmd>();
+    let timer_handle = spawn_consolidation_timer(brain.clone(), settings.clone(), timer_rx);
+
+    // Spawn the file-watcher BEFORE we block on stdin. The watcher logs to
+    // stderr only — stdout is reserved for JSON-RPC frames. The watcher
+    // sends `TimerCmd::Rearm(new_interval)` to the timer after applying
+    // any config change so interval edits take effect immediately.
+    let watcher_guard = settings::spawn_watcher(settings.clone(), Some(timer_tx.clone()));
 
     loop {
         let frame = match read_frame(&mut reader) {
@@ -147,8 +156,15 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Explicit teardown: take the brain out of the Arc<Mutex<…>> and drop it
-    // here so SQLite's WAL is checkpointed and the file handle closes before
+    // ── Shutdown ─────────────────────────────────────────────────────────
+    // Tell the timer thread to stop. (Bounded join + watcher drop sequence
+    // is added in the next commit.)
+    let _ = timer_tx.send(TimerCmd::Shutdown);
+    let _ = timer_handle.join();
+    let _ = watcher_guard; // dropped here; watcher thread will exit on disconnect.
+
+    // Take the brain out of the Arc<Mutex<…>> and drop it explicitly so
+    // SQLite's WAL is checkpointed and the file handle closes before
     // `main` returns.
     let _ = brain.lock().expect("brain lock").take();
 

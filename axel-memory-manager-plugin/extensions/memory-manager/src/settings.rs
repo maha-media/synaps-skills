@@ -18,9 +18,12 @@
 //! channel and must never be polluted.
 
 use std::path::PathBuf;
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+
+use crate::timer::TimerCmd;
 
 /// Allowed values for the `consolidate_interval_secs` picker / cycler.
 /// Mirrors the `options` array declared in `plugin.json`.
@@ -181,6 +184,7 @@ const WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
 /// at startup.
 pub fn spawn_watcher(
     shared: Arc<Mutex<Settings>>,
+    timer_tx: Option<Sender<TimerCmd>>,
 ) -> Option<(JoinHandle<()>, notify::RecommendedWatcher)> {
     use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -266,6 +270,15 @@ pub fn spawn_watcher(
                         new_settings.min_consolidate_len,
                         new_settings.consolidate_interval_secs,
                     );
+                    drop(g);
+                    // Re-arm the background consolidation timer so an
+                    // interval change takes effect on the next tick rather
+                    // than after the previous interval finishes elapsing.
+                    if let Some(tx) = timer_tx.as_ref() {
+                        if let Err(e) = tx.send(TimerCmd::Rearm(new_settings.consolidate_interval_secs)) {
+                            eprintln!("axel: WARN timer rearm send failed: {e}");
+                        }
+                    }
                 }
             }
         })
