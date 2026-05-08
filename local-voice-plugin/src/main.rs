@@ -29,15 +29,11 @@ fn emit(frame: &SidecarFrame) -> io::Result<()> {
     stdout.flush()
 }
 
-fn emit_ready() -> io::Result<()> {
+fn emit_hello() -> io::Result<()> {
     emit(&SidecarFrame::Hello {
         protocol_version: SIDECAR_PROTOCOL_VERSION,
         extension: "local-voice".to_string(),
         capabilities: vec!["insert-text".to_string(), "status".to_string()],
-    })?;
-    emit(&SidecarFrame::Status {
-        state: "ready".to_string(),
-        label: None,
     })
 }
 
@@ -85,7 +81,13 @@ impl LocalVoiceSidecar {
     }
 
     fn handle_init(&mut self) -> io::Result<()> {
-        emit_ready()
+        // The Hello frame is now emitted unprompted at startup (see `main`),
+        // because the host (SynapsCLI) waits for Hello BEFORE sending Init.
+        // On Init we just confirm we're ready to receive triggers.
+        emit(&SidecarFrame::Status {
+            state: "ready".to_string(),
+            label: None,
+        })
     }
 
     fn handle_press(&mut self) -> io::Result<()> {
@@ -181,6 +183,12 @@ async fn main() -> io::Result<()> {
         println!("{}", serde_json::to_string(&info).unwrap());
         return Ok(());
     }
+
+    // Announce ourselves on stdout BEFORE reading any input. The host
+    // (SynapsCLI src/sidecar/manager.rs) waits up to 10 s for this Hello
+    // frame *before* sending Init — emitting Hello only inside handle_init
+    // produces a handshake deadlock.
+    emit_hello()?;
 
     let (voice_tx, mut voice_rx) = tokio::sync::mpsc::channel::<VoiceEvent>(128);
     let mut sidecar = LocalVoiceSidecar::new(voice_tx);
