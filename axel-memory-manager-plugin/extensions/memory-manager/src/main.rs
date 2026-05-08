@@ -156,16 +156,33 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    // ── Shutdown ─────────────────────────────────────────────────────────
-    // Tell the timer thread to stop. (Bounded join + watcher drop sequence
-    // is added in the next commit.)
+    // ── Shutdown sequence ────────────────────────────────────────────────
+    // 1. Tell the timer to break its loop.
     let _ = timer_tx.send(TimerCmd::Shutdown);
+    // 2. Drop the watcher (its companion thread becomes joinable when the
+    //    notify channel disconnects).
+    let watcher_handle = watcher_guard.map(|(h, w)| {
+        drop(w);
+        h
+    });
+    // 3 + 4. Bounded join: spawn a watchdog that force-exits the process
+    //    after 2 s if any helper thread is wedged. The normal path joins
+    //    well under that.
+    std::thread::Builder::new()
+        .name("axel-shutdown-watchdog".into())
+        .spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            eprintln!("axel: shutdown watchdog tripped — exiting");
+            std::process::exit(0);
+        })
+        .ok();
     let _ = timer_handle.join();
-    let _ = watcher_guard; // dropped here; watcher thread will exit on disconnect.
-
-    // Take the brain out of the Arc<Mutex<…>> and drop it explicitly so
-    // SQLite's WAL is checkpointed and the file handle closes before
-    // `main` returns.
+    if let Some(h) = watcher_handle {
+        let _ = h.join();
+    }
+    // 5. Take the brain out of the Arc<Mutex<…>> and drop it explicitly so
+    //    SQLite's WAL is checkpointed and the file handle closes before
+    //    `main` returns.
     let _ = brain.lock().expect("brain lock").take();
 
     Ok(())
