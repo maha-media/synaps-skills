@@ -137,7 +137,9 @@ impl Settings {
                 ),
             },
             "consolidate_interval_secs" => match value.parse::<u64>() {
-                Ok(n) if ALLOWED_INTERVALS.contains(&n) => self.consolidate_interval_secs = n,
+                Ok(n) if ALLOWED_INTERVALS.contains(&n) || allow_any_interval() => {
+                    self.consolidate_interval_secs = n;
+                }
                 Ok(n) => eprintln!(
                     "axel: WARN consolidate_interval_secs={n} not in {:?}; keeping {}",
                     ALLOWED_INTERVALS, self.consolidate_interval_secs
@@ -166,6 +168,14 @@ fn strip_quotes(s: &str) -> &str {
     } else {
         s
     }
+}
+
+/// Test-only escape hatch: setting `AXEL_ALLOW_ANY_INTERVAL=1` (or any value)
+/// disables the picker-allowlist gate on `consolidate_interval_secs` so
+/// integration tests can use 1-second tick intervals without bloating the
+/// user-facing picker choices. NOT documented in the user manifest.
+fn allow_any_interval() -> bool {
+    std::env::var_os("AXEL_ALLOW_ANY_INTERVAL").is_some()
 }
 
 /// Debounce window for file-watch events. The host write path uses a tmp →
