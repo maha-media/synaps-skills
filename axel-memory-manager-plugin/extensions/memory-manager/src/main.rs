@@ -47,7 +47,11 @@ fn main() -> anyhow::Result<()> {
     let _watcher_guard = settings::spawn_watcher(settings.clone());
 
     let brain_path = resolve_brain_path();
-    let mut brain = match AxelBrain::open_or_create(&brain_path, Some("synaps")) {
+    // Brain is shared between the dispatch loop and (Phase 2) the background
+    // consolidation timer. `Option` lets shutdown explicitly take + drop the
+    // brain so SQLite closes cleanly. `Mutex` serialises concurrent writes
+    // so the timer's `consolidate` cannot race a `remember`.
+    let initial_brain = match AxelBrain::open_or_create(&brain_path, Some("synaps")) {
         Ok(b) => Some(b),
         Err(e) => {
             eprintln!(
@@ -57,6 +61,7 @@ fn main() -> anyhow::Result<()> {
             None
         }
     };
+    let brain: Arc<Mutex<Option<AxelBrain>>> = Arc::new(Mutex::new(initial_brain));
 
     loop {
         let frame = match read_frame(&mut reader) {
@@ -94,12 +99,14 @@ fn main() -> anyhow::Result<()> {
         // can take as long as we need (~minutes on first run for the
         // 86 MB model download; instant once cached).
         if method == "initialize" {
-            if let Some(b) = brain.as_mut() {
+            let mut g = brain.lock().expect("brain lock");
+            if let Some(b) = g.as_mut() {
                 prewarm_brain(b);
             }
+            drop(g);
         }
 
-        let result = dispatch(brain.as_mut(), &settings, method, &params);
+        let result = dispatch(&brain, &settings, method, &params);
 
         if let Some(id) = id {
             let response = match result {
@@ -131,12 +138,19 @@ fn main() -> anyhow::Result<()> {
         }
 
         if method == "shutdown" {
-            if let Some(b) = brain.as_mut() {
+            let mut g = brain.lock().expect("brain lock");
+            if let Some(b) = g.as_mut() {
                 let _ = b.flush();
             }
+            drop(g);
             break;
         }
     }
+
+    // Explicit teardown: take the brain out of the Arc<Mutex<…>> and drop it
+    // here so SQLite's WAL is checkpointed and the file handle closes before
+    // `main` returns.
+    let _ = brain.lock().expect("brain lock").take();
 
     Ok(())
 }
@@ -231,8 +245,17 @@ fn resolve_brain_path() -> PathBuf {
     home.join(".config/axel/axel.r8")
 }
 
+/// JSON-RPC dispatch.
+///
+/// **Lock discipline:** any handler that needs the brain must acquire
+/// `brain.lock()` for the minimum window required to do its DB work, then
+/// **drop the guard before returning** (i.e. before the caller writes the
+/// JSON-RPC reply to stdout). Holding the brain lock across a stdout write
+/// would deadlock the background consolidation timer behind a slow flush —
+/// and vice versa. As a corollary, no function in this crate returns a
+/// `MutexGuard`.
 fn dispatch(
-    brain: Option<&mut AxelBrain>,
+    brain: &Arc<Mutex<Option<AxelBrain>>>,
     settings: &Arc<Mutex<Settings>>,
     method: &str,
     params: &Value,
@@ -258,12 +281,15 @@ fn dispatch(
         // Manual consolidation trigger — callable by Synaps skills/scripts.
         // No wall-clock cap here; manual RPC can run as long as needed.
         "consolidate" => {
-            if let Some(b) = brain {
+            let mut g = brain.lock().expect("brain lock");
+            let result = if let Some(b) = g.as_mut() {
                 let stats = run_consolidation(b, "manual_rpc");
                 json!({ "ok": true, "stats": stats })
             } else {
                 json!({ "ok": false, "reason": "no brain" })
-            }
+            };
+            drop(g);
+            result
         }
 
         // Custom editor for the `run_consolidate_now` action button. Opening
@@ -278,7 +304,8 @@ fn dispatch(
             if field != "run_consolidate_now" {
                 anyhow::bail!("settings.editor.open: unknown field {field:?}");
             }
-            let label = match brain {
+            let mut g = brain.lock().expect("brain lock");
+            let label = match g.as_mut() {
                 Some(b) => {
                     let stats = run_consolidation(b, "settings_editor");
                     let n = stats.unwrap_or(0);
@@ -286,6 +313,7 @@ fn dispatch(
                 }
                 None => "⚠ No brain available — consolidation skipped".to_string(),
             };
+            drop(g);
             json!({
                 "rows": [{
                     "label": label,
@@ -365,7 +393,7 @@ fn run_consolidation(brain: &mut AxelBrain, trigger: &str) -> Option<u64> {
 }
 
 fn handle_hook(
-    brain: Option<&mut AxelBrain>,
+    brain: &Arc<Mutex<Option<AxelBrain>>>,
     settings: &Arc<Mutex<Settings>>,
     kind: &str,
     params: &Value,
@@ -373,7 +401,8 @@ fn handle_hook(
     match kind {
         "on_session_start" => {
             // Inject Tier-0 handoff + Tier-1 memories as a system preamble.
-            if let Some(b) = brain {
+            let mut g = brain.lock().expect("brain lock");
+            let result = if let Some(b) = g.as_mut() {
                 match b.boot_context() {
                     Ok(ctx) if !ctx.formatted.trim().is_empty() => json!({
                         "action": "inject_message",
@@ -388,42 +417,43 @@ fn handle_hook(
                 }
             } else {
                 json!({ "action": "continue" })
-            }
+            };
+            drop(g);
+            result
         }
 
         "on_session_end" => {
-            // TODO(consolidation-timer): hourly background consolidation deferred —
-            // requires Arc<Mutex<>> refactor of main loop. Tracked as follow-up.
-            if let Some(b) = brain {
-                let _ = b.flush();
-                if std::env::var("AXEL_CONSOLIDATE_ON_END").as_deref().unwrap_or("1") == "1" {
-                    // Hard 4-second wall-clock deadline: on_session_end has a
-                    // 5-second Synaps budget (§8 risk). We run consolidation on
-                    // a dedicated thread and join with timeout so we never block
-                    // past 4 s.
-                    let (tx, rx) = std::sync::mpsc::channel::<()>();
-                    // SAFETY: We join (or abandon) the thread within 4 s, so `b`
-                    // outlives the thread. Raw pointer sidesteps the borrow
-                    // checker for this scoped fire-and-forget pattern; the
-                    // process exits shortly after on_session_end returns.
-                    let b_ptr = b as *mut AxelBrain;
-                    let handle = unsafe {
-                        let b_ref: &'static mut AxelBrain = &mut *b_ptr;
-                        std::thread::spawn(move || {
-                            run_consolidation(b_ref, "session_end");
-                            let _ = tx.send(());
-                        })
-                    };
-                    match rx.recv_timeout(std::time::Duration::from_secs(4)) {
-                        Ok(()) => { let _ = handle.join(); }
-                        Err(_) => {
-                            eprintln!(
-                                "axel: consolidation (session_end) exceeded 4 s deadline — \
-                                 aborting wait; Synaps hook budget preserved"
-                            );
-                            // Do not join — let the thread finish in the background.
-                            // The process exits soon after on_session_end returns.
-                        }
+            // Flush, then optionally run consolidation under a 4-second cap.
+            {
+                let mut g = brain.lock().expect("brain lock");
+                if let Some(b) = g.as_mut() {
+                    let _ = b.flush();
+                }
+                drop(g);
+            }
+            if std::env::var("AXEL_CONSOLIDATE_ON_END").as_deref().unwrap_or("1") == "1" {
+                // Hard 4-second wall-clock deadline: on_session_end has a
+                // 5-second Synaps budget. Spawn the consolidation on a
+                // dedicated thread (clones the Arc — no unsafe needed now)
+                // and wait at most 4 s for it.
+                let brain_for_thread = brain.clone();
+                let (tx, rx) = std::sync::mpsc::channel::<()>();
+                let handle = std::thread::spawn(move || {
+                    let mut g = brain_for_thread.lock().expect("brain lock");
+                    if let Some(b) = g.as_mut() {
+                        run_consolidation(b, "session_end");
+                    }
+                    drop(g);
+                    let _ = tx.send(());
+                });
+                match rx.recv_timeout(std::time::Duration::from_secs(4)) {
+                    Ok(()) => { let _ = handle.join(); }
+                    Err(_) => {
+                        eprintln!(
+                            "axel: consolidation (session_end) exceeded 4 s deadline — \
+                             aborting wait; Synaps hook budget preserved"
+                        );
+                        // Do not join — let the thread finish in the background.
                     }
                 }
             }
@@ -436,7 +466,8 @@ fn handle_hook(
             if user_text.trim().len() < 5 {
                 return json!({ "action": "continue" });
             }
-            if let Some(b) = brain {
+            let mut g = brain.lock().expect("brain lock");
+            let result = if let Some(b) = g.as_mut() {
                 match b.contextual_recall(&user_text, RECALL_LIMIT) {
                     Ok(ctx) if !ctx.formatted.trim().is_empty() => json!({
                         "action": "inject",
@@ -450,7 +481,9 @@ fn handle_hook(
                 }
             } else {
                 json!({ "action": "continue" })
-            }
+            };
+            drop(g);
+            result
         }
 
         "on_message_complete" => {
@@ -458,14 +491,16 @@ fn handle_hook(
             // an Events memory if it's substantial. The full Consolidation
             // pipeline (reindex → strengthen → reorganize → prune) runs on
             // session end / on a schedule, not per message.
-            if let Some(b) = brain {
-                let text = extract_text(params);
-                let min_len = settings.lock().expect("settings lock").min_consolidate_len;
-                if text.len() >= min_len {
+            let text = extract_text(params);
+            let min_len = settings.lock().expect("settings lock").min_consolidate_len;
+            if text.len() >= min_len {
+                let mut g = brain.lock().expect("brain lock");
+                if let Some(b) = g.as_mut() {
                     if let Err(e) = b.remember(&text, "Events", AUTO_IMPORTANCE) {
                         eprintln!("axel: remember failed: {e}");
                     }
                 }
+                drop(g);
             }
             json!({ "action": "continue" })
         }
@@ -554,6 +589,10 @@ mod tests {
         Arc::new(Mutex::new(Settings::default()))
     }
 
+    fn empty_brain() -> Arc<Mutex<Option<AxelBrain>>> {
+        Arc::new(Mutex::new(None))
+    }
+
     /// on_message_complete with short text (< min_consolidate_len) → continue.
     #[test]
     fn before_message_passthrough_when_no_brain() {
@@ -561,7 +600,7 @@ mod tests {
             "kind": "before_message",
             "message": "What is Rust's borrow checker?",
         });
-        let result = handle_hook(None, &test_settings(), "before_message", &params);
+        let result = handle_hook(&empty_brain(), &test_settings(), "before_message", &params);
         assert_eq!(result["action"], "continue");
     }
 
@@ -569,7 +608,7 @@ mod tests {
     #[test]
     fn on_message_complete_short_text_no_brain() {
         let params = json!({ "kind": "on_message_complete", "message": "ok" });
-        let result = handle_hook(None, &test_settings(), "on_message_complete", &params);
+        let result = handle_hook(&empty_brain(), &test_settings(), "on_message_complete", &params);
         assert_eq!(result["action"], "continue");
     }
 
@@ -579,7 +618,7 @@ mod tests {
     /// it must return `{"ok": false, "reason": "no brain"}` — no panic.
     #[test]
     fn consolidate_rpc_no_brain_returns_ok_false() {
-        let result = dispatch(None, &test_settings(), "consolidate", &json!({}))
+        let result = dispatch(&empty_brain(), &test_settings(), "consolidate", &json!({}))
             .expect("dispatch must not error for consolidate method");
         assert_eq!(result["ok"], false, "expected ok=false when no brain");
         let reason = result["reason"].as_str().expect("reason field must be a string");
