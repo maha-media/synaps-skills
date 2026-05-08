@@ -18,6 +18,9 @@
 //! channel and must never be polluted.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 /// Allowed values for the `consolidate_interval_secs` picker / cycler.
 /// Mirrors the `options` array declared in `plugin.json`.
@@ -160,6 +163,115 @@ fn strip_quotes(s: &str) -> &str {
     } else {
         s
     }
+}
+
+/// Debounce window for file-watch events. The host write path uses a tmp →
+/// rename pattern that often produces two events in quick succession; this
+/// window collapses them so we re-parse the file at most once per burst.
+const WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
+
+/// Spawn a background thread that watches the on-disk config file for changes
+/// and applies them onto `shared`. Returns the `JoinHandle` and the watcher
+/// (which must be kept alive — dropping it stops the watch).
+///
+/// All log output goes to **stderr**; stdout is the JSON-RPC channel.
+///
+/// On error (notify backend init failure, etc.) returns `None` and logs to
+/// stderr — the plugin continues to run with whatever settings were loaded
+/// at startup.
+pub fn spawn_watcher(
+    shared: Arc<Mutex<Settings>>,
+) -> Option<(JoinHandle<()>, notify::RecommendedWatcher)> {
+    use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+
+    let path = Settings::config_path();
+    // Watch the parent directory: the file may not exist yet at startup, and
+    // the host's atomic-rename write replaces the inode so a direct file
+    // watch would miss subsequent updates.
+    let parent = path.parent().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+    if let Err(e) = std::fs::create_dir_all(&parent) {
+        eprintln!(
+            "axel: WARN cannot create settings dir {}: {e} — live reload disabled",
+            parent.display()
+        );
+        return None;
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
+    let mut watcher: RecommendedWatcher = match notify::recommended_watcher(move |res| {
+        let _ = tx.send(res);
+    }) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("axel: WARN notify init failed: {e} — live reload disabled");
+            return None;
+        }
+    };
+    if let Err(e) = watcher.watch(&parent, RecursiveMode::NonRecursive) {
+        eprintln!(
+            "axel: WARN watch({}) failed: {e} — live reload disabled",
+            parent.display()
+        );
+        return None;
+    }
+    eprintln!("axel: watching {} for live setting updates", path.display());
+
+    let watch_path = path.clone();
+    let handle = std::thread::Builder::new()
+        .name("axel-settings-watcher".into())
+        .spawn(move || {
+            let mut last_apply: Option<Instant> = None;
+            while let Ok(res) = rx.recv() {
+                let event = match res {
+                    Ok(ev) => ev,
+                    Err(e) => {
+                        eprintln!("axel: WARN watcher event error: {e}");
+                        continue;
+                    }
+                };
+                // Only react to events that touch our config file.
+                let touches_us = event.paths.iter().any(|p| {
+                    // Compare canonicalised file names; the parent watch may
+                    // emit events for sibling files we don't care about.
+                    p == &watch_path
+                        || p.file_name() == watch_path.file_name()
+                            && p.parent() == watch_path.parent()
+                });
+                if !touches_us {
+                    continue;
+                }
+                match event.kind {
+                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {}
+                    _ => continue,
+                }
+                // Debounce.
+                let now = Instant::now();
+                if let Some(prev) = last_apply {
+                    if now.duration_since(prev) < WATCH_DEBOUNCE {
+                        std::thread::sleep(WATCH_DEBOUNCE);
+                    }
+                }
+                last_apply = Some(Instant::now());
+
+                let mut new_settings = Settings::default();
+                if let Ok(content) = std::fs::read_to_string(&watch_path) {
+                    new_settings.apply_toml_str(&content);
+                }
+                let mut g = shared.lock().expect("settings lock poisoned");
+                if *g != new_settings {
+                    *g = new_settings.clone();
+                    eprintln!(
+                        "axel: INFO settings reloaded: min_consolidate_len={} \
+                         consolidate_interval_secs={}",
+                        new_settings.min_consolidate_len,
+                        new_settings.consolidate_interval_secs,
+                    );
+                }
+            }
+        })
+        .ok()?;
+
+    Some((handle, watcher))
 }
 
 #[cfg(test)]

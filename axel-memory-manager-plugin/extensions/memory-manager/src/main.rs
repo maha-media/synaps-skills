@@ -40,6 +40,12 @@ fn main() -> anyhow::Result<()> {
     // `$SYNAPS_BASE_DIR/plugins/axel-memory-manager/config` if present.
     let settings = Arc::new(Mutex::new(Settings::load_or_default()));
 
+    // Spawn the file-watcher BEFORE we block on stdin. The watcher logs to
+    // stderr only — stdout is reserved for JSON-RPC frames. We hold both the
+    // JoinHandle and the Watcher for the lifetime of `main` (the Watcher
+    // stops on drop). The thread is detached at process exit; we don't join.
+    let _watcher_guard = settings::spawn_watcher(settings.clone());
+
     let brain_path = resolve_brain_path();
     let mut brain = match AxelBrain::open_or_create(&brain_path, Some("synaps")) {
         Ok(b) => Some(b),
@@ -71,6 +77,17 @@ fn main() -> anyhow::Result<()> {
         let params = frame.get("params").cloned().unwrap_or(json!({}));
         let id = frame.get("id").cloned();
 
+        // A frame with no `method` is a JSON-RPC response — almost certainly
+        // the host's reply to our outbound `config.subscribe` request. Log
+        // and skip; we don't pipeline outgoing requests so there's nothing
+        // to correlate.
+        if method.is_empty() {
+            if frame.get("error").is_some() {
+                eprintln!("axel: outbound request errored: {frame}");
+            }
+            continue;
+        }
+
         // Prewarm the embedding model during `initialize` so the first
         // `before_message` hook (capped at 5s by Synaps) doesn't hit a
         // model download. `initialize` has no Synaps-side timeout, so we
@@ -94,6 +111,23 @@ fn main() -> anyhow::Result<()> {
                 }),
             };
             write_frame(&mut out, &response)?;
+        }
+
+        // Send `config.subscribe` immediately after our `initialize` reply so
+        // the host knows we want push-style config updates (currently a stub
+        // ACK on the host side — see SynapsCLI/src/extensions/runtime/
+        // process.rs — but cheap and forward-compatible). Fire-and-forget:
+        // the response is correlated by id and dropped in the dispatch loop.
+        if method == "initialize" {
+            let req = json!({
+                "jsonrpc": "2.0",
+                "id": "axel.config-subscribe",
+                "method": "config.subscribe",
+                "params": { "namespace": settings::PLUGIN_ID }
+            });
+            if let Err(e) = write_frame(&mut out, &req) {
+                eprintln!("axel: WARN config.subscribe write failed: {e}");
+            }
         }
 
         if method == "shutdown" {
