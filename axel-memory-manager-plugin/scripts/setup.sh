@@ -11,6 +11,8 @@
 #   ./scripts/setup.sh --debug         # local Cargo debug build
 #   ./scripts/setup.sh --check         # verify the manifest binary exists and runs
 #   ./scripts/setup.sh --version TAG   # download from a specific release tag
+#   ./scripts/setup.sh --update        # re-download latest prebuilt, fallback to Cargo
+#   ./scripts/setup.sh --update --version TAG  # re-download a pinned release tag
 
 set -euo pipefail
 
@@ -23,6 +25,7 @@ VERSION="latest"
 PROFILE="release"
 CHECK=0
 FROM_SOURCE=0
+UPDATE=0
 
 while [[ $# -gt 0 ]]; do
   arg="$1"
@@ -31,6 +34,7 @@ while [[ $# -gt 0 ]]; do
     --release)     PROFILE="release" ;;
     --from-source) FROM_SOURCE=1 ;;
     --check)       CHECK=1 ;;
+    --update)      UPDATE=1 ;;
     --version=*)   VERSION="${arg#--version=}" ;;
     --version)
       if [[ $# -lt 2 ]]; then
@@ -40,7 +44,7 @@ while [[ $# -gt 0 ]]; do
       VERSION="$2"
       shift ;;
     -h|--help)
-      sed -n '2,13p' "$0" | sed 's/^# \?//'
+      sed -n '2,15p' "$0" | sed 's/^# \?//'
       exit 0 ;;
     *)
       echo "setup.sh: unknown arg: $arg" >&2
@@ -151,6 +155,16 @@ install_prebuilt() {
 
 if [[ "$CHECK" == "1" ]]; then
   check_binary
+  exit $?
+fi
+
+if [[ "${UPDATE:-0}" == "1" ]]; then
+  echo "→ axel-memory-manager: checking for newer prebuilt binary"
+  if install_prebuilt; then
+    exit 0
+  fi
+  echo "⚠ no newer prebuilt available; falling back to local Cargo build" >&2
+  cargo_build
   exit $?
 fi
 

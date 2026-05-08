@@ -22,3 +22,9 @@ axel = { git = "https://github.com/HaseebKhalid1507/axel", branch = "main" }
 opt-level = 3
 lto = "thin"
 strip = true
+
+[dev-dependencies]
+# Integration tests open the .r8 SQLite file directly to verify memory writes.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# Integration tests create a temp dir for the ephemeral brain file.
+tempfile = "3"
