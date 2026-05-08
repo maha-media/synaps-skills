@@ -264,8 +264,8 @@ fn handle_hook(brain: Option<&mut AxelBrain>, kind: &str, params: &Value) -> Val
             if let Some(b) = brain {
                 match b.contextual_recall(&user_text, RECALL_LIMIT) {
                     Ok(ctx) if !ctx.formatted.trim().is_empty() => json!({
-                        "action": "modify",
-                        "content": format!("{}\n\n{}", ctx.formatted, user_text)
+                        "action": "inject",
+                        "content": ctx.formatted
                     }),
                     Ok(_) => json!({ "action": "continue" }),
                     Err(e) => {
@@ -310,9 +310,16 @@ fn handle_hook(brain: Option<&mut AxelBrain>, kind: &str, params: &Value) -> Val
 /// Pull a text payload out of hook params. Synaps passes message content under
 /// `content`; some shapes nest it under `message.content`.
 fn extract_text(params: &Value) -> String {
+    // Canonical Synaps wire shape: HookEvent serialises `message` as a top-level
+    // plain string (see SynapsCLI/src/extensions/hooks/events.rs:149).
+    if let Some(s) = params.get("message").and_then(|v| v.as_str()) {
+        return s.to_string();
+    }
+    // Legacy shape 1: top-level "content" string.
     if let Some(s) = params.get("content").and_then(|v| v.as_str()) {
         return s.to_string();
     }
+    // Legacy shape 2: nested "message.content" object (OpenAI message format).
     if let Some(s) = params
         .get("message")
         .and_then(|m| m.get("content"))
@@ -322,3 +329,4 @@ fn extract_text(params: &Value) -> String {
     }
     String::new()
 }
+
