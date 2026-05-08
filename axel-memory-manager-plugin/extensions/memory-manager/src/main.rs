@@ -10,10 +10,14 @@
 
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
 use axel::AxelBrain;
+
+mod settings;
+use settings::Settings;
 
 const PROTOCOL_VERSION: u32 = 1;
 const NAME: &str = "memory-manager";
@@ -21,9 +25,6 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Importance score for memories captured automatically from chat turns.
 const AUTO_IMPORTANCE: f64 = 0.5;
-
-/// Min length (chars) of an assistant message before we bother consolidating it.
-const MIN_CONSOLIDATE_LEN: usize = 80;
 
 /// Max search results to retrieve for `before_message` recall.
 const RECALL_LIMIT: usize = 5;
@@ -33,6 +34,11 @@ fn main() -> anyhow::Result<()> {
     let stdout = io::stdout();
     let mut reader = stdin.lock();
     let mut out = stdout.lock();
+
+    // Settings — shared between the dispatch loop and (Phase 2) the future
+    // background consolidation timer. Loaded from
+    // `$SYNAPS_BASE_DIR/plugins/axel-memory-manager/config` if present.
+    let settings = Arc::new(Mutex::new(Settings::load_or_default()));
 
     let brain_path = resolve_brain_path();
     let mut brain = match AxelBrain::open_or_create(&brain_path, Some("synaps")) {
@@ -76,7 +82,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        let result = dispatch(brain.as_mut(), method, &params);
+        let result = dispatch(brain.as_mut(), &settings, method, &params);
 
         if let Some(id) = id {
             let response = match result {
@@ -193,6 +199,7 @@ fn resolve_brain_path() -> PathBuf {
 
 fn dispatch(
     brain: Option<&mut AxelBrain>,
+    settings: &Arc<Mutex<Settings>>,
     method: &str,
     params: &Value,
 ) -> anyhow::Result<Value> {
@@ -230,7 +237,7 @@ fn dispatch(
         // never sent as method names directly.
         "hook.handle" => {
             let kind = params.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-            handle_hook(brain, kind, params)
+            handle_hook(brain, settings, kind, params)
         }
 
         _ => anyhow::bail!("method not found: {method}"),
@@ -273,7 +280,12 @@ fn run_consolidation(brain: &mut AxelBrain, trigger: &str) {
     }
 }
 
-fn handle_hook(brain: Option<&mut AxelBrain>, kind: &str, params: &Value) -> Value {
+fn handle_hook(
+    brain: Option<&mut AxelBrain>,
+    settings: &Arc<Mutex<Settings>>,
+    kind: &str,
+    params: &Value,
+) -> Value {
     match kind {
         "on_session_start" => {
             // Inject Tier-0 handoff + Tier-1 memories as a system preamble.
@@ -364,7 +376,8 @@ fn handle_hook(brain: Option<&mut AxelBrain>, kind: &str, params: &Value) -> Val
             // session end / on a schedule, not per message.
             if let Some(b) = brain {
                 let text = extract_text(params);
-                if text.len() >= MIN_CONSOLIDATE_LEN {
+                let min_len = settings.lock().expect("settings lock").min_consolidate_len;
+                if text.len() >= min_len {
                     if let Err(e) = b.remember(&text, "Events", AUTO_IMPORTANCE) {
                         eprintln!("axel: remember failed: {e}");
                     }
@@ -453,26 +466,26 @@ mod tests {
 
     // ── before_message response shape ─────────────────────────────────────────
 
-    /// Verify that when a non-empty contextual_recall result is available the
-    /// dispatcher emits action:"inject" (not "modify"). Tested via handle_hook
-    /// directly so we don't need a live brain — we can use the passthrough path
-    /// (brain = None) to verify the continue case, and a mock for inject.
-    /// Full inject-path coverage requires the integration test (§4.2).
+    fn test_settings() -> Arc<Mutex<Settings>> {
+        Arc::new(Mutex::new(Settings::default()))
+    }
+
+    /// on_message_complete with short text (< min_consolidate_len) → continue.
     #[test]
     fn before_message_passthrough_when_no_brain() {
         let params = json!({
             "kind": "before_message",
             "message": "What is Rust's borrow checker?",
         });
-        let result = handle_hook(None, "before_message", &params);
+        let result = handle_hook(None, &test_settings(), "before_message", &params);
         assert_eq!(result["action"], "continue");
     }
 
-    /// on_message_complete with short text (< MIN_CONSOLIDATE_LEN) → continue.
+    /// on_message_complete with short text (< min_consolidate_len) → continue.
     #[test]
     fn on_message_complete_short_text_no_brain() {
         let params = json!({ "kind": "on_message_complete", "message": "ok" });
-        let result = handle_hook(None, "on_message_complete", &params);
+        let result = handle_hook(None, &test_settings(), "on_message_complete", &params);
         assert_eq!(result["action"], "continue");
     }
 
@@ -482,7 +495,7 @@ mod tests {
     /// it must return `{"ok": false, "reason": "no brain"}` — no panic.
     #[test]
     fn consolidate_rpc_no_brain_returns_ok_false() {
-        let result = dispatch(None, "consolidate", &json!({}))
+        let result = dispatch(None, &test_settings(), "consolidate", &json!({}))
             .expect("dispatch must not error for consolidate method");
         assert_eq!(result["ok"], false, "expected ok=false when no brain");
         let reason = result["reason"].as_str().expect("reason field must be a string");

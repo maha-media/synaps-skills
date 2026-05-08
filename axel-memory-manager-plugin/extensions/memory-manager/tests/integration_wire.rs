@@ -110,7 +110,7 @@ fn on_message_complete_writes_memory() {
 
     let (mut stdin, mut reader, mut child) = spawn_and_init(&brain_path);
 
-    // Send on_message_complete with a message ≥ MIN_CONSOLIDATE_LEN (80 chars).
+    // Send on_message_complete with a message ≥ min_consolidate_len (80 chars).
     let msg = "Rust's ownership system ensures memory safety without a garbage \
                collector by enforcing borrow rules at compile time.";
     assert!(msg.len() >= 80, "message must be ≥ 80 chars for this test to be meaningful");
