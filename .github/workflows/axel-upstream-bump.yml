@@ -1,0 +1,112 @@
+name: axel-upstream-bump
+on:
+  schedule:
+    - cron: "0 7 * * *"          # 07:00 UTC daily
+  workflow_dispatch: {}           # manual trigger, no inputs required
+
+concurrency:
+  group: axel-upstream-bump
+  cancel-in-progress: false       # never cancel a running bump; let it finish
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: axel-memory-manager-plugin/extensions/memory-manager
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0            # needed for git log range in PR body
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: axel-memory-manager-plugin/extensions/memory-manager
+
+      - name: Capture old SHA
+        id: old
+        run: |
+          OLD=$(grep -A2 'name = "axel"' Cargo.lock | grep 'source' | grep -oP '#\K[a-f0-9]+')
+          echo "sha=$OLD" >> "$GITHUB_OUTPUT"
+
+      - name: cargo update -p axel
+        run: cargo update -p axel
+
+      - name: Capture new SHA
+        id: new
+        run: |
+          NEW=$(grep -A2 'name = "axel"' Cargo.lock | grep 'source' | grep -oP '#\K[a-f0-9]+')
+          echo "sha=$NEW" >> "$GITHUB_OUTPUT"
+
+      - name: Abort if SHA unchanged (already current)
+        if: steps.old.outputs.sha == steps.new.outputs.sha
+        run: |
+          echo "axel is already at ${{ steps.old.outputs.sha }}; nothing to do."
+          exit 0
+
+      - name: Run test suite
+        run: cargo test -j 4
+
+      - name: Build release binary (compile check)
+        run: cargo build --release
+
+      - name: Compute upstream commit log
+        id: log
+        run: |
+          # Fetch the upstream repo to get the log range
+          git -C $(cargo metadata --no-deps --format-version 1 \
+            | python3 -c "import json,sys; \
+              pkgs=json.load(sys.stdin)['packages']; \
+              print([p for p in pkgs if p['name']=='axel'][0]['manifest_path'].rsplit('/',2)[0])") \
+            log --oneline ${{ steps.old.outputs.sha }}..${{ steps.new.outputs.sha }} \
+            > /tmp/axel_log.txt 2>/dev/null || echo "(git log unavailable)" > /tmp/axel_log.txt
+          # Truncate to avoid PR body limits
+          head -40 /tmp/axel_log.txt > /tmp/axel_log_trunc.txt
+          {
+            echo 'text<<EOF'
+            cat /tmp/axel_log_trunc.txt
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Stable branch name (§8): force-pushed nightly so one PR is updated
+          # rather than a new PR being opened for every run.
+          # The new SHA appears in the title and commit message instead.
+          branch: chore/axel-upstream-bump
+          base: main
+          title: "chore(axel): bump upstream axel to ${{ steps.new.outputs.sha }}"
+          body: |
+            ## Automated upstream axel bump
+
+            | | SHA |
+            |---|---|
+            | **Before** | `${{ steps.old.outputs.sha }}` |
+            | **After**  | `${{ steps.new.outputs.sha }}` |
+
+            ### Upstream commits included
+
+            ```
+            ${{ steps.log.outputs.text }}
+            ```
+
+            ### Checklist
+            - [x] `cargo update -p axel` ran cleanly
+            - [x] `cargo test` passed
+            - [x] `cargo build --release` succeeded
+            - [ ] Reviewer: verify no API surface changes in the diff above
+            - [ ] Reviewer: merge when satisfied; release workflow publishes binaries on the next tag
+
+          commit-message: "chore(axel): bump upstream axel to ${{ steps.new.outputs.sha }}"
+          delete-branch: true
+          labels: "dependencies,axel"
