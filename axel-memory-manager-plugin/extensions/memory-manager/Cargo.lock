@@ -1027,8 +1027,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axel",
+ "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

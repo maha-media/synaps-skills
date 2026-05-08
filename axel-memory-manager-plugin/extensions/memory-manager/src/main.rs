@@ -330,3 +330,70 @@ fn extract_text(params: &Value) -> String {
     String::new()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── extract_text ──────────────────────────────────────────────────────────
+
+    /// Canonical Synaps wire shape: top-level "message" is a plain string.
+    /// This is what HookEvent serialises to for before_message / on_message_complete.
+    #[test]
+    fn extract_text_synaps_wire_shape() {
+        let params = json!({
+            "kind": "on_message_complete",
+            "message": "The assistant explained the difference between TCP and UDP.",
+            "data": null
+        });
+        assert_eq!(
+            extract_text(&params),
+            "The assistant explained the difference between TCP and UDP."
+        );
+    }
+
+    /// Legacy shape 1: top-level "content" string (extension-internal convention).
+    #[test]
+    fn extract_text_legacy_content_field() {
+        let params = json!({ "content": "some legacy payload" });
+        assert_eq!(extract_text(&params), "some legacy payload");
+    }
+
+    /// Legacy shape 2: nested "message.content" object (OpenAI message shape).
+    #[test]
+    fn extract_text_legacy_nested_message_content() {
+        let params = json!({ "message": { "content": "nested content" } });
+        assert_eq!(extract_text(&params), "nested content");
+    }
+
+    /// Empty / missing — should return empty string, not panic.
+    #[test]
+    fn extract_text_empty_params() {
+        assert_eq!(extract_text(&json!({})), "");
+    }
+
+    // ── before_message response shape ─────────────────────────────────────────
+
+    /// Verify that when a non-empty contextual_recall result is available the
+    /// dispatcher emits action:"inject" (not "modify"). Tested via handle_hook
+    /// directly so we don't need a live brain — we can use the passthrough path
+    /// (brain = None) to verify the continue case, and a mock for inject.
+    /// Full inject-path coverage requires the integration test (§4.2).
+    #[test]
+    fn before_message_passthrough_when_no_brain() {
+        let params = json!({
+            "kind": "before_message",
+            "message": "What is Rust's borrow checker?",
+        });
+        let result = handle_hook(None, "before_message", &params);
+        assert_eq!(result["action"], "continue");
+    }
+
+    /// on_message_complete with short text (< MIN_CONSOLIDATE_LEN) → continue.
+    #[test]
+    fn on_message_complete_short_text_no_brain() {
+        let params = json!({ "kind": "on_message_complete", "message": "ok" });
+        let result = handle_hook(None, "on_message_complete", &params);
+        assert_eq!(result["action"], "continue");
+    }
+}
