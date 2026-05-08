@@ -259,12 +259,52 @@ fn dispatch(
         // No wall-clock cap here; manual RPC can run as long as needed.
         "consolidate" => {
             if let Some(b) = brain {
-                run_consolidation(b, "manual_rpc");
-                json!({ "ok": true })
+                let stats = run_consolidation(b, "manual_rpc");
+                json!({ "ok": true, "stats": stats })
             } else {
                 json!({ "ok": false, "reason": "no brain" })
             }
         }
+
+        // Custom editor for the `run_consolidate_now` action button. Opening
+        // the editor IS the action — we run consolidation synchronously and
+        // render the result; Esc dismisses. There is no committable value.
+        // See SynapsCLI/src/extensions/settings_editor.rs for payload shape.
+        "settings.editor.open" => {
+            let field = params
+                .get("field")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if field != "run_consolidate_now" {
+                anyhow::bail!("settings.editor.open: unknown field {field:?}");
+            }
+            let label = match brain {
+                Some(b) => {
+                    let stats = run_consolidation(b, "settings_editor");
+                    let n = stats.unwrap_or(0);
+                    format!("✓ Consolidated {n} memories")
+                }
+                None => "⚠ No brain available — consolidation skipped".to_string(),
+            };
+            json!({
+                "rows": [{
+                    "label": label,
+                    "selectable": false
+                }],
+                "cursor": null,
+                "footer": "Press Esc to close"
+            })
+        }
+
+        // Per-keypress notification dispatched as a request by the host.
+        // We only care about Esc (close); everything else is a no-op.
+        "settings.editor.key" => {
+            let _ = params; // key text in params.key — we don't branch on it
+            json!({})
+        }
+
+        // No committable value for an action-only editor; ACK and move on.
+        "settings.editor.commit" => json!({}),
 
         // Synaps dispatches every hook through a single "hook.handle" RPC,
         // with the actual kind in `params.kind`. The hook-kind strings are
@@ -284,12 +324,16 @@ fn dispatch(
 /// `trigger` is a short label for log messages (e.g. `"session_end"`,
 /// `"manual_rpc"`).
 ///
+/// Returns `Some(reindexed_count)` on success so callers (e.g. the
+/// `settings.editor.open` handler for `run_consolidate_now`) can surface a
+/// number to the user; `None` on consolidation error.
+///
 /// Verified upstream field names (cdfe734):
 ///   `ConsolidateStats.reindex`   → `ReindexStats   { checked, reindexed, new_files, pruned, skipped }`
 ///   `ConsolidateStats.strengthen`→ `StrengthenStats { boosted, decayed, extinction_signals }`
 ///   `ConsolidateStats.prune`     → `PruneStats      { removed, flagged, misaligned }`
 ///   `ConsolidateOptions`         — no Default derive; all four fields must be specified.
-fn run_consolidation(brain: &mut AxelBrain, trigger: &str) {
+fn run_consolidation(brain: &mut AxelBrain, trigger: &str) -> Option<u64> {
     use axel::consolidate::{consolidate, ConsolidateOptions};
     use std::collections::HashSet;
     let opts = ConsolidateOptions {
@@ -300,17 +344,23 @@ fn run_consolidation(brain: &mut AxelBrain, trigger: &str) {
     };
     let started = std::time::Instant::now();
     match consolidate(brain.search_mut(), &opts) {
-        Ok(stats) => eprintln!(
-            "axel: consolidation ({trigger}) done in {:.1}s \
-             — reindexed={} boosted={} decayed={} removed={} flagged={}",
-            started.elapsed().as_secs_f32(),
-            stats.reindex.reindexed,
-            stats.strengthen.boosted,
-            stats.strengthen.decayed,
-            stats.prune.removed,
-            stats.prune.flagged,
-        ),
-        Err(e) => eprintln!("axel: consolidation ({trigger}) failed: {e}"),
+        Ok(stats) => {
+            eprintln!(
+                "axel: consolidation ({trigger}) done in {:.1}s \
+                 — reindexed={} boosted={} decayed={} removed={} flagged={}",
+                started.elapsed().as_secs_f32(),
+                stats.reindex.reindexed,
+                stats.strengthen.boosted,
+                stats.strengthen.decayed,
+                stats.prune.removed,
+                stats.prune.flagged,
+            );
+            Some(stats.reindex.reindexed as u64)
+        }
+        Err(e) => {
+            eprintln!("axel: consolidation ({trigger}) failed: {e}");
+            None
+        }
     }
 }
 
