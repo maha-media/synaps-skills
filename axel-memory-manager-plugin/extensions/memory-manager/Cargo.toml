@@ -20,6 +20,11 @@ notify = "6"
 # Upstream Axel — portable agent intelligence (.r8 brain file).
 # https://github.com/maha-media/axel
 axel = { git = "https://github.com/maha-media/axel", branch = "main" }
+axel-memkoshi = { git = "https://github.com/maha-media/axel", branch = "main" }
+velocirag = { git = "https://github.com/maha-media/axel", branch = "main" }
+ort = { version = "2.0.0-rc.12", features = ["download-binaries"] }
+tokenizers = "0.21"
+ndarray = "0.17"
 
 [profile.release]
 opt-level = 3

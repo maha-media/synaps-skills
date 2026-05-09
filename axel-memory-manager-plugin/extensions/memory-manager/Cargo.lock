@@ -1105,11 +1105,16 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axel",
+ "axel-memkoshi",
+ "ndarray",
  "notify",
+ "ort",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
+ "tokenizers",
+ "velocirag",
 ]
 
 [[package]]
