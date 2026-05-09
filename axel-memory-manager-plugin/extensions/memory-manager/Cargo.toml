@@ -18,8 +18,8 @@ anyhow = "1"
 notify = "6"
 
 # Upstream Axel — portable agent intelligence (.r8 brain file).
-# https://github.com/HaseebKhalid1507/axel
-axel = { git = "https://github.com/HaseebKhalid1507/axel", branch = "main" }
+# https://github.com/maha-media/axel
+axel = { git = "https://github.com/maha-media/axel", branch = "main" }
 
 [profile.release]
 opt-level = 3
