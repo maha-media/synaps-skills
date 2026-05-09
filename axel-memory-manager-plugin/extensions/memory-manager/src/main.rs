@@ -9,7 +9,8 @@
 //!        on_session_start, on_session_end.
 
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
@@ -21,7 +22,8 @@ mod enricher;
 mod gliner;
 mod settings;
 mod timer;
-use settings::Settings;
+use gliner::GlinerSession;
+use settings::{GlinerEnabled, Settings};
 use timer::{spawn_consolidation_timer, TimerCmd};
 
 const PROTOCOL_VERSION: u32 = 1;
@@ -61,6 +63,12 @@ fn main() -> anyhow::Result<()> {
         }
     };
     let brain: Arc<Mutex<Option<AxelBrain>>> = Arc::new(Mutex::new(initial_brain));
+
+    // GLiNER session — lazy-loaded on first chat turn that needs it (or eagerly
+    // after a successful `axel download`). `attempted` guards against repeated
+    // load attempts within a single plugin run; restart re-attempts.
+    let gliner: Arc<Mutex<Option<GlinerSession>>> = Arc::new(Mutex::new(None));
+    let gliner_load_attempted: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
     // Background consolidation timer. The channel is the single point of
     // truth for re-arm + shutdown signals; the file-watcher (below) sends
@@ -117,7 +125,7 @@ fn main() -> anyhow::Result<()> {
             drop(g);
         }
 
-        let result = dispatch(&brain, &settings, method, &params);
+        let result = dispatch(&brain, &settings, &gliner, &gliner_load_attempted, method, &params);
 
         if let Some(id) = id {
             let response = match result {
@@ -292,6 +300,8 @@ fn resolve_brain_path() -> PathBuf {
 fn dispatch(
     brain: &Arc<Mutex<Option<AxelBrain>>>,
     settings: &Arc<Mutex<Settings>>,
+    gliner: &Arc<Mutex<Option<GlinerSession>>>,
+    gliner_load_attempted: &Arc<AtomicBool>,
     method: &str,
     params: &Value,
 ) -> anyhow::Result<Value> {
@@ -385,7 +395,7 @@ fn dispatch(
                 })
                 .unwrap_or_default();
             let sub = args.first().map(String::as_str).unwrap_or("help");
-            handle_axel_command(brain, sub)
+            handle_axel_command(brain, gliner, sub)
         }
 
         // Synaps dispatches every hook through a single "hook.handle" RPC,
@@ -393,7 +403,7 @@ fn dispatch(
         // never sent as method names directly.
         "hook.handle" => {
             let kind = params.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-            handle_hook(brain, settings, kind, params)
+            handle_hook(brain, settings, gliner, gliner_load_attempted, kind, params)
         }
 
         _ => anyhow::bail!("method not found: {method}"),
@@ -449,6 +459,8 @@ fn run_consolidation(brain: &mut AxelBrain, trigger: &str) -> Option<u64> {
 fn handle_hook(
     brain: &Arc<Mutex<Option<AxelBrain>>>,
     settings: &Arc<Mutex<Settings>>,
+    gliner: &Arc<Mutex<Option<GlinerSession>>>,
+    gliner_load_attempted: &Arc<AtomicBool>,
     kind: &str,
     params: &Value,
 ) -> Value {
@@ -554,9 +566,15 @@ fn handle_hook(
                 (g.min_consolidate_len, g.enrichment_trigger)
             };
             if text.len() >= min_len {
+                // Lazy-load GLiNER on first qualifying turn so the heuristic
+                // enricher can be promoted to entity-aware extraction.
+                {
+                    let s = settings.lock().expect("settings lock");
+                    ensure_gliner(gliner, gliner_load_attempted, &s);
+                }
                 let mut g = brain.lock().expect("brain lock");
                 if let Some(b) = g.as_mut() {
-                    if let Err(e) = remember_with_trigger(b, &text, trigger) {
+                    if let Err(e) = remember_with_trigger(b, &text, trigger, gliner) {
                         eprintln!("axel: remember failed: {e}");
                     }
                 }
@@ -614,6 +632,7 @@ fn remember_with_trigger(
     brain: &mut AxelBrain,
     text: &str,
     trigger: settings::EnrichmentTrigger,
+    gliner: &Arc<Mutex<Option<GlinerSession>>>,
 ) -> anyhow::Result<()> {
     use settings::EnrichmentTrigger;
     match trigger {
@@ -623,10 +642,10 @@ fn remember_with_trigger(
         EnrichmentTrigger::OnSessionEnd => {
             log_session_end_stub_once();
             // Fall through to OnComplete behaviour.
-            remember_enriched(brain, text)?;
+            remember_enriched(brain, text, gliner)?;
         }
         EnrichmentTrigger::OnComplete => {
-            remember_enriched(brain, text)?;
+            remember_enriched(brain, text, gliner)?;
         }
     }
     Ok(())
@@ -645,12 +664,17 @@ fn log_session_end_stub_once() {
 
 /// Enrich `text` with the heuristic enricher (and GLiNER if loaded), build a
 /// `Memory`, then persist via Track A's `remember_full`.
-fn remember_enriched(brain: &mut AxelBrain, text: &str) -> anyhow::Result<()> {
+fn remember_enriched(
+    brain: &mut AxelBrain,
+    text: &str,
+    gliner: &Arc<Mutex<Option<GlinerSession>>>,
+) -> anyhow::Result<()> {
     use axel_memkoshi::memory::{Memory, MemoryCategory};
-    // GLiNER stays unloaded in v1; the lazy-load hook (Phase 1) is wired
-    // only via the `axel download` subcommand for now. The heuristic
-    // enricher is plenty useful on its own.
-    let patch = enricher::enrich(text, None);
+    // Hold the GLiNER lock only for the duration of the enrich() call —
+    // brain I/O happens after the guard is dropped.
+    let g = gliner.lock().expect("gliner lock");
+    let patch = enricher::enrich(text, g.as_ref());
+    drop(g);
     let category = patch.category.unwrap_or(MemoryCategory::Events);
     let topic = patch.topic.clone().unwrap_or_else(|| category.as_str().to_string());
     let title = patch
@@ -689,7 +713,11 @@ fn apply_patch_to_memory(m: &mut axel_memkoshi::memory::Memory, p: axel::MemoryP
 ///   * `models` — list cached models with sizes (`~/.cache/velocirag/models/`).
 ///   * `download` — eagerly fetch the GLiNER model so first chat turn doesn't pay the wait.
 ///   * `consolidate` — invoke the existing `consolidate` RPC for parity with the bg timer.
-fn handle_axel_command(brain: &Arc<Mutex<Option<AxelBrain>>>, sub: &str) -> Value {
+fn handle_axel_command(
+    brain: &Arc<Mutex<Option<AxelBrain>>>,
+    gliner: &Arc<Mutex<Option<GlinerSession>>>,
+    sub: &str,
+) -> Value {
     match sub {
         "help" | "" => {
             let text = "axel — Synaps memory & enrichment helper\n\n\
@@ -724,6 +752,20 @@ fn handle_axel_command(brain: &Arc<Mutex<Option<AxelBrain>>>, sub: &str) -> Valu
                 Ok(p) => {
                     let elapsed = started.elapsed().as_secs_f32();
                     eprintln!("axel: download: ready at {} ({:.1}s)", p.display(), elapsed);
+                    // Eagerly load so the freshly-downloaded model is usable
+                    // in the same plugin session without a restart.
+                    match GlinerSession::load(&p) {
+                        Ok(s) => {
+                            *gliner.lock().expect("gliner lock") = Some(s);
+                            eprintln!("axel: gliner: loaded after download");
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "axel: gliner: post-download load failed: {e} \
+                                 — next session will retry"
+                            );
+                        }
+                    }
                     json!({ "ok": true, "path": p.display().to_string(), "elapsed_secs": elapsed })
                 }
                 Err(e) => {
@@ -766,6 +808,71 @@ fn dir_size_bytes(path: &std::path::Path) -> std::io::Result<u64> {
         };
     }
     Ok(total)
+}
+
+/// Resolve the directory we expect the GLiNER model to live in.
+///
+/// `$AXEL_GLINER_MODEL_DIR` wins (used by tests + power users); otherwise we
+/// fall back to velocirag's standard cache layout
+/// (`$XDG_CACHE_HOME/velocirag/models/gliner-small-v2.1`, which honours
+/// `$HOME` via the `dirs` crate on Linux).
+fn gliner_model_dir() -> PathBuf {
+    if let Some(p) = std::env::var_os("AXEL_GLINER_MODEL_DIR") {
+        return PathBuf::from(p);
+    }
+    velocirag::download::models_cache_dir().join(gliner::GLINER_SMALL_SPEC.local_dir)
+}
+
+/// Are the two ONNX/tokenizer files required by `GlinerSession::load`
+/// present in `dir`?
+fn gliner_model_cached(dir: &Path) -> bool {
+    dir.join("onnx/model.onnx").is_file() && dir.join("tokenizer.json").is_file()
+}
+
+/// One-shot lazy load. Sets `attempted=true` regardless of outcome and logs
+/// to stderr only. **Refuses to download** — if the model isn't cached, we
+/// log a hint pointing at `axel download` and stay in heuristic-only mode.
+///
+/// Idempotent: subsequent calls within the same plugin run early-return on
+/// the `attempted` flag. A plugin restart is required to re-attempt (e.g.
+/// after the user runs `axel download`).
+fn ensure_gliner(
+    gliner: &Arc<Mutex<Option<GlinerSession>>>,
+    attempted: &AtomicBool,
+    settings: &Settings,
+) {
+    if attempted.load(Ordering::Relaxed) {
+        return;
+    }
+    if !matches!(settings.gliner_enabled, GlinerEnabled::On) {
+        eprintln!("axel: gliner: disabled by setting (gliner_enabled=off); skipping load");
+        attempted.store(true, Ordering::Relaxed);
+        return;
+    }
+    let model_dir = gliner_model_dir();
+    if !gliner_model_cached(&model_dir) {
+        eprintln!(
+            "axel: gliner: model not cached at {} — run `axel download` to enable entity enrichment",
+            model_dir.display()
+        );
+        attempted.store(true, Ordering::Relaxed);
+        return;
+    }
+    let started = std::time::Instant::now();
+    eprintln!("axel: gliner: lazy-loading from {}", model_dir.display());
+    match GlinerSession::load(&model_dir) {
+        Ok(s) => {
+            *gliner.lock().expect("gliner lock") = Some(s);
+            eprintln!(
+                "axel: gliner: loaded in {:.1}s",
+                started.elapsed().as_secs_f32()
+            );
+        }
+        Err(e) => {
+            eprintln!("axel: gliner: load failed: {e}");
+        }
+    }
+    attempted.store(true, Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -820,6 +927,14 @@ mod tests {
         Arc::new(Mutex::new(None))
     }
 
+    fn empty_gliner() -> Arc<Mutex<Option<GlinerSession>>> {
+        Arc::new(Mutex::new(None))
+    }
+
+    fn fresh_attempted() -> Arc<AtomicBool> {
+        Arc::new(AtomicBool::new(false))
+    }
+
     /// on_message_complete with short text (< min_consolidate_len) → continue.
     #[test]
     fn before_message_passthrough_when_no_brain() {
@@ -827,7 +942,14 @@ mod tests {
             "kind": "before_message",
             "message": "What is Rust's borrow checker?",
         });
-        let result = handle_hook(&empty_brain(), &test_settings(), "before_message", &params);
+        let result = handle_hook(
+            &empty_brain(),
+            &test_settings(),
+            &empty_gliner(),
+            &fresh_attempted(),
+            "before_message",
+            &params,
+        );
         assert_eq!(result["action"], "continue");
     }
 
@@ -835,7 +957,14 @@ mod tests {
     #[test]
     fn on_message_complete_short_text_no_brain() {
         let params = json!({ "kind": "on_message_complete", "message": "ok" });
-        let result = handle_hook(&empty_brain(), &test_settings(), "on_message_complete", &params);
+        let result = handle_hook(
+            &empty_brain(),
+            &test_settings(),
+            &empty_gliner(),
+            &fresh_attempted(),
+            "on_message_complete",
+            &params,
+        );
         assert_eq!(result["action"], "continue");
     }
 
@@ -845,11 +974,69 @@ mod tests {
     /// it must return `{"ok": false, "reason": "no brain"}` — no panic.
     #[test]
     fn consolidate_rpc_no_brain_returns_ok_false() {
-        let result = dispatch(&empty_brain(), &test_settings(), "consolidate", &json!({}))
-            .expect("dispatch must not error for consolidate method");
+        let result = dispatch(
+            &empty_brain(),
+            &test_settings(),
+            &empty_gliner(),
+            &fresh_attempted(),
+            "consolidate",
+            &json!({}),
+        )
+        .expect("dispatch must not error for consolidate method");
         assert_eq!(result["ok"], false, "expected ok=false when no brain");
         let reason = result["reason"].as_str().expect("reason field must be a string");
         assert!(!reason.is_empty(), "reason must be non-empty");
         assert_eq!(reason, "no brain");
+    }
+
+    // ── ensure_gliner lazy-load ───────────────────────────────────────────────
+
+    /// `gliner_enabled=Off` must short-circuit: no load attempt, but the
+    /// `attempted` flag still flips so we don't poll the disk every turn.
+    #[test]
+    fn ensure_gliner_skips_when_disabled() {
+        let mut s = Settings::default();
+        s.gliner_enabled = GlinerEnabled::Off;
+        let gliner = empty_gliner();
+        let attempted = fresh_attempted();
+
+        ensure_gliner(&gliner, &attempted, &s);
+
+        assert!(gliner.lock().unwrap().is_none(), "no session should be loaded when disabled");
+        assert!(attempted.load(Ordering::Relaxed), "attempted must be set even when disabled");
+    }
+
+    /// When the model files aren't cached on disk we must log a hint and
+    /// stay in heuristic-only mode (gliner=None, attempted=true).
+    #[test]
+    fn ensure_gliner_skips_when_model_not_cached() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        // Point the helper at an empty dir via the env override hook.
+        std::env::set_var("AXEL_GLINER_MODEL_DIR", tmp.path().join("nope-not-here"));
+        let s = Settings::default(); // gliner_enabled defaults to On
+        let gliner = empty_gliner();
+        let attempted = fresh_attempted();
+
+        ensure_gliner(&gliner, &attempted, &s);
+
+        assert!(gliner.lock().unwrap().is_none(), "no session when files missing");
+        assert!(attempted.load(Ordering::Relaxed), "attempted must be set");
+        std::env::remove_var("AXEL_GLINER_MODEL_DIR");
+    }
+
+    /// Calling `ensure_gliner` twice must not double-log or re-attempt the
+    /// load. The early return on `attempted` is the contract.
+    #[test]
+    fn ensure_gliner_idempotent_on_second_call() {
+        let mut s = Settings::default();
+        s.gliner_enabled = GlinerEnabled::Off;
+        let gliner = empty_gliner();
+        let attempted = fresh_attempted();
+
+        ensure_gliner(&gliner, &attempted, &s);
+        ensure_gliner(&gliner, &attempted, &s);
+
+        assert!(gliner.lock().unwrap().is_none());
+        assert!(attempted.load(Ordering::Relaxed));
     }
 }
