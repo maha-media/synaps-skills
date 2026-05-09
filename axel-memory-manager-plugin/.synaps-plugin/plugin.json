@@ -29,6 +29,14 @@
       { "hook": "on_session_end" }
     ]
   },
+  "commands": [
+    {
+      "name": "axel",
+      "description": "Manage Axel memory brain and GLiNER models.",
+      "interactive": true,
+      "subcommands": ["help", "models", "download", "consolidate"]
+    }
+  ],
   "settings": {
     "categories": [
       {
@@ -56,6 +64,30 @@
             "label": "Run consolidation now",
             "editor": "custom",
             "help": "Triggers an immediate consolidation pass."
+          },
+          {
+            "key": "gliner_enabled",
+            "label": "GLiNER metadata enrichment",
+            "editor": "cycler",
+            "options": ["off", "on"],
+            "default": "on",
+            "help": "When on, runs a small CPU model to extract tags, topics, and category from each chat turn. ~165 MB model downloaded on first use; ~50 ms per turn."
+          },
+          {
+            "key": "gliner_model",
+            "label": "GLiNER model variant",
+            "editor": "cycler",
+            "options": ["small", "medium"],
+            "default": "small",
+            "help": "Model size. Small is 165 MB / ~300 MB RAM / ~50 ms; medium is 440 MB / ~600 MB / ~120 ms. Restart required after change."
+          },
+          {
+            "key": "enrichment_trigger",
+            "label": "When to enrich memories",
+            "editor": "cycler",
+            "options": ["off", "on_complete", "on_session_end"],
+            "default": "on_complete",
+            "help": "off: never enrich. on_complete: per chat turn (live tags). on_session_end: batch at end (cheaper). First chat turn after enabling will block ~10–30 s while the model downloads."
           }
         ]
       }
