@@ -85,16 +85,21 @@ fn apply_gliner_spans(patch: &mut MemoryPatch, spans: &[crate::gliner::Span]) {
         patch.tags = Some(tags);
     }
 
-    // Topic = highest-scoring span; otherwise use category as topic label.
+    // Topic = highest-scoring span IF it satisfies axel's `topic >= 5
+    // chars` validation (memkoshi/pipeline.rs). Otherwise leave None and
+    // let the caller fall back to a category-derived topic.
     if let Some(top) = spans
         .iter()
+        .filter(|s| s.text.chars().count() >= 5)
         .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal))
     {
         patch.topic = Some(top.text.clone());
-        // Related = other spans with score > 0.4 excluding the topic.
+        // Related = other spans with score > 0.4 excluding the topic; also
+        // require the same 5-char minimum so a downstream `update_memory_full`
+        // doesn't reject the patch.
         let related: Vec<String> = spans
             .iter()
-            .filter(|s| s.score > 0.4 && !std::ptr::eq(*s, top))
+            .filter(|s| s.score > 0.4 && s.text.chars().count() >= 5 && !std::ptr::eq(*s, top))
             .map(|s| s.text.clone())
             .collect();
         if !related.is_empty() {
@@ -409,6 +414,44 @@ mod tests {
         assert!(tags.iter().any(|t| t == "rs"));
         assert!(p.topic.is_none(), "topic must be unset without gliner");
         assert!(p.related_topics.is_none());
+    }
+
+    #[test]
+    fn apply_gliner_spans_skips_short_topic() {
+        // axel requires topic >= 5 chars. Single-word spans like "Rust"
+        // (4 chars) must NOT be promoted to topic — leave None so the
+        // caller falls back to a category-derived label.
+        use crate::gliner::Span;
+        let mut patch = MemoryPatch::default();
+        let spans = vec![
+            Span { start: 0, end: 4, text: "Rust".into(), label: "language".into(), score: 0.95 },
+            Span { start: 5, end: 9, text: "GLib".into(), label: "tool".into(), score: 0.92 },
+        ];
+        apply_gliner_spans(&mut patch, &spans);
+        assert!(
+            patch.topic.is_none(),
+            "topic must be None when all spans are <5 chars; got {:?}",
+            patch.topic
+        );
+        assert!(
+            patch.related_topics.is_none(),
+            "related_topics must be None when all spans are <5 chars; got {:?}",
+            patch.related_topics
+        );
+    }
+
+    #[test]
+    fn apply_gliner_spans_picks_long_enough_top() {
+        // Top-scoring span is too short; second span satisfies the 5-char
+        // minimum and should win the topic slot.
+        use crate::gliner::Span;
+        let mut patch = MemoryPatch::default();
+        let spans = vec![
+            Span { start: 0, end: 4, text: "Rust".into(), label: "language".into(), score: 0.99 },
+            Span { start: 5, end: 14, text: "OpenAI Inc".into(), label: "organization".into(), score: 0.85 },
+        ];
+        apply_gliner_spans(&mut patch, &spans);
+        assert_eq!(patch.topic.as_deref(), Some("OpenAI Inc"));
     }
 
     #[test]
