@@ -41,6 +41,81 @@ pub struct Settings {
     /// Background-timer interval in seconds (Phase 2 consumer). `0` disables.
     /// Must be one of `ALLOWED_INTERVALS`.
     pub consolidate_interval_secs: u64,
+    /// "off" | "on" — when on, runs GLiNER metadata enrichment per chat turn.
+    pub gliner_enabled: GlinerEnabled,
+    /// "small" | "medium" — model variant.
+    pub gliner_model: GlinerModelVariant,
+    /// "off" | "on_complete" | "on_session_end" — when to run enrichment.
+    pub enrichment_trigger: EnrichmentTrigger,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlinerEnabled {
+    Off,
+    On,
+}
+
+impl GlinerEnabled {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::On => "on",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "off" => Some(Self::Off),
+            "on" => Some(Self::On),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlinerModelVariant {
+    Small,
+    Medium,
+}
+
+impl GlinerModelVariant {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Small => "small",
+            Self::Medium => "medium",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "small" => Some(Self::Small),
+            "medium" => Some(Self::Medium),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnrichmentTrigger {
+    Off,
+    OnComplete,
+    OnSessionEnd,
+}
+
+impl EnrichmentTrigger {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::OnComplete => "on_complete",
+            Self::OnSessionEnd => "on_session_end",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "off" => Some(Self::Off),
+            "on_complete" => Some(Self::OnComplete),
+            "on_session_end" => Some(Self::OnSessionEnd),
+            _ => None,
+        }
+    }
 }
 
 impl Default for Settings {
@@ -48,6 +123,9 @@ impl Default for Settings {
         Self {
             min_consolidate_len: 40,
             consolidate_interval_secs: 0,
+            gliner_enabled: GlinerEnabled::On,
+            gliner_model: GlinerModelVariant::Small,
+            enrichment_trigger: EnrichmentTrigger::OnComplete,
         }
     }
 }
@@ -149,11 +227,34 @@ impl Settings {
                     self.consolidate_interval_secs
                 ),
             },
-            other => {
-                // Unknown keys are tolerated (forward-compat with future
-                // settings written by a newer host). Log at debug verbosity.
-                eprintln!("axel: ignoring unknown setting key {other:?}");
-            }
+            other => match other {
+                "gliner_enabled" => match GlinerEnabled::parse(value) {
+                    Some(v) => self.gliner_enabled = v,
+                    None => eprintln!(
+                        "axel: WARN gliner_enabled={value:?} not in [off,on]; keeping {}",
+                        self.gliner_enabled.as_str()
+                    ),
+                },
+                "gliner_model" => match GlinerModelVariant::parse(value) {
+                    Some(v) => self.gliner_model = v,
+                    None => eprintln!(
+                        "axel: WARN gliner_model={value:?} not in [small,medium]; keeping {}",
+                        self.gliner_model.as_str()
+                    ),
+                },
+                "enrichment_trigger" => match EnrichmentTrigger::parse(value) {
+                    Some(v) => self.enrichment_trigger = v,
+                    None => eprintln!(
+                        "axel: WARN enrichment_trigger={value:?} not in [off,on_complete,on_session_end]; keeping {}",
+                        self.enrichment_trigger.as_str()
+                    ),
+                },
+                _ => {
+                    // Unknown keys are tolerated (forward-compat with future
+                    // settings written by a newer host). Log at debug verbosity.
+                    eprintln!("axel: ignoring unknown setting key {other:?}");
+                }
+            },
         }
     }
 }
@@ -306,6 +407,47 @@ mod tests {
         let s = Settings::default();
         assert_eq!(s.min_consolidate_len, 40);
         assert_eq!(s.consolidate_interval_secs, 0);
+        assert_eq!(s.gliner_enabled, GlinerEnabled::On);
+        assert_eq!(s.gliner_model, GlinerModelVariant::Small);
+        assert_eq!(s.enrichment_trigger, EnrichmentTrigger::OnComplete);
+    }
+
+    #[test]
+    fn apply_toml_str_updates_gliner_enabled() {
+        let mut s = Settings::default();
+        s.apply_toml_str("gliner_enabled = \"off\"\n");
+        assert_eq!(s.gliner_enabled, GlinerEnabled::Off);
+        s.apply_toml_str("gliner_enabled = on\n");
+        assert_eq!(s.gliner_enabled, GlinerEnabled::On);
+    }
+
+    #[test]
+    fn apply_toml_str_rejects_invalid_gliner_enabled() {
+        let mut s = Settings::default();
+        s.apply_toml_str("gliner_enabled = \"yes\"\n");
+        assert_eq!(
+            s.gliner_enabled,
+            GlinerEnabled::On,
+            "must keep previous value on invalid input"
+        );
+    }
+
+    #[test]
+    fn apply_toml_str_updates_enrichment_trigger() {
+        let mut s = Settings::default();
+        s.apply_toml_str("enrichment_trigger = \"off\"\n");
+        assert_eq!(s.enrichment_trigger, EnrichmentTrigger::Off);
+        s.apply_toml_str("enrichment_trigger = on_session_end\n");
+        assert_eq!(s.enrichment_trigger, EnrichmentTrigger::OnSessionEnd);
+        s.apply_toml_str("enrichment_trigger = \"on_complete\"\n");
+        assert_eq!(s.enrichment_trigger, EnrichmentTrigger::OnComplete);
+    }
+
+    #[test]
+    fn apply_toml_str_updates_gliner_model() {
+        let mut s = Settings::default();
+        s.apply_toml_str("gliner_model = \"medium\"\n");
+        assert_eq!(s.gliner_model, GlinerModelVariant::Medium);
     }
 
     #[test]
