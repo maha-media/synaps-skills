@@ -664,28 +664,99 @@ fn log_session_end_stub_once() {
 
 /// Enrich `text` with the heuristic enricher (and GLiNER if loaded), build a
 /// `Memory`, then persist via Track A's `remember_full`.
+///
+/// `axel_memkoshi::pipeline::ValidationStage` enforces:
+///   * `content.chars().count() >= 50`
+///   * `title.chars().count() >= 10`
+///   * `topic.chars().count() >= 5`
+///   * `importance` in `[0.0, 1.0]`
+///
+/// Short content is dropped (returns Ok with a stderr log). Short title /
+/// topic are amended into compliance via [`amend_to_validation_min`] so a
+/// well-classified turn isn't lost to a trivially-short title or a single-word
+/// GLiNER span.
 fn remember_enriched(
     brain: &mut AxelBrain,
     text: &str,
     gliner: &Arc<Mutex<Option<GlinerSession>>>,
 ) -> anyhow::Result<()> {
     use axel_memkoshi::memory::{Memory, MemoryCategory};
+
+    // Skip turns shorter than axel's content minimum. The plugin's
+    // `min_consolidate_len` setting can be lower than 50 (heuristic-only
+    // enrichment of short turns is still useful for tag extraction tests),
+    // but the brain itself rejects short content — drop without writing.
+    if text.chars().count() < 50 {
+        eprintln!(
+            "axel: remember: skipping turn ({} chars < 50, axel content min)",
+            text.chars().count()
+        );
+        return Ok(());
+    }
+
     // Hold the GLiNER lock only for the duration of the enrich() call —
     // brain I/O happens after the guard is dropped.
     let g = gliner.lock().expect("gliner lock");
     let patch = enricher::enrich(text, g.as_ref());
     drop(g);
     let category = patch.category.unwrap_or(MemoryCategory::Events);
-    let topic = patch.topic.clone().unwrap_or_else(|| category.as_str().to_string());
-    let title = patch
+    let topic_raw = patch.topic.clone().unwrap_or_else(|| category.as_str().to_string());
+    let title_raw = patch
         .title
         .clone()
         .unwrap_or_else(|| text.lines().next().unwrap_or(text).chars().take(80).collect());
+    let (title, topic) = amend_to_validation_min(&title_raw, &topic_raw, category);
 
     let mut memory = Memory::new(category, topic, title, text);
     apply_patch_to_memory(&mut memory, patch);
+    // Re-amend after apply_patch — apply_patch_to_memory may overwrite topic
+    // with a still-short patch.topic (now filtered upstream by enricher, but
+    // belt-and-braces), and won't touch title.
+    if memory.topic.chars().count() < 5 {
+        memory.topic = category.as_str().to_string();
+    }
+    if memory.title.chars().count() < 10 {
+        memory.title = format!("{}: {}", category.as_str(), memory.title);
+    }
     let _ = brain.remember_full(memory)?;
     Ok(())
+}
+
+/// Bring `(title, topic)` up to axel's `>= 10` / `>= 5` minimums while
+/// preserving as much of the heuristic/GLiNER output as possible. Padding
+/// uses the `category` label since that's the most semantically meaningful
+/// fallback.
+fn amend_to_validation_min(
+    title: &str,
+    topic: &str,
+    category: axel_memkoshi::memory::MemoryCategory,
+) -> (String, String) {
+    let cat_str = category.as_str();
+    let title_out = if title.chars().count() >= 10 {
+        title.to_string()
+    } else if title.is_empty() {
+        // Fallback: "<Category> note" padded to >= 10.
+        let mut s = format!("{cat_str} note");
+        while s.chars().count() < 10 {
+            s.push('.');
+        }
+        s
+    } else {
+        // Prefix with category; pad with periods if still short.
+        let mut s = format!("{cat_str}: {title}");
+        while s.chars().count() < 10 {
+            s.push('.');
+        }
+        s
+    };
+    let topic_out = if topic.chars().count() >= 5 {
+        topic.to_string()
+    } else {
+        // Pad with category — axel categories ("events", "cases", "entities",
+        // "preferences") are all >= 5 chars so this always satisfies.
+        cat_str.to_string()
+    };
+    (title_out, topic_out)
 }
 
 /// Apply the optional fields of a `MemoryPatch` to a freshly-constructed
@@ -1038,5 +1109,73 @@ mod tests {
 
         assert!(gliner.lock().unwrap().is_none());
         assert!(attempted.load(Ordering::Relaxed));
+    }
+
+    // ── amend_to_validation_min ────────────────────────────────────────────
+    //
+    // axel_memkoshi::pipeline::ValidationStage requires:
+    //   * topic.chars().count() >= 5
+    //   * title.chars().count() >= 10
+    //
+    // amend_to_validation_min must always return strings satisfying those
+    // bounds for any input + valid MemoryCategory.
+
+    use axel_memkoshi::memory::MemoryCategory;
+
+    #[test]
+    fn amend_passes_through_long_enough() {
+        let (t, p) = amend_to_validation_min(
+            "Discussed Rust ownership rules",
+            "Rust ownership",
+            MemoryCategory::Events,
+        );
+        assert_eq!(t, "Discussed Rust ownership rules");
+        assert_eq!(p, "Rust ownership");
+    }
+
+    #[test]
+    fn amend_pads_short_topic_with_category() {
+        // GLiNER returned a 4-char span ("Rust") — should be replaced by
+        // the category string ("events" = 6 chars >= 5).
+        let (_t, p) =
+            amend_to_validation_min("A long enough title here", "Rust", MemoryCategory::Events);
+        assert_eq!(p, "events");
+        assert!(p.chars().count() >= 5);
+    }
+
+    #[test]
+    fn amend_prefixes_short_title_with_category() {
+        let (t, _p) = amend_to_validation_min("OK", "valid topic", MemoryCategory::Cases);
+        assert!(t.chars().count() >= 10, "title was {t:?}");
+        assert!(t.contains("OK"));
+        assert!(t.starts_with("cases"));
+    }
+
+    #[test]
+    fn amend_handles_empty_title() {
+        let (t, _p) = amend_to_validation_min("", "valid topic", MemoryCategory::Preferences);
+        assert!(t.chars().count() >= 10, "title was {t:?}");
+    }
+
+    #[test]
+    fn amend_works_for_all_categories() {
+        for cat in [
+            MemoryCategory::Events,
+            MemoryCategory::Cases,
+            MemoryCategory::Entities,
+            MemoryCategory::Preferences,
+        ] {
+            let (t, p) = amend_to_validation_min("x", "y", cat);
+            assert!(
+                t.chars().count() >= 10,
+                "title for {:?} was {t:?}",
+                cat.as_str()
+            );
+            assert!(
+                p.chars().count() >= 5,
+                "topic for {:?} was {p:?}",
+                cat.as_str()
+            );
+        }
     }
 }
