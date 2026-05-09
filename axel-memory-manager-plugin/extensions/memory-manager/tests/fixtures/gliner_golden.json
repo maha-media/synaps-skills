@@ -1,0 +1,112 @@
+{
+  "cases": [
+    {
+      "text": "Alice works at OpenAI and uses cargo to build Rust crates.",
+      "labels": [
+        "person",
+        "organization",
+        "tool",
+        "language"
+      ],
+      "spans": [
+        {
+          "word_start": 0,
+          "word_end": 0,
+          "text": "Alice",
+          "label": "person",
+          "score": 0.985
+        },
+        {
+          "word_start": 3,
+          "word_end": 3,
+          "text": "OpenAI",
+          "label": "organization",
+          "score": 0.9605
+        },
+        {
+          "word_start": 6,
+          "word_end": 6,
+          "text": "cargo",
+          "label": "tool",
+          "score": 0.8888
+        },
+        {
+          "word_start": 9,
+          "word_end": 9,
+          "text": "Rust",
+          "label": "language",
+          "score": 0.9815
+        }
+      ]
+    },
+    {
+      "text": "I prefer tabs over spaces. Always use Rust 2021 edition.",
+      "labels": [
+        "preference",
+        "language",
+        "style"
+      ],
+      "spans": [
+        {
+          "word_start": 0,
+          "word_end": 1,
+          "text": "I prefer",
+          "label": "preference",
+          "score": 0.4879
+        },
+        {
+          "word_start": 1,
+          "word_end": 1,
+          "text": "prefer",
+          "label": "preference",
+          "score": 0.5698
+        },
+        {
+          "word_start": 7,
+          "word_end": 7,
+          "text": "Rust",
+          "label": "language",
+          "score": 0.4545
+        },
+        {
+          "word_start": 7,
+          "word_end": 9,
+          "text": "Rust 2021 edition.",
+          "label": "language",
+          "score": 0.4125
+        }
+      ]
+    },
+    {
+      "text": "Eve Carter is a software engineer at Acme Corp.",
+      "labels": [
+        "person",
+        "occupation",
+        "organization"
+      ],
+      "spans": [
+        {
+          "word_start": 0,
+          "word_end": 1,
+          "text": "Eve Carter",
+          "label": "person",
+          "score": 0.9892
+        },
+        {
+          "word_start": 4,
+          "word_end": 5,
+          "text": "software engineer",
+          "label": "occupation",
+          "score": 0.836
+        },
+        {
+          "word_start": 7,
+          "word_end": 8,
+          "text": "Acme Corp.",
+          "label": "organization",
+          "score": 0.9613
+        }
+      ]
+    }
+  ]
+}
