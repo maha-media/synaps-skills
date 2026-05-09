@@ -18,7 +18,8 @@
     "permissions": [
       "tools.intercept",
       "privacy.llm_content",
-      "session.lifecycle"
+      "session.lifecycle",
+      "config.subscribe"
     ],
     "hooks": [
       { "hook": "before_message" },
@@ -26,6 +27,38 @@
       { "hook": "after_tool_call" },
       { "hook": "on_session_start" },
       { "hook": "on_session_end" }
+    ]
+  },
+  "settings": {
+    "categories": [
+      {
+        "id": "axel",
+        "label": "Axel Memory",
+        "fields": [
+          {
+            "key": "min_consolidate_len",
+            "label": "Min consolidation length",
+            "editor": "text",
+            "numeric": true,
+            "default": "40",
+            "help": "Messages shorter than this byte length are skipped during consolidation."
+          },
+          {
+            "key": "consolidate_interval_secs",
+            "label": "Background consolidation interval (seconds)",
+            "editor": "cycler",
+            "options": ["0", "60", "300", "900", "3600"],
+            "default": "0",
+            "help": "0 disables the background timer (Phase 2)."
+          },
+          {
+            "key": "run_consolidate_now",
+            "label": "Run consolidation now",
+            "editor": "custom",
+            "help": "Triggers an immediate consolidation pass."
+          }
+        ]
+      }
     ]
   }
 }

@@ -52,6 +52,20 @@ fn read_frame(reader: &mut impl BufRead) -> Value {
     serde_json::from_slice(&body).expect("parse JSON response")
 }
 
+/// Read frames until we see a JSON-RPC *response* (one with `result` or
+/// `error`, not `method`). Plugin-emitted requests like the post-initialize
+/// `config.subscribe` are skipped.
+fn read_response(reader: &mut impl BufRead) -> Value {
+    loop {
+        let frame = read_frame(reader);
+        if frame.get("method").is_some() {
+            // Plugin-originated request (e.g. config.subscribe). Ignore.
+            continue;
+        }
+        return frame;
+    }
+}
+
 // ── binary path ───────────────────────────────────────────────────────────────
 
 fn bin_path() -> String {
@@ -92,7 +106,7 @@ fn spawn_and_init(
         .expect("write initialize");
     stdin.flush().expect("flush");
 
-    let resp = read_frame(&mut reader);
+    let resp = read_response(&mut reader);
     assert_eq!(resp["result"]["name"], "memory-manager", "bad initialize response: {resp}");
 
     (stdin, reader, child)
@@ -110,7 +124,7 @@ fn on_message_complete_writes_memory() {
 
     let (mut stdin, mut reader, mut child) = spawn_and_init(&brain_path);
 
-    // Send on_message_complete with a message ≥ MIN_CONSOLIDATE_LEN (80 chars).
+    // Send on_message_complete with a message ≥ min_consolidate_len (80 chars).
     let msg = "Rust's ownership system ensures memory safety without a garbage \
                collector by enforcing borrow rules at compile time.";
     assert!(msg.len() >= 80, "message must be ≥ 80 chars for this test to be meaningful");
@@ -129,7 +143,7 @@ fn on_message_complete_writes_memory() {
         .expect("write hook frame");
     stdin.flush().expect("flush");
 
-    let resp = read_frame(&mut reader);
+    let resp = read_response(&mut reader);
     assert_eq!(resp["result"]["action"], "continue", "unexpected hook result: {resp}");
 
     // Graceful shutdown so the brain flushes WAL to the main .r8 file.
@@ -191,7 +205,7 @@ fn before_message_returns_inject() {
         })))
         .expect("write on_message_complete");
     stdin.flush().expect("flush");
-    let _ = read_frame(&mut reader); // discard continue
+    let _ = read_response(&mut reader); // discard continue
 
     // Step 2: send before_message and expect inject.
     stdin
@@ -206,7 +220,7 @@ fn before_message_returns_inject() {
         })))
         .expect("write before_message");
     stdin.flush().expect("flush");
-    let resp = read_frame(&mut reader);
+    let resp = read_response(&mut reader);
 
     // Shutdown cleanly.
     stdin
