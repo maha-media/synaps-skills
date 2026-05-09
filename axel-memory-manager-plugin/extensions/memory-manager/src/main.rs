@@ -17,6 +17,8 @@ use serde_json::{json, Value};
 
 use axel::AxelBrain;
 
+mod enricher;
+mod gliner;
 mod settings;
 mod timer;
 use settings::Settings;
