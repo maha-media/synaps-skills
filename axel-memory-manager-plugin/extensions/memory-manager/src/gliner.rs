@@ -157,6 +157,80 @@ impl GlinerSession {
     }
 }
 
+/// Compute byte-range char offsets of whitespace-delimited words in `text`.
+///
+/// `text[start..end]` is guaranteed to be valid UTF-8 (the boundaries fall
+/// on char boundaries). Used to map word-indexed model spans back to
+/// character offsets in the original input.
+pub fn word_char_offsets(text: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut chars = text.char_indices().peekable();
+    while let Some(&(i, c)) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        let start = i;
+        let mut end = i + c.len_utf8();
+        chars.next();
+        while let Some(&(j, c2)) = chars.peek() {
+            if c2.is_whitespace() {
+                break;
+            }
+            end = j + c2.len_utf8();
+            chars.next();
+        }
+        out.push((start, end));
+    }
+    out
+}
+
+/// Build the per-token `words_mask` GLiNER expects.
+///
+/// Walks tokens from `sep_pos + 1` onwards. Each time a token starts with
+/// the SentencePiece word-boundary marker `▁` (U+2581), increments
+/// `word_no` (1-indexed) and assigns it to that token. Continuation pieces
+/// (no leading `▁`) and special/label tokens get `0`. Stops at the trailing
+/// `[SEP]` / `[PAD]` / `</s>` / `<pad>`.
+pub fn build_words_mask(tokens: &[String], sep_pos: usize) -> Vec<i64> {
+    let mut mask = vec![0i64; tokens.len()];
+    let mut word_no: i64 = 0;
+    if sep_pos + 1 >= tokens.len() {
+        return mask;
+    }
+    for i in (sep_pos + 1)..tokens.len() {
+        let tok = tokens[i].as_str();
+        if matches!(tok, "[SEP]" | "[PAD]" | "</s>" | "<pad>" | "<s>") {
+            break;
+        }
+        if tok.starts_with('\u{2581}') {
+            word_no += 1;
+            mask[i] = word_no;
+        }
+    }
+    mask
+}
+
+/// Build the full `(s, s+w)` span grid for `n_words` × `max_w`.
+///
+/// Returns a flat list of `(start_word, end_word)` pairs in row-major order
+/// (outer loop `s`, inner loop `w`) and a parallel `mask` of length
+/// `n_words * max_w` where `mask[s*max_w + w] = (s + w) < n_words`.
+///
+/// All slots — including ones with `s + w >= n_words` — are present; the
+/// mask is what tells the model which to score.
+pub fn build_span_grid(n_words: usize, max_w: usize) -> (Vec<(i64, i64)>, Vec<bool>) {
+    let mut idx = Vec::with_capacity(n_words * max_w);
+    let mut mask = Vec::with_capacity(n_words * max_w);
+    for s in 0..n_words {
+        for w in 0..max_w {
+            idx.push((s as i64, (s + w) as i64));
+            mask.push(s + w < n_words);
+        }
+    }
+    (idx, mask)
+}
+
 // ── Deterministic helpers (no model required) ───────────────────────────────
 
 /// GLiNER's canonical prompt format: `<<ENT>>label1<<ENT>>label2...<<SEP>>text`.
@@ -280,6 +354,62 @@ mod tests {
         assert_eq!(kept.len(), 2);
         assert_eq!(kept[0], s2, "highest score must come first");
         assert_eq!(kept[1], s3);
+    }
+
+    #[test]
+    fn word_offsets_handles_unicode() {
+        // "Café Москва 東京"  — multi-byte words, single-space separated.
+        let s = "Café Москва 東京";
+        let off = word_char_offsets(s);
+        assert_eq!(off.len(), 3);
+        assert_eq!(&s[off[0].0..off[0].1], "Café");
+        assert_eq!(&s[off[1].0..off[1].1], "Москва");
+        assert_eq!(&s[off[2].0..off[2].1], "東京");
+    }
+
+    #[test]
+    fn word_offsets_handles_leading_and_multiple_spaces() {
+        let s = "  hello   world ";
+        let off = word_char_offsets(s);
+        assert_eq!(off.len(), 2);
+        assert_eq!(&s[off[0].0..off[0].1], "hello");
+        assert_eq!(&s[off[1].0..off[1].1], "world");
+    }
+
+    #[test]
+    fn build_words_mask_for_known_tokens() {
+        // Synthetic SentencePiece-style token list. The "▁" (U+2581) marks
+        // the start of a new word in the text region (after <<SEP>>).
+        let toks: Vec<String> = ["[CLS]", "<<ENT>>", "▁person", "<<SEP>>", "▁Alice", "▁works", "[SEP]"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let sep_pos = 3usize;
+        let mask = build_words_mask(&toks, sep_pos);
+        assert_eq!(mask, vec![0, 0, 0, 0, 1, 2, 0]);
+    }
+
+    #[test]
+    fn build_words_mask_handles_continuation_tokens() {
+        // SentencePiece often splits a single word into a leading "▁foo"
+        // plus continuation pieces (no underscore prefix) — those count as
+        // the same word.
+        let toks: Vec<String> = ["[CLS]", "<<SEP>>", "▁Open", "AI", "▁is", "▁cool", "[SEP]"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let mask = build_words_mask(&toks, 1);
+        // word 1 = OpenAI (two pieces, only the leading ▁Open gets the
+        // word_no), word 2 = is, word 3 = cool.
+        assert_eq!(mask, vec![0, 0, 1, 0, 2, 3, 0]);
+    }
+
+    #[test]
+    fn build_span_grid_full_with_mask() {
+        let (idx, mask) = build_span_grid(3, 2);
+        // 3 words × 2 widths = 6 slots; index pairs (s, s+w):
+        assert_eq!(idx, vec![(0, 0), (0, 1), (1, 1), (1, 2), (2, 2), (2, 3)]);
+        assert_eq!(mask, vec![true, true, true, true, true, false]);
     }
 
     #[test]
