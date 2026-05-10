@@ -938,3 +938,173 @@ describe('SlackAdapter — _resolveSynapsUserId', () => {
     expect(adapter._resolveSynapsUserId('UABC456')).toBe('UABC456');
   });
 });
+
+// ─── Phase 3: _resolveSynapsUserInfo + identityRouter ─────────────────────────
+
+function makeIdentityRouter({ resolveResult = null, redeemResult = null, enabled = true } = {}) {
+  return {
+    enabled,
+    resolve: vi.fn().mockResolvedValue(resolveResult ?? {
+      synapsUser: { _id: 'deadbeefdeadbeefdeadbeef', memory_namespace: 'u_deadbeefdeadbeefdeadbeef' },
+      isNew: false,
+      isLinked: true,
+    }),
+    redeemLinkCode: vi.fn().mockResolvedValue(redeemResult ?? { ok: true, synaps_user_id: 'deadbeefdeadbeefdeadbeef' }),
+  };
+}
+
+describe('SlackAdapter — _resolveSynapsUserInfo', () => {
+  it('returns synapsUserId and memoryNamespace from router on happy path', async () => {
+    const identityRouter = makeIdentityRouter();
+    const { adapter } = buildAdapter({ identityRouter });
+    const result = await adapter._resolveSynapsUserInfo({ slackUser: 'U123', slackTeamId: 'T456', displayName: 'Alice' });
+    expect(identityRouter.resolve).toHaveBeenCalledWith({
+      channel: 'slack',
+      external_id: 'U123',
+      external_team_id: 'T456',
+      display_name: 'Alice',
+    });
+    expect(result.synapsUserId).toBe('deadbeefdeadbeefdeadbeef');
+    expect(result.memoryNamespace).toBe('u_deadbeefdeadbeefdeadbeef');
+    expect(result.isLinked).toBe(true);
+  });
+
+  it('falls back to raw slackUser when router.resolve throws', async () => {
+    const identityRouter = {
+      enabled: true,
+      resolve: vi.fn().mockRejectedValue(new Error('db error')),
+      redeemLinkCode: vi.fn(),
+    };
+    const warnSpy = vi.fn();
+    const { adapter } = buildAdapter({
+      identityRouter,
+      logger: { warn: warnSpy, info: vi.fn(), error: vi.fn() },
+    });
+    const result = await adapter._resolveSynapsUserInfo({ slackUser: 'U999' });
+    expect(result.synapsUserId).toBe('U999');
+    expect(result.memoryNamespace).toBe('u_U999');
+    expect(result.isLinked).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('identity resolve failed'));
+  });
+
+  it('returns Phase-2 defensive fallback when no identityRouter is set', async () => {
+    const { adapter } = buildAdapter({ identityRouter: null });
+    const result = await adapter._resolveSynapsUserInfo({ slackUser: 'U555' });
+    expect(result.synapsUserId).toBe('U555');
+    expect(result.memoryNamespace).toBe('u_U555');
+    expect(result.isLinked).toBe(false);
+    expect(result.isNew).toBe(false);
+  });
+});
+
+describe('SlackAdapter — /synaps link directive', () => {
+  async function invokeLinkDirective(adapter, app, text, user = 'U123') {
+    await adapter.start();
+    const handler = app.handlers.events.get('message');
+    const client = mockClient();
+    await handler({
+      event: {
+        channel: 'D123',
+        ts: '9000.000',
+        thread_ts: null,
+        text,
+        user,
+        channel_type: 'im',
+        files: [],
+      },
+      client,
+      ack: vi.fn(),
+    });
+    return { client };
+  }
+
+  it('/synaps link ABC123 — success: calls redeemLinkCode, posts success reply, no LLM stream', async () => {
+    const identityRouter = makeIdentityRouter({ redeemResult: { ok: true, synaps_user_id: 'abc' } });
+    const { adapter, app, router } = buildAdapter({ identityRouter });
+    const { client } = await invokeLinkDirective(adapter, app, '/synaps link ABC123', 'U999');
+    expect(identityRouter.redeemLinkCode).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'ABC123', channel: 'slack', external_id: 'U999' }),
+    );
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: '✅ Linked Slack to your web account.' }),
+    );
+    expect(router.rpc.prompt).not.toHaveBeenCalled();
+  });
+
+  it('/synaps link ABC123 — bad code: posts failure reply, no LLM stream', async () => {
+    const identityRouter = makeIdentityRouter({ redeemResult: { ok: false, reason: 'expired' } });
+    const { adapter, app, router } = buildAdapter({ identityRouter });
+    const { client } = await invokeLinkDirective(adapter, app, '/synaps link XXXXXX');
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('❌') }),
+    );
+    expect(router.rpc.prompt).not.toHaveBeenCalled();
+  });
+
+  it('/synaps link without code — posts usage hint reply', async () => {
+    const identityRouter = makeIdentityRouter();
+    const { adapter, app, router } = buildAdapter({ identityRouter });
+    const { client } = await invokeLinkDirective(adapter, app, '/synaps link');
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('Usage') }),
+    );
+    expect(router.rpc.prompt).not.toHaveBeenCalled();
+  });
+
+  it('/synaps link ABC123 when identityRouter.enabled=false — posts "not enabled" reply', async () => {
+    const identityRouter = makeIdentityRouter({ enabled: false });
+    const { adapter, app, router } = buildAdapter({ identityRouter });
+    const { client } = await invokeLinkDirective(adapter, app, '/synaps link ABC123');
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Identity linking is not enabled on this bridge.' }),
+    );
+    expect(router.rpc.prompt).not.toHaveBeenCalled();
+  });
+
+  it('/synaps link ABC123 when redeemLinkCode throws — posts failure reply, no LLM stream', async () => {
+    const identityRouter = {
+      enabled: true,
+      resolve: vi.fn(),
+      redeemLinkCode: vi.fn().mockRejectedValue(new Error('network error')),
+    };
+    const { adapter, app, router } = buildAdapter({
+      identityRouter,
+      logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
+    });
+    const { client } = await invokeLinkDirective(adapter, app, '/synaps link ABC123');
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('❌') }),
+    );
+    expect(router.rpc.prompt).not.toHaveBeenCalled();
+  });
+});
+
+describe('SlackAdapter — memory namespace from identityRouter', () => {
+  it('memory.recall uses memory_namespace from identityRouter, not raw slackUser', async () => {
+    const identityRouter = makeIdentityRouter({
+      resolveResult: {
+        synapsUser: { _id: 'aabbccdd11223344aabbccdd', memory_namespace: 'u_aabbccdd11223344aabbccdd' },
+        isNew: false,
+        isLinked: true,
+      },
+    });
+    const memoryGateway = {
+      recall: vi.fn().mockResolvedValue(null),
+      store: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    const { adapter, app } = buildMemoryAdapter(memoryGateway, { identityRouter });
+    await invokeWithMemory(adapter, app, { text: '<@U0BOTID> test namespace', user: 'U123' });
+    expect(memoryGateway.recall).toHaveBeenCalledWith('u_aabbccdd11223344aabbccdd', 'test namespace');
+  });
+
+  it('memory.recall uses raw slackUser when no identityRouter (Phase-2 compatibility)', async () => {
+    const memoryGateway = {
+      recall: vi.fn().mockResolvedValue(null),
+      store: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    // buildMemoryAdapter doesn't pass identityRouter → should use raw slackUser
+    const { adapter, app } = buildMemoryAdapter(memoryGateway);
+    await invokeWithMemory(adapter, app, { text: '<@U0BOTID> hello', user: 'U123' });
+    expect(memoryGateway.recall).toHaveBeenCalledWith('U123', 'hello');
+  });
+});

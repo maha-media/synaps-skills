@@ -45,6 +45,7 @@ import { VncProxy }              from './core/vnc-proxy.js';
 import { ScpHttpServer }         from './core/scp-http-server.js';
 import { MemoryGateway, NoopMemoryGateway } from './core/memory-gateway.js';
 import { AxelCliClient }         from './core/memory/axel-cli-client.js';
+import { NoOpIdentityRouter }    from './core/identity-router.js';
 import Docker                    from 'dockerode';
 
 // ─── default factories ────────────────────────────────────────────────────────
@@ -91,8 +92,52 @@ export function defaultMemoryGatewayFactory(config, logger) {
 }
 
 /**
+ * Build the appropriate IdentityRouter based on config.
+ *
+ * - `config.identity.enabled = false` → NoOpIdentityRouter (Phase 2 behaviour preserved).
+ * - Otherwise → lazy-import mongoose models + repos, connect, return IdentityRouter.
+ *   Falls back to NoOpIdentityRouter if mongo connect fails.
+ *
+ * Exported so tests can exercise the factory branches directly.
+ *
+ * @param {object} opts
+ * @param {import('./config.js').NormalizedConfig} opts.config
+ * @param {object} opts.logger
+ * @returns {Promise<import('./core/identity-router.js').IdentityRouter|import('./core/identity-router.js').NoOpIdentityRouter>}
+ */
+export async function defaultIdentityRouterFactory({ config, logger }) {
+  if (!config.identity?.enabled) {
+    logger.info('[bridge/index] identity.enabled=false — using NoOpIdentityRouter');
+    return new NoOpIdentityRouter({ logger });
+  }
+  // Lazy-require to avoid pulling mongoose unless enabled.
+  const { getMongoose: getMongooseConn } = await import('./core/db/connect.js');
+  const {
+    getSynapsUserModel,
+    getSynapsChannelIdentityModel,
+    getSynapsLinkCodeModel,
+    UserRepo,
+    ChannelIdentityRepo,
+    LinkCodeRepo,
+  } = await import('./core/db/index.js');
+  const { IdentityRouter } = await import('./core/identity-router.js');
+
+  let mongooseInstance;
+  try {
+    mongooseInstance = await getMongooseConn(config.mongodb.uri);
+  } catch (err) {
+    logger.warn(`[bridge/index] identity: mongo connect failed (${err.message}) — falling back to NoOpIdentityRouter`);
+    return new NoOpIdentityRouter({ logger });
+  }
+
+  const userRepo = new UserRepo({ model: getSynapsUserModel(mongooseInstance), logger });
+  const channelIdentityRepo = new ChannelIdentityRepo({ model: getSynapsChannelIdentityModel(mongooseInstance), logger });
+  const linkCodeRepo = new LinkCodeRepo({ model: getSynapsLinkCodeModel(mongooseInstance), logger });
+  return new IdentityRouter({ userRepo, channelIdentityRepo, linkCodeRepo, logger });
+}
+
+/**
  * Default SessionRouter factory.
- * Closes over config to wire up the rpcFactory.
  *
  * In SCP mode the rpcFactory instantiates DockerExecSynapsRpc; in bridge mode
  * it instantiates the host-spawn SynapsRpc.  The SessionRouter API is
@@ -143,20 +188,20 @@ function defaultSessionRouterFactory(config, logger, scpDeps = null) {
 /**
  * Default SlackAdapter factory.
  *
- * @param {{ auth: object, sessionRouter: SessionRouter, memoryGateway: MemoryGateway|NoopMemoryGateway, logger: object }} opts
+ * @param {{ auth: object, sessionRouter: SessionRouter, memoryGateway: MemoryGateway|NoopMemoryGateway, identityRouter: object, logger: object }} opts
  * @returns {SlackAdapter}
  */
-function defaultSlackAdapterFactory({ auth, sessionRouter, memoryGateway, logger }) {
-  return new SlackAdapter({ sessionRouter, auth, memoryGateway, logger });
+function defaultSlackAdapterFactory({ auth, sessionRouter, memoryGateway, identityRouter, logger }) {
+  return new SlackAdapter({ sessionRouter, auth, memoryGateway, identityRouter, logger });
 }
 
 /**
  * Default ControlSocket factory.
  *
- * @param {{ sessionRouter: SessionRouter, logger: object, version: string }} opts
+ * @param {{ sessionRouter: SessionRouter, identityRouter: object, logger: object, version: string }} opts
  * @returns {ControlSocket}
  */
-function defaultControlSocketFactory({ sessionRouter, logger, version }) {
+function defaultControlSocketFactory({ sessionRouter, identityRouter, logger, version }) { // eslint-disable-line no-unused-vars
   return new ControlSocket({ sessionRouter, logger, version });
 }
 
@@ -176,6 +221,7 @@ export class BridgeDaemon extends EventEmitter {
    * @param {Function} [opts.workspaceManagerFactory]  - (repo, docker, config) => WorkspaceManager — injectable for tests.
    * @param {Function} [opts.scpHttpServerFactory]     - (opts) => ScpHttpServer — injectable for tests.
    * @param {Function} [opts.memoryGatewayFactory]     - (config, logger) => MemoryGateway|NoopMemoryGateway — injectable for tests.
+   * @param {Function} [opts.identityRouterFactory]    - ({ config, logger }) => Promise<IdentityRouter|NoOpIdentityRouter> — injectable for tests.
    */
   constructor({
     config,
@@ -189,6 +235,7 @@ export class BridgeDaemon extends EventEmitter {
     workspaceManagerFactory = null,
     scpHttpServerFactory = null,
     memoryGatewayFactory = null,
+    identityRouterFactory = null,
   } = {}) {
     super();
 
@@ -208,6 +255,9 @@ export class BridgeDaemon extends EventEmitter {
     // Memory gateway factory (test-injectable).
     this._memoryGatewayFactory = memoryGatewayFactory ?? defaultMemoryGatewayFactory;
 
+    // Identity router factory (test-injectable).
+    this._identityRouterFactory = identityRouterFactory ?? defaultIdentityRouterFactory;
+
     /** @type {SessionRouter|null} */
     this._sessionRouter = null;
     /** @type {SlackAdapter|null} */
@@ -226,6 +276,10 @@ export class BridgeDaemon extends EventEmitter {
     // Memory gateway (built in start(), available in both bridge and SCP mode).
     /** @type {MemoryGateway|NoopMemoryGateway|null} */
     this._memoryGateway = null;
+
+    // Identity router (built in start()).
+    /** @type {import('./core/identity-router.js').IdentityRouter|import('./core/identity-router.js').NoOpIdentityRouter|null} */
+    this._identityRouter = null;
 
     this._started = false;
     this._stopped = false;
@@ -247,6 +301,9 @@ export class BridgeDaemon extends EventEmitter {
     // 0. Memory gateway (always built; Noop when disabled).
     this._memoryGateway = this._memoryGatewayFactory(this._config, this.logger);
     await this._memoryGateway.start();
+
+    // 0b. Identity router (always built; NoOp when disabled).
+    this._identityRouter = await this._identityRouterFactory({ config: this._config, logger: this.logger });
 
     // ── SCP mode bootstrap ────────────────────────────────────────────────
     if (isScp) {
@@ -314,6 +371,7 @@ export class BridgeDaemon extends EventEmitter {
         auth,
         sessionRouter: this._sessionRouter,
         memoryGateway: this._memoryGateway,
+        identityRouter: this._identityRouter,
         logger: this.logger,
       });
       await this._slackAdapter.start();
@@ -322,6 +380,7 @@ export class BridgeDaemon extends EventEmitter {
     // 3. Control socket.
     this._controlSocket = this._controlSocketFactory({
       sessionRouter: this._sessionRouter,
+      identityRouter: this._identityRouter,
       logger: this.logger,
       version: '0.1.0',
     });

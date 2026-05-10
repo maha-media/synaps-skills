@@ -71,6 +71,11 @@ export const BRIDGE_CONFIG_DEFAULTS = Object.freeze({
     axel_socket: '/run/synaps/axel.sock',
     consolidation_cron: '0 3 * * *',
   }),
+  identity: Object.freeze({
+    enabled: false,                 // default off — Phase 2 behavior preserved
+    link_code_ttl_secs: 300,        // 5 min
+    default_institution_id: '',     // optional fallback for slack users without an inst
+  }),
 });
 
 /** Default config file path. */
@@ -114,6 +119,7 @@ export function expandHome(p) {
  * @property {{ enabled: boolean, http_port: number, bind: string, trust_proxy_header: string, allowed_origin: string }} web
  * @property {{ uri: string }} mongodb
  * @property {{ enabled: boolean, transport: string, cli_path: string, brain_dir: string, recall_k: number, recall_min_score: number, recall_max_chars: number, axel_socket: string, consolidation_cron: string }} memory
+ * @property {{ enabled: boolean, link_code_ttl_secs: number, default_institution_id: string }} identity
  */
 
 /**
@@ -172,7 +178,7 @@ function _buildConfig(parsed, logger) {
   const D = BRIDGE_CONFIG_DEFAULTS;
 
   // ── warn on unknown top-level keys ────────────────────────────────────────
-  const knownTopLevel = new Set(['bridge', 'rpc', 'sources', 'platform', 'workspace', 'web', 'mongodb', 'memory']);
+  const knownTopLevel = new Set(['bridge', 'rpc', 'sources', 'platform', 'workspace', 'web', 'mongodb', 'memory', 'identity']);
   for (const k of Object.keys(parsed)) {
     if (!knownTopLevel.has(k)) {
       logger.warn(`bridge/config: unknown top-level key "${k}" — ignoring`);
@@ -345,6 +351,40 @@ function _buildConfig(parsed, logger) {
     memConsolidationCron = DMEM.consolidation_cron;
   }
 
+  // ── [identity] ────────────────────────────────────────────────────────────
+  const rawIdentity = (parsed.identity && typeof parsed.identity === 'object') ? parsed.identity : {};
+  const DID = D.identity;
+
+  const identityEnabled = rawIdentity.enabled !== undefined ? Boolean(rawIdentity.enabled) : DID.enabled;
+
+  let identityLinkCodeTtlSecs = rawIdentity.link_code_ttl_secs !== undefined
+    ? rawIdentity.link_code_ttl_secs
+    : DID.link_code_ttl_secs;
+  if (!Number.isInteger(identityLinkCodeTtlSecs) || identityLinkCodeTtlSecs < 60 || identityLinkCodeTtlSecs > 3600) {
+    logger.warn(
+      `bridge/config: invalid identity.link_code_ttl_secs "${identityLinkCodeTtlSecs}" — falling back to ${DID.link_code_ttl_secs}`,
+    );
+    identityLinkCodeTtlSecs = DID.link_code_ttl_secs;
+  }
+
+  let identityDefaultInstitutionId = rawIdentity.default_institution_id !== undefined
+    ? String(rawIdentity.default_institution_id)
+    : DID.default_institution_id;
+  if (identityDefaultInstitutionId.length > 0 && !/^[0-9a-f]{24}$/.test(identityDefaultInstitutionId)) {
+    logger.warn(
+      `bridge/config: invalid identity.default_institution_id "${identityDefaultInstitutionId}" — must be empty or 24-char hex; resetting to ""`,
+    );
+    identityDefaultInstitutionId = '';
+  }
+
+  // Warn on unknown keys inside [identity].
+  const knownIdentityKeys = new Set(['enabled', 'link_code_ttl_secs', 'default_institution_id']);
+  for (const k of Object.keys(rawIdentity)) {
+    if (!knownIdentityKeys.has(k)) {
+      logger.warn(`bridge/config: unknown identity key "${k}" — ignoring`);
+    }
+  }
+
   return Object.freeze({
     bridge: Object.freeze({
       log_level: logLevel,
@@ -385,6 +425,11 @@ function _buildConfig(parsed, logger) {
       recall_max_chars: memRecallMaxChars,
       axel_socket: memAxelSocket,
       consolidation_cron: memConsolidationCron,
+    }),
+    identity: Object.freeze({
+      enabled: identityEnabled,
+      link_code_ttl_secs: identityLinkCodeTtlSecs,
+      default_institution_id: identityDefaultInstitutionId,
     }),
   });
 }

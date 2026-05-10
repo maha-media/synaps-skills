@@ -48,6 +48,9 @@ export class SlackAdapter extends AdapterInstance {
    *   Phase 2 memory gateway.  `null` (default) disables all memory hooks —
    *   zero behaviour change vs Phase 1.  Pass a `NoopMemoryGateway` instance
    *   when memory is configured but `enabled = false`.
+   * @param {import('../../core/identity-router.js').IdentityRouter|import('../../core/identity-router.js').NoOpIdentityRouter|null} [opts.identityRouter]
+   *   Phase 3 identity router.  `null` (default) falls back to the Phase-2
+   *   stub behaviour (raw Slack user ID as namespace).
    * @param {object} [opts.logger]
    */
   constructor({
@@ -59,6 +62,7 @@ export class SlackAdapter extends AdapterInstance {
     formatter = new SlackFormatter(),
     fileStore = { download: downloadSlackFile },
     memoryGateway = null,
+    identityRouter = null,
     logger = console,
   } = {}) {
     super({ source: 'slack', capabilities, logger });
@@ -83,6 +87,9 @@ export class SlackAdapter extends AdapterInstance {
 
     /** @type {import('../../core/memory-gateway.js').MemoryGateway|null} */
     this._memoryGateway = memoryGateway;
+
+    /** @type {import('../../core/identity-router.js').IdentityRouter|import('../../core/identity-router.js').NoOpIdentityRouter|null} */
+    this._identityRouter = identityRouter;
 
     /** @type {object|null} The live Bolt App instance. */
     this._app = null;
@@ -300,10 +307,48 @@ export class SlackAdapter extends AdapterInstance {
   // ── core message flow ─────────────────────────────────────────────────────
 
   /**
+   * Resolve the synaps user info for memory namespacing.
+   *
+   * Phase 3: delegates to IdentityRouter when available.
+   * Falls back to Phase-2 stub (raw Slack ID as namespace) when no router or
+   * on router error.
+   *
+   * @private
+   * @param {object} opts
+   * @param {string} opts.slackUser      - Slack user ID (e.g. "U123").
+   * @param {string} [opts.slackTeamId]  - Slack team/workspace ID (e.g. "T123").
+   * @param {string} [opts.displayName]  - Display name for the user.
+   * @returns {Promise<{ synapsUserId: string, memoryNamespace: string, isLinked: boolean, isNew: boolean }>}
+   */
+  async _resolveSynapsUserInfo({ slackUser, slackTeamId, displayName }) {
+    if (!this._identityRouter) {
+      // Defensive — should never happen post-Phase-3.
+      return { synapsUserId: slackUser, memoryNamespace: `u_${slackUser}`, isLinked: false, isNew: false };
+    }
+    try {
+      const { synapsUser, isNew, isLinked } = await this._identityRouter.resolve({
+        channel: 'slack',
+        external_id: slackUser,
+        external_team_id: slackTeamId || '',
+        display_name: displayName || null,
+      });
+      return {
+        synapsUserId: String(synapsUser._id ?? slackUser),
+        memoryNamespace: synapsUser.memory_namespace ?? `u_${slackUser}`,
+        isLinked,
+        isNew,
+      };
+    } catch (err) {
+      this.logger.warn(`[slack] identity resolve failed: ${err.message}`);
+      return { synapsUserId: slackUser, memoryNamespace: `u_${slackUser}`, isLinked: false, isNew: false };
+    }
+  }
+
+  /**
    * Resolve the synapsUserId for memory namespacing.
    *
-   * Phase 2 v0: use Slack user ID directly.  The IdentityRouter (Phase 3)
-   * will replace this with a cross-source canonical user ID.
+   * @deprecated Use _resolveSynapsUserInfo instead (Phase 3+).
+   *   Kept for any external callers / tests that reference the Phase-2 API.
    *
    * @private
    * @param {string} slackUser - Slack user ID (e.g. "U123").
@@ -328,6 +373,77 @@ export class SlackAdapter extends AdapterInstance {
    * @returns {Promise<void>}
    */
   async _handleUserMessage({ conversation, thread, text, user, files = [], client }) {
+    // ── 0. Check for /synaps link <CODE> directive ─────────────────────────
+    const linkMatch = /^\/synaps\s+link\s+([A-Z0-9]{6})\s*$/i.exec(text.trim());
+    const linkUsageMatch = /^\/synaps\s+link\s*$/i.test(text.trim());
+
+    if (linkMatch || linkUsageMatch) {
+      // Handle the link directive — do NOT proceed to LLM stream.
+      if (linkUsageMatch && !linkMatch) {
+        // Usage hint: `/synaps link` without a code.
+        try {
+          await client.chat.postMessage({
+            channel: conversation,
+            thread_ts: thread,
+            text: 'Usage: `/synaps link <6-char code>`. Generate a code from the Synaps web dashboard.',
+          });
+        } catch { /* swallow */ }
+        return;
+      }
+
+      const code = linkMatch[1].toUpperCase();
+
+      if (!this._identityRouter || this._identityRouter.enabled === false) {
+        try {
+          await client.chat.postMessage({
+            channel: conversation,
+            thread_ts: thread,
+            text: 'Identity linking is not enabled on this bridge.',
+          });
+        } catch { /* swallow */ }
+        return;
+      }
+
+      // Redeem the code.
+      try {
+        const result = await this._identityRouter.redeemLinkCode({
+          code,
+          channel: 'slack',
+          external_id: user,
+          external_team_id: '',
+          display_name: null,
+        });
+        if (result.ok) {
+          await client.chat.postMessage({
+            channel: conversation,
+            thread_ts: thread,
+            text: '✅ Linked Slack to your web account.',
+          });
+        } else {
+          const reason = result.reason ?? 'unknown';
+          let msg = '❌ Code expired/unknown/already used.';
+          if (reason === 'expired')         msg = '❌ Code expired/unknown/already used.';
+          else if (reason === 'unknown')    msg = '❌ Code expired/unknown/already used.';
+          else if (reason === 'already_redeemed') msg = '❌ Code expired/unknown/already used.';
+          await client.chat.postMessage({
+            channel: conversation,
+            thread_ts: thread,
+            text: msg,
+          });
+        }
+      } catch (err) {
+        try {
+          this.logger.warn(`[SlackAdapter] link code redeem failed: ${redactTokens(err.message)}`);
+          await client.chat.postMessage({
+            channel: conversation,
+            thread_ts: thread,
+            text: '❌ Code expired/unknown/already used.',
+          });
+        } catch { /* swallow */ }
+      }
+      return;
+    }
+
     // ── 1. Parse set-model: directive ─────────────────────────────────────
     const { model, body } = parseSetModelDirective(text);
 
@@ -455,12 +571,19 @@ export class SlackAdapter extends AdapterInstance {
 
     // ── Memory store on agent_end (best-effort) ────────────────────────────
     if (this._memoryGateway != null) {
-      proxy.once('agent_end', (payload) => {
+      proxy.once('agent_end', async (payload) => {
         const finalText = payload?.final_text ?? '';
         if (finalText.length === 0) return;
-        const synapsUserId = this._resolveSynapsUserId(user);
+        // Phase 3: use memory_namespace from IdentityRouter; Phase 2: raw slackUserId.
+        let memoryKey = user;  // Phase-2 fallback (raw Slack user ID)
+        if (this._identityRouter) {
+          try {
+            const info = await this._resolveSynapsUserInfo({ slackUser: user, slackTeamId: '', displayName: null });
+            memoryKey = info.memoryNamespace;
+          } catch { /* fall back to raw user */ }
+        }
         // store() is best-effort and never throws — but guard anyway.
-        Promise.resolve(this._memoryGateway.store(synapsUserId, finalText, {
+        Promise.resolve(this._memoryGateway.store(memoryKey, finalText, {
           source: 'slack',
           conversation,
           thread,
@@ -479,8 +602,13 @@ export class SlackAdapter extends AdapterInstance {
     let augmentedBody = body;
     if (this._memoryGateway != null && body && body.length > 0) {
       try {
-        const synapsUserId = this._resolveSynapsUserId(user);
-        const summary = await this._memoryGateway.recall(synapsUserId, body);
+        // Phase 3: use memory_namespace from IdentityRouter; Phase 2: raw slackUserId.
+        let memoryKey = user;  // Phase-2 fallback (raw Slack user ID)
+        if (this._identityRouter) {
+          const info = await this._resolveSynapsUserInfo({ slackUser: user, slackTeamId: '', displayName: null });
+          memoryKey = info.memoryNamespace;
+        }
+        const summary = await this._memoryGateway.recall(memoryKey, body);
         if (summary && summary.length > 0) {
           augmentedBody = `[memory_recall]\n${summary}\n[/memory_recall]\n\n${body}`;
         }
