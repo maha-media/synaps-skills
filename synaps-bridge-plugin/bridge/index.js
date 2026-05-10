@@ -383,6 +383,7 @@ export class BridgeDaemon extends EventEmitter {
     this._mongoose = null;
     /** @type {WorkspaceManager|null} */
     this._workspaceManager = null;
+    this._workspaceRepo    = null;
     /** @type {ScpHttpServer|null} */
     this._scpHttpServer = null;
 
@@ -440,6 +441,7 @@ export class BridgeDaemon extends EventEmitter {
       // 2. Build repo + WorkspaceManager.
       const model = getSynapsWorkspaceModel(this._mongoose);
       const repo  = new WorkspaceRepo({ model, logger: this.logger });
+      this._workspaceRepo = repo;  // stored so http server block can access it below
 
       if (this._workspaceManagerFactory) {
         this._workspaceManager = this._workspaceManagerFactory(repo, this._config);
@@ -473,23 +475,11 @@ export class BridgeDaemon extends EventEmitter {
         memoryGateway: this._memoryGateway,
         credBroker: this._credBroker,
       };
-
-      // 4. Optional HTTP server + VNC proxy.
-      if (this._config.web.enabled) {
-        let scpServer;
-        if (this._scpHttpServerFactory) {
-          scpServer = this._scpHttpServerFactory({ config: this._config, repo, logger: this.logger });
-        } else {
-          const vncProxy = new VncProxy({ repo, logger: this.logger });
-          scpServer = new ScpHttpServer({ config: this._config, vncProxy, logger: this.logger });
-        }
-        this._scpHttpServer = scpServer;
-        await this._scpHttpServer.start();
-      }
     }
 
-    // 0d. Supervisor (heartbeat + reaper) — built after mongoose is connected.
-    // getMongoose accessor returns the connected instance (or null in bridge mode).
+    // 4a. Supervisor (heartbeat + reaper) — runs in both bridge and scp modes.
+    //     Built here (before the HTTP server) so heartbeatRepo is available to /health.
+    //     In bridge mode getMongoose() returns null → defaultHeartbeatFactory yields null.
     const _getMongoose = () => this._mongoose;
     this.supervisor = await this._heartbeatFactory(
       this._config,
@@ -504,6 +494,32 @@ export class BridgeDaemon extends EventEmitter {
       this.supervisor.emitter.start();
       this.supervisor.reaper.start();
       this.logger.info?.('supervisor started');
+    }
+
+    // 4b. Optional HTTP server + VNC proxy (SCP mode only).
+    //     heartbeatRepo is now available from the supervisor built above.
+    if (isScp && this._config.web.enabled) {
+      const heartbeatRepo = this.supervisor ? this.supervisor.repo : null;
+      let scpServer;
+      if (this._scpHttpServerFactory) {
+        scpServer = this._scpHttpServerFactory({
+          config: this._config,
+          repo: this._workspaceRepo,
+          heartbeatRepo,
+          logger: this.logger,
+        });
+      } else {
+        const vncProxy = new VncProxy({ repo: this._workspaceRepo, logger: this.logger });
+        scpServer = new ScpHttpServer({
+          config: this._config,
+          vncProxy,
+          heartbeatRepo,
+          bridgeCriticalMs: this._config.supervisor?.bridge_critical_ms,
+          logger: this.logger,
+        });
+      }
+      this._scpHttpServer = scpServer;
+      await this._scpHttpServer.start();
     }
 
     // 1. Session router.

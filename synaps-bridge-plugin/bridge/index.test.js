@@ -1665,3 +1665,136 @@ describe('BridgeDaemon — supervisor wiring', () => {
   });
 });
 
+// ─── BridgeDaemon — heartbeatRepo wiring into ScpHttpServer ──────────────────
+
+describe('BridgeDaemon — heartbeatRepo threaded into ScpHttpServer', () => {
+  /** Shared mongo stub that satisfies getSynapsWorkspaceModel. */
+  function makeScpMongo() {
+    return {
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      models: {},
+      model: vi.fn().mockReturnValue({
+        findOneAndUpdate: vi.fn().mockResolvedValue({}),
+        find:             vi.fn().mockResolvedValue([]),
+        deleteOne:        vi.fn().mockResolvedValue({}),
+      }),
+    };
+  }
+
+  /** Build a full SCP config with supervisor overrides and web enabled. */
+  function makeScpSupervisorConfig({
+    supervisorEnabled = true,
+    bridgeCriticalMs  = 45_000,
+  } = {}) {
+    return {
+      ...BRIDGE_CONFIG_DEFAULTS,
+      platform:  { mode: 'scp' },
+      bridge:    { ...BRIDGE_CONFIG_DEFAULTS.bridge },
+      rpc:       { ...BRIDGE_CONFIG_DEFAULTS.rpc },
+      web:       { ...BRIDGE_CONFIG_DEFAULTS.web, enabled: true, http_port: 0 },
+      mongodb:   { uri: 'mongodb://localhost/testdb' },
+      workspace: { ...BRIDGE_CONFIG_DEFAULTS.workspace },
+      sources:   { slack: { ...BRIDGE_CONFIG_DEFAULTS.sources.slack, enabled: false } },
+      memory:    { ...BRIDGE_CONFIG_DEFAULTS.memory, enabled: false },
+      creds:     { ...BRIDGE_CONFIG_DEFAULTS.creds, enabled: false },
+      supervisor: {
+        ...BRIDGE_CONFIG_DEFAULTS.supervisor,
+        enabled:           supervisorEnabled,
+        bridge_critical_ms: bridgeCriticalMs,
+      },
+    };
+  }
+
+  it('ScpHttpServer factory receives non-null heartbeatRepo when supervisor.enabled=true', async () => {
+    // A fake supervisor whose repo is a recognisable sentinel object.
+    const fakeRepo = { _isFakeHeartbeatRepo: true };
+    const fakeSup  = {
+      repo:    fakeRepo,
+      emitter: { start: vi.fn(), stop: vi.fn(async () => {}) },
+      reaper:  { start: vi.fn(), stop: vi.fn() },
+    };
+    const heartbeatFactory = vi.fn(async () => fakeSup);
+
+    // Capture the args the factory is called with.
+    let capturedFactoryArgs = null;
+    const fakeScpServer = {
+      start: vi.fn(async () => ({ port: 0 })),
+      stop:  vi.fn(async () => {}),
+    };
+    const scpHttpServerFactory = vi.fn((args) => {
+      capturedFactoryArgs = args;
+      return fakeScpServer;
+    });
+
+    const fakeMongo = makeScpMongo();
+    const config    = makeScpSupervisorConfig({ supervisorEnabled: true, bridgeCriticalMs: 45_000 });
+
+    const daemon = new BridgeDaemon({
+      config,
+      logger:  makeLogger(),
+      env:     {},
+      sessionRouterFactory:    vi.fn(() => makeFakeRouter()),
+      slackAdapterFactory:     vi.fn(() => makeFakeAdapter()),
+      controlSocketFactory:    vi.fn(() => makeFakeSocket()),
+      memoryGatewayFactory:    vi.fn(() => ({ start: vi.fn(async () => {}), stop: vi.fn(async () => {}), enabled: false })),
+      mongoConnectFactory:     vi.fn().mockResolvedValue(fakeMongo),
+      workspaceManagerFactory: vi.fn().mockReturnValue({}),
+      heartbeatFactory,
+      scpHttpServerFactory,
+    });
+
+    await daemon.start();
+
+    // The factory must have been called
+    expect(scpHttpServerFactory).toHaveBeenCalledTimes(1);
+    // heartbeatRepo must be the repo from the supervisor — NOT null
+    expect(capturedFactoryArgs).not.toBeNull();
+    expect(capturedFactoryArgs.heartbeatRepo).toBe(fakeRepo);
+    // bridgeCriticalMs is carried in config.supervisor — verify the config was threaded through
+    expect(capturedFactoryArgs.config.supervisor.bridge_critical_ms).toBe(45_000);
+
+    await daemon.stop();
+  });
+
+  it('ScpHttpServer factory receives null heartbeatRepo when supervisor.enabled=false', async () => {
+    // heartbeatFactory returns null (supervisor disabled)
+    const heartbeatFactory = vi.fn(async () => null);
+
+    let capturedFactoryArgs = null;
+    const fakeScpServer = {
+      start: vi.fn(async () => ({ port: 0 })),
+      stop:  vi.fn(async () => {}),
+    };
+    const scpHttpServerFactory = vi.fn((args) => {
+      capturedFactoryArgs = args;
+      return fakeScpServer;
+    });
+
+    const fakeMongo = makeScpMongo();
+    const config    = makeScpSupervisorConfig({ supervisorEnabled: false });
+
+    const daemon = new BridgeDaemon({
+      config,
+      logger:  makeLogger(),
+      env:     {},
+      sessionRouterFactory:    vi.fn(() => makeFakeRouter()),
+      slackAdapterFactory:     vi.fn(() => makeFakeAdapter()),
+      controlSocketFactory:    vi.fn(() => makeFakeSocket()),
+      memoryGatewayFactory:    vi.fn(() => ({ start: vi.fn(async () => {}), stop: vi.fn(async () => {}), enabled: false })),
+      mongoConnectFactory:     vi.fn().mockResolvedValue(fakeMongo),
+      workspaceManagerFactory: vi.fn().mockReturnValue({}),
+      heartbeatFactory,
+      scpHttpServerFactory,
+    });
+
+    await daemon.start();
+
+    expect(scpHttpServerFactory).toHaveBeenCalledTimes(1);
+    expect(capturedFactoryArgs).not.toBeNull();
+    // With supervisor disabled the repo must be null (back-compat)
+    expect(capturedFactoryArgs.heartbeatRepo).toBeNull();
+
+    await daemon.stop();
+  });
+});
+
