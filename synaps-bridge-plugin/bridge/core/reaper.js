@@ -5,6 +5,7 @@
  * corresponding subjects (workspaces, rpcs).
  *
  * Spec reference: PHASE_5_BRIEF.md § "A3 — Reaper"
+ *                 PHASE_6_BRIEF.md § "6.5 InboxNotifier" + "B2 — Reaper InboxNotifier wiring"
  *
  * Design notes
  * ────────────
@@ -20,6 +21,10 @@
  *    cleaned up.
  *  • SCP heartbeats are informational only — systemd Restart=always handles
  *    process-level recovery.
+ *  • `inboxNotifier` fires only for container-level workspace reaps (layer-boundary
+ *    discipline: rpc reaps are the watcher's responsibility).  Notifier errors
+ *    are caught and warn-logged; they NEVER fail the reap.
+ *  • When `inboxNotifier` is null/absent, behavior is identical to Phase 5.
  */
 
 // ─── defaults ─────────────────────────────────────────────────────────────────
@@ -62,8 +67,13 @@ export class Reaper {
    * @param {object}   [opts.logger]                  - Logger with .info/.warn/.error/.debug.
    * @param {Function} [opts.setInterval]             - Injected setInterval (default: globalThis.setInterval).
    * @param {Function} [opts.clearInterval]           - Injected clearInterval (default: globalThis.clearInterval).
-   * @param {Function} [opts.now]                     - Injected clock; unused internally but available for
-   *                                                    future extension. Default: () => new Date().
+   * @param {Function} [opts.now]                     - Injected clock; returns current Date. Default: () => new Date().
+   * @param {object}   [opts.inboxNotifier]           - Optional InboxNotifier; when present, fires a
+   *                                                    workspace_reaped inbox event after each successful
+   *                                                    workspace reap.  Null/absent = Phase 5 back-compat.
+   * @param {Function} [opts.inboxDirFor]             - Optional; (workspaceId: string) => string — resolves
+   *                                                    the per-workspace inbox directory path.  Required only
+   *                                                    when inboxNotifier is set.
    */
   constructor({
     repo,
@@ -75,6 +85,8 @@ export class Reaper {
     setInterval:   setIntervalImpl   = globalThis.setInterval,
     clearInterval: clearIntervalImpl = globalThis.clearInterval,
     now = () => new Date(),
+    inboxNotifier = null,
+    inboxDirFor   = null,
   } = {}) {
     if (!repo) {
       throw new Error('Reaper: opts.repo is required');
@@ -101,6 +113,10 @@ export class Reaper {
     this._setInterval      = setIntervalImpl;
     this._clearInterval    = clearIntervalImpl;
     this._now              = now;
+
+    // Phase 6 — InboxNotifier (optional, null = Phase 5 back-compat).
+    this._inboxNotifier    = inboxNotifier ?? null;
+    this._inboxDirFor      = inboxDirFor   ?? null;
 
     this._timer            = null;
     this._running          = false;
@@ -199,6 +215,10 @@ export class Reaper {
       } else {
         for (const doc of workspaces) {
           const id = doc.id;
+          // Calculate age for inbox notification payload (best-effort: default 0 if ts absent).
+          const heartbeat = doc;
+          const ageMs     = heartbeat.ts ? (this._now().getTime() - new Date(heartbeat.ts).getTime()) : 0;
+
           try {
             await this._workspaceManager.stopWorkspace(id);
           } catch (err) {
@@ -221,6 +241,21 @@ export class Reaper {
           } catch (removeErr) {
             this._logger.warn('reaper: repo.remove failed for workspace', { id, error: removeErr });
             errors.push({ component: 'workspace', id, error: removeErr });
+          }
+
+          // Phase 6 — fire inbox notification (container-level reap only; NOT for rpc reaps).
+          // Errors are caught + warn-logged; they NEVER fail the reap.
+          if (this._inboxNotifier !== null) {
+            try {
+              await this._inboxNotifier.notifyWorkspaceReaped({
+                workspaceId:  id,
+                synapsUserId: heartbeat?.details?.synaps_user_id ?? null,
+                reason:       'stale_heartbeat',
+                details:      { ageMs, threshold: this._thresholds.workspaceMs },
+              });
+            } catch (err) {
+              this._logger.warn('inbox notify failed', { workspaceId: id, err: err.message });
+            }
           }
 
           reaped.workspaces.push(id);
