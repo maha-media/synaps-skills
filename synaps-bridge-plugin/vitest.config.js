@@ -10,7 +10,7 @@ export default defineConfig({
     // vmThreads uses worker_threads (in-process) and never re-forks, so it
     // works correctly in this environment.
     pool: 'vmThreads',
-    include: ['bridge/**/*.test.js', 'bin/**/*.test.js', 'scripts/**/*.test.mjs'],
+    include: ['bridge/**/*.test.js', 'bin/**/*.test.js', 'scripts/**/*.test.mjs', 'tests/**/*.test.mjs'],
     coverage: {
       provider: 'v8',
       include: ['bridge/**/*.js'],

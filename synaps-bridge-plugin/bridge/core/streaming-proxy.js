@@ -77,12 +77,21 @@ export class StreamingProxy extends EventEmitter {
     this._started = false;
     this._stopped = false;
 
+    // ── async dispatch serializer ─────────────────────────────────────────
+    // All async rpc-event handlers are chained onto this promise so that
+    // concurrent frames emitted in a single stdout chunk are processed in
+    // strict order.  Without serialization, fire-and-forget async calls
+    // race: e.g. _handleToolcallResult runs onResult() before _handleToolcallStart
+    // has run onStart(), causing _toolProgress.get() to return undefined.
+    /** @type {Promise<void>} */
+    this._dispatchChain = Promise.resolve();
+
     // ── bound listeners (stored so we can remove them in stop()) ──────────
-    this._onMessageUpdateBound = (event) => this._onMessageUpdate(event);
-    this._onSubagentStartBound = (payload) => this._onSubagentStart(payload);
-    this._onSubagentUpdateBound = (payload) => this._onSubagentUpdate(payload);
-    this._onSubagentDoneBound = (payload) => this._onSubagentDone(payload);
-    this._onAgentEndBound = (payload) => this._onAgentEnd(payload);
+    this._onMessageUpdateBound = (event) => this._enqueue(() => this._onMessageUpdateAsync(event));
+    this._onSubagentStartBound = (payload) => this._enqueue(() => this._onSubagentStart(payload));
+    this._onSubagentUpdateBound = (payload) => this._enqueue(() => this._onSubagentUpdate(payload));
+    this._onSubagentDoneBound = (payload) => this._enqueue(() => this._onSubagentDone(payload));
+    this._onAgentEndBound = (payload) => this._enqueue(() => this._onAgentEnd(payload));
   }
 
   // ── lifecycle ─────────────────────────────────────────────────────────────
@@ -116,6 +125,10 @@ export class StreamingProxy extends EventEmitter {
    * Force-flush any buffered text, close the stream, and unsubscribe.
    * Idempotent — calling a second time is a no-op.
    *
+   * Waits for the _dispatchChain to drain so that any in-flight async handlers
+   * (e.g. _handleToolcallResult) have a chance to complete before stopStream is
+   * called.
+   *
    * @param {object} [opts]
    * @param {*}      [opts.blocks] - Optional trailing blocks for streamHandle.stop.
    * @returns {Promise<void>}
@@ -125,6 +138,13 @@ export class StreamingProxy extends EventEmitter {
     this._stopped = true;
 
     this._unsubscribe();
+
+    // Drain any in-flight async handlers before flushing / closing the stream.
+    // We chain stop's own work onto _dispatchChain so it runs after all pending
+    // handlers complete — but we must not enqueue via _enqueue() (which checks
+    // _stopped), so we do it directly.
+    await this._dispatchChain.catch(() => {});
+
     await this._forceFlushText();
     await this._streamHandle.stop({ blocks });
   }
@@ -153,11 +173,45 @@ export class StreamingProxy extends EventEmitter {
   // ── internal: event routing ───────────────────────────────────────────────
 
   /**
-   * Dispatch a message_update event by its type.
+   * Enqueue an async task onto the serial dispatch chain. Tasks run strictly
+   * in the order they were enqueued. Errors are caught and logged so one bad
+   * handler can never break the chain. Returns the promise for the wrapped
+   * task so callers (esp. `stop()`) can await drain.
+   *
+   * No-ops once the proxy is stopped.
+   *
+   * @param {() => Promise<void>} task
+   * @returns {Promise<void>}
+   */
+  _enqueue(task) {
+    if (this._stopped) return this._dispatchChain;
+    const next = this._dispatchChain.then(() => task()).catch((err) => {
+      this._logger.warn(`StreamingProxy: dispatch task threw: ${err && err.message ? err.message : err}`);
+    });
+    this._dispatchChain = next;
+    return next;
+  }
+
+  /**
+   * Resolve once all currently-enqueued async handlers have completed.
+   * Tests use this to deterministically drain the serial dispatch chain
+   * after synchronously emitting frames via `rpc.emit(...)`.
+   *
+   * @returns {Promise<void>}
+   */
+  awaitIdle() {
+    return this._dispatchChain;
+  }
+
+  /**
+   * Dispatch a message_update event by its type. Awaits every per-frame
+   * handler so the serial dispatch chain (`_dispatchChain`) preserves
+   * happens-before order across frames emitted in a single stdout chunk.
    *
    * @param {object} event - Inner message_update event (already unwrapped by SynapsRpc).
+   * @returns {Promise<void>}
    */
-  _onMessageUpdate(event) {
+  async _onMessageUpdateAsync(event) {
     if (!event || !event.type) return;
 
     switch (event.type) {
@@ -170,7 +224,7 @@ export class StreamingProxy extends EventEmitter {
         break;
 
       case 'toolcall_start':
-        this._handleToolcallStart(event);
+        await this._handleToolcallStart(event);
         break;
 
       case 'toolcall_input_delta':
@@ -178,11 +232,11 @@ export class StreamingProxy extends EventEmitter {
         break;
 
       case 'toolcall_input':
-        this._handleToolcallInput(event);
+        await this._handleToolcallInput(event);
         break;
 
       case 'toolcall_result':
-        this._handleToolcallResult(event);
+        await this._handleToolcallResult(event);
         break;
 
       default:

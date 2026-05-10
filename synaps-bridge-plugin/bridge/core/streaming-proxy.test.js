@@ -140,7 +140,7 @@ describe('StreamingProxy — debounce', () => {
     rpc.emit('message_update', { type: 'text_delta', delta: chunk });
 
     // Flush is synchronous (fire-and-forget promise settles on next microtask)
-    await Promise.resolve();
+    await proxy.awaitIdle();
 
     expect(streamHandle.appendCalls).toHaveLength(1);
     expect(streamHandle.appendCalls[0].content).toBe(chunk);
@@ -156,7 +156,7 @@ describe('StreamingProxy — debounce', () => {
 
     // Second delta: adds 2 chars → total 81 ≥ 80 → immediate flush
     rpc.emit('message_update', { type: 'text_delta', delta: 'yy' });
-    await Promise.resolve();
+    await proxy.awaitIdle();
 
     expect(streamHandle.appendCalls).toHaveLength(1);
     expect(streamHandle.appendCalls[0].content).toBe('x'.repeat(79) + 'yy');
@@ -171,7 +171,7 @@ describe('StreamingProxy — debounce', () => {
 
     // Push over threshold — immediate flush, timer cancelled
     rpc.emit('message_update', { type: 'text_delta', delta: 'b'.repeat(15) });
-    await Promise.resolve();
+    await proxy.awaitIdle();
 
     expect(streamHandle.appendCalls).toHaveLength(1);
     const firstContent = streamHandle.appendCalls[0].content;
@@ -225,8 +225,7 @@ describe('StreamingProxy — debounce', () => {
 
     // Tool start should force-flush first
     rpc.emit('message_update', { type: 'toolcall_start', tool_id: 'T1', tool_name: 'my_tool' });
-    await Promise.resolve(); // let async handlers settle
-    await Promise.resolve();
+    await proxy.awaitIdle();
 
     // First append = flushed text, second = task_update for tool
     expect(streamHandle.appendCalls.length).toBeGreaterThanOrEqual(1);
@@ -244,8 +243,7 @@ describe('StreamingProxy — debounce', () => {
     expect(streamHandle.appendCalls).toHaveLength(0);
 
     rpc.emit('subagent_start', { subagent_id: 'S1', agent_name: 'helper', task_preview: 'task' });
-    await Promise.resolve();
-    await Promise.resolve();
+    await proxy.awaitIdle();
 
     expect(streamHandle.appendCalls[0]).toEqual({
       type: 'markdown_text',
@@ -260,8 +258,7 @@ describe('StreamingProxy — debounce', () => {
     rpc.emit('message_update', { type: 'text_delta', delta: 'answer here' });
 
     rpc.emit('agent_end', { usage: { input_tokens: 10, output_tokens: 20 } });
-    await Promise.resolve();
-    await Promise.resolve();
+    await proxy.awaitIdle();
 
     expect(streamHandle.appendCalls[0]).toEqual({
       type: 'markdown_text',
@@ -285,8 +282,7 @@ describe('StreamingProxy — richStreamChunks capability', () => {
       agent_name: 'summariser',
       task_preview: 'boil it down',
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    await proxy.awaitIdle();
 
     const taskUpdate = streamHandle.appendCalls.find((c) => c.type === 'task_update');
     expect(taskUpdate).toBeDefined();
@@ -312,8 +308,7 @@ describe('StreamingProxy — auxBlocks capability', () => {
       agent_name: 'worker',
       task_preview: 'work',
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    await proxy.awaitIdle();
 
     expect(auxEvents).toHaveLength(1);
     expect(auxEvents[0].kind).toBe('subagent');
@@ -328,8 +323,7 @@ describe('StreamingProxy — auxBlocks capability', () => {
     proxy.on('aux', (e) => auxEvents.push(e));
 
     rpc.emit('message_update', { type: 'toolcall_start', tool_id: 'T1', tool_name: 'my_tool' });
-    await Promise.resolve();
-    await Promise.resolve();
+    await proxy.awaitIdle();
 
     expect(auxEvents).toHaveLength(1);
     expect(auxEvents[0].kind).toBe('tool');
@@ -349,8 +343,7 @@ describe('StreamingProxy — inline text fallback (no richStreamChunks, no auxBl
       agent_name: 'cruncher',
       task_preview: 'crunch',
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    await proxy.awaitIdle();
 
     // Advance timer to flush the inline text
     await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
@@ -367,8 +360,7 @@ describe('StreamingProxy — inline text fallback (no richStreamChunks, no auxBl
     await proxy.start();
 
     rpc.emit('message_update', { type: 'toolcall_start', tool_id: 'T1', tool_name: 'search' });
-    await Promise.resolve();
-    await Promise.resolve();
+    await proxy.awaitIdle();
 
     await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
 
@@ -388,18 +380,18 @@ describe('StreamingProxy — tool lifecycle', () => {
     await proxy.start();
 
     rpc.emit('message_update', { type: 'toolcall_start', tool_id: 'T1', tool_name: 'read' });
-    await Promise.resolve(); await Promise.resolve();
+    await proxy.awaitIdle();
 
     rpc.emit('message_update', { type: 'toolcall_input_delta', tool_id: 'T1', delta: '{"f' });
     rpc.emit('message_update', { type: 'toolcall_input_delta', tool_id: 'T1', delta: 'ile"' });
     rpc.emit('message_update', { type: 'toolcall_input_delta', tool_id: 'T1', delta: ':"a.txt"}' });
-    await Promise.resolve();
+    await proxy.awaitIdle();
 
     rpc.emit('message_update', { type: 'toolcall_input', tool_id: 'T1', input: { file: 'a.txt' } });
-    await Promise.resolve(); await Promise.resolve();
+    await proxy.awaitIdle();
 
     rpc.emit('message_update', { type: 'toolcall_result', tool_id: 'T1', result: 'contents here' });
-    await Promise.resolve(); await Promise.resolve();
+    await proxy.awaitIdle();
 
     // There should be task_update chunks for start, input, and result
     const taskUpdates = streamHandle.appendCalls.filter((c) => c.type === 'task_update');
@@ -420,12 +412,12 @@ describe('StreamingProxy — tool lifecycle', () => {
     await proxy.start();
 
     rpc.emit('message_update', { type: 'toolcall_start', tool_id: 'T1', tool_name: 'x' });
-    await Promise.resolve(); await Promise.resolve();
+    await proxy.awaitIdle();
 
     rpc.emit('message_update', { type: 'toolcall_input_delta', tool_id: 'T1', delta: 'ab' });
     rpc.emit('message_update', { type: 'toolcall_input_delta', tool_id: 'T1', delta: 'cd' });
     rpc.emit('message_update', { type: 'toolcall_input_delta', tool_id: 'T1', delta: 'ef' });
-    await Promise.resolve();
+    await proxy.awaitIdle();
 
     expect(tp.get('T1').inputBuffer).toBe('abcdef');
   });
@@ -444,9 +436,11 @@ describe('StreamingProxy — query helpers', () => {
     expect(proxy.getBufferedTextChars()).toBe(0);
 
     rpc.emit('message_update', { type: 'text_delta', delta: 'hello' }); // 5 chars
+    await proxy.awaitIdle();
     expect(proxy.getBufferedTextChars()).toBe(5);
 
     rpc.emit('message_update', { type: 'text_delta', delta: ' world' }); // +6 = 11
+    await proxy.awaitIdle();
     expect(proxy.getBufferedTextChars()).toBe(11);
   });
 
@@ -461,6 +455,7 @@ describe('StreamingProxy — query helpers', () => {
     await proxy.start();
 
     rpc.emit('message_update', { type: 'text_delta', delta: 'hi' });
+    await proxy.awaitIdle();
 
     // Advance 100ms
     await vi.advanceTimersByTimeAsync(100);
@@ -477,12 +472,12 @@ describe('StreamingProxy — query helpers', () => {
 
     rpc.emit('subagent_start', { subagent_id: 'S1', agent_name: 'a' });
     rpc.emit('subagent_start', { subagent_id: 'S2', agent_name: 'b' });
-    await Promise.resolve(); await Promise.resolve();
+    await proxy.awaitIdle();
 
     expect(proxy.getPendingSubagentCount()).toBe(2);
 
     rpc.emit('subagent_done', { subagent_id: 'S1', agent_name: 'a', duration_secs: 1 });
-    await Promise.resolve(); await Promise.resolve();
+    await proxy.awaitIdle();
 
     expect(proxy.getPendingSubagentCount()).toBe(1);
   });
