@@ -449,8 +449,8 @@ function defaultSlackAdapterFactory({ auth, sessionRouter, memoryGateway, identi
  * @param {{ sessionRouter: SessionRouter, identityRouter: object, logger: object, version: string }} opts
  * @returns {ControlSocket}
  */
-function defaultControlSocketFactory({ sessionRouter, identityRouter, logger, version }) { // eslint-disable-line no-unused-vars
-  return new ControlSocket({ sessionRouter, logger, version });
+function defaultControlSocketFactory({ sessionRouter, identityRouter, credBroker, hookBus, mcpTokenRepo, logger, version }) { // eslint-disable-line no-unused-vars
+  return new ControlSocket({ sessionRouter, identityRouter, credBroker, hookBus, mcpTokenRepo, logger, version });
 }
 
 // ─── BridgeDaemon ─────────────────────────────────────────────────────────────
@@ -574,6 +574,9 @@ export class BridgeDaemon extends EventEmitter {
     // Phase 7 MCP server.
     /** @type {object|null} McpServer or null when disabled */
     this._mcpServer = null;
+
+    /** @type {object|null} McpTokenRepo instance — reused by ControlSocket */
+    this._mcpTokenRepo = null;
 
     // Identity router (built in start()).
     /** @type {import('./core/identity-router.js').IdentityRouter|import('./core/identity-router.js').NoOpIdentityRouter|null} */
@@ -717,6 +720,9 @@ export class BridgeDaemon extends EventEmitter {
             ? { record: (entry) => new McpAuditRepo({ db }).record(entry) }
             : { record: async () => {} };
 
+          // Store tokenRepo so ControlSocket can use it for mcp_token_* ops.
+          this._mcpTokenRepo = tokenRepo;
+
           builtMcpServer = new McpServer({
             tokenResolver,
             toolRegistry,
@@ -787,6 +793,7 @@ export class BridgeDaemon extends EventEmitter {
       identityRouter: this._identityRouter,
       credBroker: this._credBroker,
       hookBus: this._hookBus,
+      mcpTokenRepo: this._mcpTokenRepo,
       logger: this.logger,
       version: '0.1.0',
     });
