@@ -804,3 +804,175 @@ setup, token file configuration, daemon startup log verification, UDS
 round-trip confirmation, audit log inspection, cache behaviour under Infisical
 outage, graceful-degradation window testing, `creds_unavailable` boundary
 check, and a token-leak audit against daemon logs.
+
+---
+
+## Phase 5 — Supervisor, heartbeats & Tetragon policies
+
+### What Phase 5 adds
+
+Phase 5 introduces two complementary layers of runtime safety:
+
+1. **Heartbeat infrastructure (JS layer)** — a `HeartbeatEmitter` records
+   periodic liveness pulses for every critical subsystem (bridge daemon,
+   workspaces, RPC sessions) into MongoDB.  A `Reaper` sweeps stale records and
+   terminates the corresponding subjects (stops workspace containers, kills RPC
+   sessions).  The `/health` endpoint on `ScpHttpServer` now returns a full
+   component table with graduated status codes.
+
+2. **Tetragon eBPF security policies (kernel layer)** — four
+   `TracingPolicy` YAMLs enforce invariants that application code cannot
+   enforce: blocking outbound connections to the cloud metadata endpoint,
+   preventing kernel module loading inside containers, and killing fork-bomb
+   attacks at the scheduler level.
+
+### `[supervisor]` config block
+
+```toml
+[supervisor]
+# Master switch — heartbeats only fire when this is true.
+# When false (the default), no HeartbeatEmitter or Reaper is created and
+# /health falls back to the Phase-1 shape { status, mode, ts }.
+enabled               = false
+
+# How often (ms) the bridge daemon writes its own heartbeat to MongoDB.
+heartbeat_interval_ms = 10000    # 10 s
+
+# How often (ms) the Reaper sweeps for stale records.
+reaper_interval_ms    = 60000    # 60 s
+
+# Staleness thresholds — records older than this are considered dead.
+workspace_stale_ms    = 1800000  # 30 min → stopWorkspace() called
+rpc_stale_ms          = 300000   # 5 min  → rpcKiller() called
+scp_stale_ms          = 30000    # 30 s   → warn only; systemd Restart=always handles recovery
+
+# Age threshold for the bridge's OWN heartbeat above which /health returns
+# HTTP 503 + status:'down'.  Other components use the same threshold for
+# the 'degraded' verdict.
+bridge_critical_ms    = 60000    # 60 s
+```
+
+Full schema reference (all keys + types + defaults):
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Master opt-in switch |
+| `heartbeat_interval_ms` | int | `10000` | Bridge heartbeat cadence (ms) |
+| `reaper_interval_ms` | int | `60000` | Reaper sweep cadence (ms) |
+| `workspace_stale_ms` | int | `1800000` | Workspace staleness threshold (ms) |
+| `rpc_stale_ms` | int | `300000` | RPC session staleness threshold (ms) |
+| `scp_stale_ms` | int | `30000` | SCP process staleness threshold (ms; info-only) |
+| `bridge_critical_ms` | int | `60000` | Bridge critical-stale threshold for /health 503 (ms) |
+
+### Default-off posture
+
+When `enabled = false` (the default):
+
+- No `HeartbeatEmitter` or `Reaper` is instantiated; no MongoDB heartbeat
+  collection is accessed.
+- `BridgeDaemon.supervisor` is `null`.
+- `/health` returns the Phase-1 shape `{ status: 'ok', mode, ts }` with no
+  `components` key (backward-compatible).
+- No timers are scheduled.
+
+To activate:
+
+```toml
+[supervisor]
+enabled = true
+```
+
+### `/health` component table semantics
+
+When `heartbeatRepo` is present (supervisor enabled), `/health` returns:
+
+```json
+{
+  "status":     "ok",
+  "mode":       "scp",
+  "ts":         "2026-05-10T12:00:00.000Z",
+  "components": [
+    { "component": "bridge",    "id": "main",     "healthy": true, "ts": "...", "ageMs": 500 },
+    { "component": "workspace", "id": "ws_alice", "healthy": true, "ts": "...", "ageMs": 2000 },
+    { "component": "rpc",       "id": "sess_xyz", "healthy": true, "ts": "...", "ageMs": 1000 }
+  ]
+}
+```
+
+**HTTP status rules:**
+
+| HTTP | `status` | Condition |
+|---|---|---|
+| 200 | `"ok"` | Bridge heartbeat present, healthy, `ageMs` < `bridge_critical_ms`; all others also fresh |
+| 200 | `"degraded"` | Bridge fresh & healthy; at least one non-bridge component stale or unhealthy |
+| 503 | `"down"` | No bridge heartbeat, OR bridge `ageMs` > `bridge_critical_ms`, OR bridge `healthy = false` |
+
+### Reaper thresholds
+
+| Component | Default threshold | Action on stale |
+|---|---|---|
+| `workspace` | 30 min | `workspaceManager.stopWorkspace(id)` + `markReaped(id)` + heartbeat row deleted |
+| `rpc` | 5 min | `rpcKiller(sessionId)` + heartbeat row deleted |
+| `scp` | 30 s | Warn log only — systemd `Restart=always` handles process restart |
+
+Reap actions are **best-effort**: if `stopWorkspace` or `rpcKiller` throws, the
+error is captured in the sweep summary and the sweep continues to the next
+target. The heartbeat row for a failed reap is NOT deleted (so the next sweep
+retries).
+
+### Tetragon policies
+
+Four `TracingPolicy` YAMLs are included under `config/tetragon/`:
+
+| File | Purpose | Action |
+|---|---|---|
+| `block-egress-metadata.yaml` | Block TCP connect to 169.254.169.254 | `Override -EPERM` |
+| `block-kernel-modules.yaml` | Deny `finit_module`/`init_module` in non-init namespaces | `Override -EPERM` |
+| `kill-fork-bomb.yaml` | Kill any PID spawning > 200 tasks/second | `Sigkill` |
+| `kill-cpu-runaway.yaml` | **Documented stub** — CPU% enforcement (see file header) | N/A (inert) |
+
+> **Note on `kill-cpu-runaway.yaml`**: Tetragon v1.2 does not expose a stable
+> "CPU percentage over time" selector in the YAML DSL without a custom BPF
+> helper.  The file ships as an inert stub with a detailed explanation of the
+> limitation and the recommended alternatives (cgroups v2 `cpu.max` at
+> container-create time, or the JS-side Reaper polling `/proc` stats).  See
+> the file header for full details.
+
+Apply the policies:
+
+```bash
+tetra tracingpolicy add config/tetragon/block-egress-metadata.yaml
+tetra tracingpolicy add config/tetragon/block-kernel-modules.yaml
+tetra tracingpolicy add config/tetragon/kill-fork-bomb.yaml
+```
+
+### What Phase 5 ships
+
+| File | Description |
+|---|---|
+| `bridge/core/db/models/synaps-heartbeat.js` | Mongoose model factory (`makeHeartbeatModel`) |
+| `bridge/core/db/repositories/heartbeat-repo.js` | `HeartbeatRepo` class (record/findStale/findAll/remove) |
+| `bridge/core/heartbeat-emitter.js` | `HeartbeatEmitter` periodic timer class |
+| `bridge/core/reaper.js` | `Reaper` sweep + targeted termination class |
+| `bridge/core/scp-http-server.js` | Extended with component-table `/health` |
+| `bridge/index.js` | `defaultHeartbeatFactory` + `BridgeDaemon.supervisor` wiring |
+| `config/tetragon/*.yaml` | 4 Tetragon TracingPolicy YAMLs |
+
+### Acceptance tests
+
+| File | Tests |
+|------|-------|
+| `tests/scp-phase-5/00-heartbeat-emitter-mongo.test.mjs` | 5 |
+| `tests/scp-phase-5/01-reaper-end-to-end.test.mjs` | 6 |
+| `tests/scp-phase-5/02-health-component-table.test.mjs` | 5 |
+| `tests/scp-phase-5/03-supervisor-disabled.test.mjs` | 4 |
+| **Total new** | **20** |
+
+### Operator playbook
+
+See [`docs/smoke/phase-5-supervisor.md`](docs/smoke/phase-5-supervisor.md)
+for the full 10-step manual verification procedure including: Tetragon
+installation, policy application, fork-bomb kill test, cloud metadata egress
+block test, `/health` component table verification (including the
+freeze-and-recover cycle), Reaper smoke with direct MongoDB injection, and
+full audit-trail review via `tetra getevents`.

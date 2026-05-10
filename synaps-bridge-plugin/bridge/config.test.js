@@ -1197,3 +1197,177 @@ describe('loadBridgeConfig — creds unknown keys', () => {
   });
 });
 
+// ─── supervisor section ───────────────────────────────────────────────────────
+
+describe('BRIDGE_CONFIG_DEFAULTS includes supervisor section', () => {
+  it('has supervisor section with correct defaults', () => {
+    const s = BRIDGE_CONFIG_DEFAULTS.supervisor;
+    expect(s).toBeDefined();
+    expect(s.enabled).toBe(false);
+    expect(s.heartbeat_interval_ms).toBe(10_000);
+    expect(s.reaper_interval_ms).toBe(60_000);
+    expect(s.workspace_stale_ms).toBe(1_800_000);
+    expect(s.rpc_stale_ms).toBe(300_000);
+    expect(s.scp_stale_ms).toBe(30_000);
+    expect(s.bridge_critical_ms).toBe(60_000);
+  });
+
+  it('supervisor default sub-object is frozen', () => {
+    expect(Object.isFrozen(BRIDGE_CONFIG_DEFAULTS.supervisor)).toBe(true);
+  });
+});
+
+describe('loadBridgeConfig — supervisor section defaults', () => {
+  it('returns all supervisor defaults when [supervisor] is absent', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    const s = config.supervisor;
+    expect(s.enabled).toBe(false);
+    expect(s.heartbeat_interval_ms).toBe(10_000);
+    expect(s.reaper_interval_ms).toBe(60_000);
+    expect(s.workspace_stale_ms).toBe(1_800_000);
+    expect(s.rpc_stale_ms).toBe(300_000);
+    expect(s.scp_stale_ms).toBe(30_000);
+    expect(s.bridge_critical_ms).toBe(60_000);
+  });
+
+  it('result.supervisor is frozen', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(Object.isFrozen(config.supervisor)).toBe(true);
+  });
+});
+
+describe('loadBridgeConfig — supervisor.enabled', () => {
+  it('honours enabled = true', async () => {
+    const toml = `[supervisor]\nenabled = true\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.supervisor.enabled).toBe(true);
+  });
+
+  it('defaults to false and does not warn', async () => {
+    const toml = `[supervisor]\nenabled = false\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.supervisor.enabled).toBe(false);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe('loadBridgeConfig — supervisor *_ms fields accept valid values', () => {
+  it('accepts heartbeat_interval_ms = 5000', async () => {
+    const toml = `[supervisor]\nheartbeat_interval_ms = 5000\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.supervisor.heartbeat_interval_ms).toBe(5000);
+  });
+
+  it('accepts reaper_interval_ms = 30000', async () => {
+    const toml = `[supervisor]\nreaper_interval_ms = 30000\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.supervisor.reaper_interval_ms).toBe(30000);
+  });
+
+  it('accepts workspace_stale_ms = 900000', async () => {
+    const toml = `[supervisor]\nworkspace_stale_ms = 900000\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.supervisor.workspace_stale_ms).toBe(900000);
+  });
+
+  it('accepts rpc_stale_ms = 120000', async () => {
+    const toml = `[supervisor]\nrpc_stale_ms = 120000\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.supervisor.rpc_stale_ms).toBe(120000);
+  });
+
+  it('accepts scp_stale_ms = 0 (zero is valid — non-negative)', async () => {
+    const toml = `[supervisor]\nscp_stale_ms = 0\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.supervisor.scp_stale_ms).toBe(0);
+  });
+
+  it('accepts bridge_critical_ms = 120000', async () => {
+    const toml = `[supervisor]\nbridge_critical_ms = 120000\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.supervisor.bridge_critical_ms).toBe(120000);
+  });
+});
+
+describe('loadBridgeConfig — supervisor *_ms fields warn + default on negative', () => {
+  it('heartbeat_interval_ms < 0 → warn + default', async () => {
+    const toml = `[supervisor]\nheartbeat_interval_ms = -1\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.supervisor.heartbeat_interval_ms).toBe(10_000);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('supervisor.heartbeat_interval_ms'));
+  });
+
+  it('reaper_interval_ms < 0 → warn + default', async () => {
+    const toml = `[supervisor]\nreaper_interval_ms = -5\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.supervisor.reaper_interval_ms).toBe(60_000);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('supervisor.reaper_interval_ms'));
+  });
+
+  it('workspace_stale_ms < 0 → warn + default', async () => {
+    const toml = `[supervisor]\nworkspace_stale_ms = -100\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.supervisor.workspace_stale_ms).toBe(1_800_000);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('supervisor.workspace_stale_ms'));
+  });
+});
+
+describe('loadBridgeConfig — supervisor *_ms fields warn + default on non-integer', () => {
+  it('heartbeat_interval_ms = 5000.5 → warn + default', async () => {
+    const toml = `[supervisor]\nheartbeat_interval_ms = 5000.5\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.supervisor.heartbeat_interval_ms).toBe(10_000);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('supervisor.heartbeat_interval_ms'));
+  });
+
+  it('rpc_stale_ms = 1.5 → warn + default', async () => {
+    const toml = `[supervisor]\nrpc_stale_ms = 1.5\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.supervisor.rpc_stale_ms).toBe(300_000);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('supervisor.rpc_stale_ms'));
+  });
+
+  it('bridge_critical_ms = 60.9 → warn + default', async () => {
+    const toml = `[supervisor]\nbridge_critical_ms = 60.9\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.supervisor.bridge_critical_ms).toBe(60_000);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('supervisor.bridge_critical_ms'));
+  });
+});
+
+describe('loadBridgeConfig — supervisor unknown keys', () => {
+  it('warns on unknown key inside [supervisor] and drops it', async () => {
+    const toml = `[supervisor]\nfuture_option = "xyz"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('unknown supervisor key "future_option"'),
+    );
+    expect(config.supervisor.future_option).toBeUndefined();
+  });
+});
+

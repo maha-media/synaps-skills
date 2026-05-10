@@ -55,6 +55,9 @@ import { AxelCliClient }         from './core/memory/axel-cli-client.js';
 import { CredBroker, NoopCredBroker } from './core/cred-broker.js';
 import { InfisicalClient }       from './core/cred-broker/infisical-client.js';
 import { NoOpIdentityRouter }    from './core/identity-router.js';
+import { HeartbeatEmitter }      from './core/heartbeat-emitter.js';
+import { Reaper }                from './core/reaper.js';
+import { makeHeartbeatRepo }     from './core/db/index.js';
 import Docker                    from 'dockerode';
 
 // ─── default factories ────────────────────────────────────────────────────────
@@ -140,6 +143,55 @@ export function defaultCredBrokerFactory(config, logger) {
     cacheTtlSecs: config.creds.cache_ttl_secs,
     logger,
   });
+}
+
+/**
+ * Build HeartbeatEmitter + Reaper when supervisor is enabled and mongoose is
+ * available.  Returns null in all other cases (silent no-op).
+ *
+ * Exported so tests can exercise the factory branches directly.
+ *
+ * @param {import('./config.js').NormalizedConfig} config
+ * @param {{info,warn,error,debug}} logger
+ * @param {Function|null} getMongooseFn  - async () => mongoose instance
+ * @param {object} [extras]
+ * @param {object}   [extras.workspaceManager] - forwarded to Reaper if provided
+ * @param {Function} [extras.rpcKiller]        - forwarded to Reaper if provided
+ * @returns {Promise<{repo, emitter, reaper}|null>}
+ */
+export async function defaultHeartbeatFactory(config, logger, getMongooseFn, { workspaceManager, rpcKiller } = {}) {
+  if (!config.supervisor?.enabled) return null;
+
+  const mongoose = await getMongooseFn?.();
+  if (!mongoose) {
+    logger.warn('supervisor enabled but mongoose unavailable; heartbeats disabled');
+    return null;
+  }
+
+  const repo = makeHeartbeatRepo(mongoose);
+
+  const emitter = new HeartbeatEmitter({
+    repo,
+    component:  'bridge',
+    id:         'main',
+    intervalMs: config.supervisor.heartbeat_interval_ms,
+    logger,
+  });
+
+  const reaper = new Reaper({
+    repo,
+    intervalMs: config.supervisor.reaper_interval_ms,
+    thresholds: {
+      workspaceMs: config.supervisor.workspace_stale_ms,
+      rpcMs:       config.supervisor.rpc_stale_ms,
+      scpMs:       config.supervisor.scp_stale_ms,
+    },
+    workspaceManager: workspaceManager ?? null,
+    rpcKiller:        rpcKiller        ?? null,
+    logger,
+  });
+
+  return { repo, emitter, reaper };
 }
 
 /**
@@ -274,6 +326,7 @@ export class BridgeDaemon extends EventEmitter {
    * @param {Function} [opts.memoryGatewayFactory]     - (config, logger) => MemoryGateway|NoopMemoryGateway — injectable for tests.
    * @param {Function} [opts.identityRouterFactory]    - ({ config, logger }) => Promise<IdentityRouter|NoOpIdentityRouter> — injectable for tests.
    * @param {Function} [opts.credBrokerFactory]        - (config, logger) => CredBroker|NoopCredBroker — injectable for tests.
+   * @param {Function} [opts.heartbeatFactory]         - async (config, logger, getMongoose, extras) => {repo,emitter,reaper}|null — injectable for tests.
    */
   constructor({
     config,
@@ -289,6 +342,7 @@ export class BridgeDaemon extends EventEmitter {
     memoryGatewayFactory = null,
     identityRouterFactory = null,
     credBrokerFactory = null,
+    heartbeatFactory = null,
   } = {}) {
     super();
 
@@ -314,6 +368,9 @@ export class BridgeDaemon extends EventEmitter {
     // Cred broker factory (test-injectable).
     this._credBrokerFactory = credBrokerFactory ?? defaultCredBrokerFactory;
 
+    // Heartbeat factory (test-injectable).
+    this._heartbeatFactory = heartbeatFactory ?? defaultHeartbeatFactory;
+
     /** @type {SessionRouter|null} */
     this._sessionRouter = null;
     /** @type {SlackAdapter|null} */
@@ -326,6 +383,7 @@ export class BridgeDaemon extends EventEmitter {
     this._mongoose = null;
     /** @type {WorkspaceManager|null} */
     this._workspaceManager = null;
+    this._workspaceRepo    = null;
     /** @type {ScpHttpServer|null} */
     this._scpHttpServer = null;
 
@@ -336,6 +394,10 @@ export class BridgeDaemon extends EventEmitter {
     // Cred broker (built in start(), available in both bridge and SCP mode).
     /** @type {CredBroker|NoopCredBroker|null} */
     this._credBroker = null;
+
+    // Supervisor (built in start() when supervisor.enabled = true and mongoose available).
+    /** @type {{repo: object, emitter: HeartbeatEmitter, reaper: Reaper}|null} */
+    this.supervisor = null;
 
     // Identity router (built in start()).
     /** @type {import('./core/identity-router.js').IdentityRouter|import('./core/identity-router.js').NoOpIdentityRouter|null} */
@@ -379,6 +441,7 @@ export class BridgeDaemon extends EventEmitter {
       // 2. Build repo + WorkspaceManager.
       const model = getSynapsWorkspaceModel(this._mongoose);
       const repo  = new WorkspaceRepo({ model, logger: this.logger });
+      this._workspaceRepo = repo;  // stored so http server block can access it below
 
       if (this._workspaceManagerFactory) {
         this._workspaceManager = this._workspaceManagerFactory(repo, this._config);
@@ -412,19 +475,51 @@ export class BridgeDaemon extends EventEmitter {
         memoryGateway: this._memoryGateway,
         credBroker: this._credBroker,
       };
+    }
 
-      // 4. Optional HTTP server + VNC proxy.
-      if (this._config.web.enabled) {
-        let scpServer;
-        if (this._scpHttpServerFactory) {
-          scpServer = this._scpHttpServerFactory({ config: this._config, repo, logger: this.logger });
-        } else {
-          const vncProxy = new VncProxy({ repo, logger: this.logger });
-          scpServer = new ScpHttpServer({ config: this._config, vncProxy, logger: this.logger });
-        }
-        this._scpHttpServer = scpServer;
-        await this._scpHttpServer.start();
+    // 4a. Supervisor (heartbeat + reaper) — runs in both bridge and scp modes.
+    //     Built here (before the HTTP server) so heartbeatRepo is available to /health.
+    //     In bridge mode getMongoose() returns null → defaultHeartbeatFactory yields null.
+    const _getMongoose = () => this._mongoose;
+    this.supervisor = await this._heartbeatFactory(
+      this._config,
+      this.logger,
+      _getMongoose,
+      {
+        workspaceManager: this._workspaceManager ?? undefined,
+        rpcKiller:        undefined,
+      },
+    );
+    if (this.supervisor) {
+      this.supervisor.emitter.start();
+      this.supervisor.reaper.start();
+      this.logger.info?.('supervisor started');
+    }
+
+    // 4b. Optional HTTP server + VNC proxy (SCP mode only).
+    //     heartbeatRepo is now available from the supervisor built above.
+    if (isScp && this._config.web.enabled) {
+      const heartbeatRepo = this.supervisor ? this.supervisor.repo : null;
+      let scpServer;
+      if (this._scpHttpServerFactory) {
+        scpServer = this._scpHttpServerFactory({
+          config: this._config,
+          repo: this._workspaceRepo,
+          heartbeatRepo,
+          logger: this.logger,
+        });
+      } else {
+        const vncProxy = new VncProxy({ repo: this._workspaceRepo, logger: this.logger });
+        scpServer = new ScpHttpServer({
+          config: this._config,
+          vncProxy,
+          heartbeatRepo,
+          bridgeCriticalMs: this._config.supervisor?.bridge_critical_ms,
+          logger: this.logger,
+        });
       }
+      this._scpHttpServer = scpServer;
+      await this._scpHttpServer.start();
     }
 
     // 1. Session router.
@@ -529,6 +624,13 @@ export class BridgeDaemon extends EventEmitter {
       } catch (err) {
         this.logger.warn?.(`BridgeDaemon: memory gateway stop error: ${err.message}`);
       }
+    }
+
+    // Supervisor — emitter first (final shutdown beat), then reaper.
+    if (this.supervisor) {
+      try { await this.supervisor.emitter.stop(); } catch (e) { this.logger.warn?.(`BridgeDaemon: supervisor emitter stop failed: ${e.message}`); }
+      try { this.supervisor.reaper.stop();        } catch (e) { this.logger.warn?.(`BridgeDaemon: supervisor reaper stop failed: ${e.message}`); }
+      this.logger.info?.('supervisor stopped');
     }
 
     // Cred broker — clear cache after memory gateway.

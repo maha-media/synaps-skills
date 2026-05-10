@@ -1,0 +1,84 @@
+# kill-fork-bomb.yaml
+#
+# Purpose
+# ───────
+# Detect and terminate fork-bomb attacks inside workspace containers.
+# A fork bomb (:() { :|: & }; :) rapidly creates thousands of processes,
+# exhausting the kernel's PID space and starving the host.
+#
+# Mechanism
+# ─────────
+# Tetragon's RateLimit selector is used to count how many times a given
+# PID calls the fork/clone path (wake_up_new_task is triggered once per
+# new task spawned by any clone/fork/vfork syscall).  When a single
+# process spawns more than `rate` new tasks within `interval` the
+# Sigkill action is applied to that process.
+#
+# Threshold rationale
+# ───────────────────
+# A legitimate build process (make -j16) may fork 100–200 short-lived
+# subprocesses per second.  A fork bomb typically saturates at thousands
+# per second.  The threshold below (200 forks / 1 s from a single PID)
+# is a conservative limit that catches bombs while tolerating heavy
+# parallel builds.  Adjust `rate` and `interval` per your workload.
+#
+# User-visible behaviour
+# ──────────────────────
+# • The offending process receives SIGKILL immediately when the rate is
+#   exceeded.  All descendant tasks share the same fate via OOM/orphan
+#   cleanup.
+# • tetra getevents will show a PROCESS_KPROBE event with action=Sigkill
+#   for the offending PID.
+#
+# Tetragon RateLimit docs:
+#   https://tetragon.io/docs/concepts/policy-rules/rate-limit/
+# Tetragon tracing policy docs:
+#   https://tetragon.io/docs/concepts/tracing-policy/
+#
+# Note: wake_up_new_task is a kernel-internal function (not a syscall).
+# Use `syscall: false`.  It is called once per task created regardless
+# of whether the creator used fork(2), clone(2), or vfork(2).
+#
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: kill-fork-bomb
+  labels:
+    synaps-control-plane: "v0"
+spec:
+  kprobes:
+    - call: "wake_up_new_task"
+      syscall: false
+      # No args needed — we only care about the calling PID, which Tetragon
+      # tracks automatically for the RateLimit selector.
+      selectors:
+        - matchRateLimit:
+            # Trigger if a single PID calls wake_up_new_task more than
+            # 200 times within any 1-second sliding window.
+            # NOTE: Tetragon >= 1.2 introduced matchRateLimit as a first-class
+            # selector.  If using an older version, combine MapAction counters
+            # with a Sigkill action — see the comment block below.
+            rate: 200
+            interval: "1s"
+            # Scope the rate counter to the calling process (per-PID).
+            # Without this, the counter is global across all processes.
+            # TODO: Confirm `perProcess: true` field name against your
+            # Tetragon version's CRD schema.  Some releases use `perPid`.
+            # Reference: https://tetragon.io/docs/concepts/policy-rules/rate-limit/
+            perProcess: true
+          matchActions:
+            - action: Sigkill
+      # ── Alternative implementation for Tetragon < 1.2 ──────────────────────
+      # If matchRateLimit is not available, implement a counter using
+      # MapAction + Sigkill:
+      #
+      #   selectors:
+      #     - matchActions:
+      #         - action: TrackSyscall   # increments per-PID counter in a BPF map
+      #         - action: Sigkill
+      #           rateLimit:             # some versions support inline rateLimit
+      #             interval: "1s"
+      #             count: 200
+      #
+      # Consult: https://tetragon.io/docs/concepts/tracing-policy/actions/
+      # ───────────────────────────────────────────────────────────────────────

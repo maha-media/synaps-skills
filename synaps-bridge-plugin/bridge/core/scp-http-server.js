@@ -6,6 +6,7 @@
  *
  * Routes:
  *   GET /health                  → 200 {status:'ok', mode, ts}
+ *                                   or graduated component table when heartbeatRepo present
  *   GET /vnc/:workspace_id/...   → VncProxy.middleware
  *   *                            → 404 {error:'not_found'}
  *
@@ -21,9 +22,14 @@ import http from 'node:http';
 
 /**
  * @typedef {object} ScpHttpServerOptions
- * @property {object}   config    - NormalizedConfig (needs .platform, .web)
- * @property {object}   vncProxy  - VncProxy instance (middleware() + upgrade())
- * @property {object}   [logger]  - Logger with .info/.warn/.error; defaults to console.
+ * @property {object}   config            - NormalizedConfig (needs .platform, .web)
+ * @property {object}   vncProxy          - VncProxy instance (middleware() + upgrade())
+ * @property {object}   [logger]          - Logger with .info/.warn/.error; defaults to console.
+ * @property {object}   [heartbeatRepo]   - Optional HeartbeatRepo; when absent /health
+ *                                          returns the Phase-1 shape unchanged.
+ * @property {number}   [bridgeCriticalMs=60_000] - Age threshold (ms) above which the
+ *                                          bridge heartbeat is considered critical-stale
+ *                                          → 503 down.
  */
 
 /**
@@ -31,20 +37,29 @@ import http from 'node:http';
  *
  * Lifecycle: instantiate → start() → (handle requests) → stop()
  *
- * All requests are handled synchronously in the request listener; no
- * express dependency. Uses only Node built-in `http`.
+ * The request listener is async-capable: each request is handled inside an
+ * async IIFE whose rejections are caught and turned into 500 responses rather
+ * than crashing the process.
  */
 export class ScpHttpServer {
   /**
    * @param {ScpHttpServerOptions} opts
    */
-  constructor({ config, vncProxy, logger = console }) {
-    if (!config) throw new TypeError('ScpHttpServer: opts.config is required');
+  constructor({
+    config,
+    vncProxy,
+    logger         = console,
+    heartbeatRepo  = null,
+    bridgeCriticalMs = 60_000,
+  }) {
+    if (!config)   throw new TypeError('ScpHttpServer: opts.config is required');
     if (!vncProxy) throw new TypeError('ScpHttpServer: opts.vncProxy is required');
 
-    this._config   = config;
-    this._vncProxy = vncProxy;
-    this._logger   = logger;
+    this._config           = config;
+    this._vncProxy         = vncProxy;
+    this._logger           = logger;
+    this._heartbeatRepo    = heartbeatRepo;
+    this._bridgeCriticalMs = bridgeCriticalMs;
 
     /** @type {import('node:http').Server | null} */
     this._server = null;
@@ -78,32 +93,101 @@ export class ScpHttpServer {
     // but the proxy itself is stateless per call so one creation is fine).
     const vncMiddleware = this._vncProxy.middleware();
 
+    // Keep a stable reference to instance properties inside the closure.
+    const heartbeatRepo    = this._heartbeatRepo;
+    const bridgeCriticalMs = this._bridgeCriticalMs;
+    const logger           = this._logger;
+
     // ── request handler ───────────────────────────────────────────────────────
     const server = http.createServer((req, res) => {
-      const url = req.url || '/';
+      // Wrap the entire handler in an async IIFE so we can await inside and
+      // still catch any unexpected rejection rather than crashing the server.
+      (async () => {
+        const url = req.url || '/';
 
-      // ── /health ─────────────────────────────────────────────────────────────
-      if (url === '/health' || url.startsWith('/health?')) {
-        const body = JSON.stringify({ status: 'ok', mode, ts: new Date().toISOString() });
-        res.writeHead(200, {
-          'Content-Type':  'application/json',
-          'Content-Length': Buffer.byteLength(body),
-        });
-        res.end(body);
-        return;
-      }
+        // ── /health ───────────────────────────────────────────────────────────
+        if (url === '/health' || url.startsWith('/health?')) {
+          const ts = new Date().toISOString();
 
-      // ── /vnc/* → VncProxy middleware ─────────────────────────────────────
-      if (url.startsWith('/vnc/')) {
-        vncMiddleware(req, res, () => {
-          // next() called means VncProxy didn't handle it → 404
-          _send404(res);
-        });
-        return;
-      }
+          // ── backward-compat: no repo → Phase-1 shape ──────────────────────
+          if (!heartbeatRepo) {
+            _sendJson(res, 200, { status: 'ok', mode, ts });
+            return;
+          }
 
-      // ── catch-all 404 ────────────────────────────────────────────────────
-      _send404(res);
+          // ── repo present: build component table ───────────────────────────
+          let beats;
+          try {
+            beats = await heartbeatRepo.findAll();
+          } catch (err) {
+            logger.error('health: heartbeat repo error', err);
+            // Shield the failure — return down + empty table rather than 500.
+            _sendJson(res, 503, {
+              status: 'down',
+              mode,
+              ts,
+              components: [],
+              error: 'heartbeat_unavailable',
+            });
+            return;
+          }
+
+          const now = Date.now();
+          const components = beats.map((b) => ({
+            component: b.component,
+            id:        b.id,
+            healthy:   b.healthy,
+            ts:        b.ts.toISOString(),
+            ageMs:     now - b.ts.getTime(),
+          }));
+
+          // Status logic:
+          // • 503 + 'down'     — no 'bridge' heartbeat, OR bridge ageMs > critical, OR bridge.healthy===false
+          // • 200 + 'degraded' — any non-bridge component stale or unhealthy
+          // • 200 + 'ok'       — otherwise
+          const bridge = components.find((c) => c.component === 'bridge');
+          let status;
+          let httpStatus;
+
+          if (!bridge || bridge.ageMs > bridgeCriticalMs || !bridge.healthy) {
+            status     = 'down';
+            httpStatus = 503;
+          } else if (
+            components.some(
+              (c) =>
+                c.component !== 'bridge' &&
+                (c.ageMs > bridgeCriticalMs || !c.healthy),
+            )
+          ) {
+            status     = 'degraded';
+            httpStatus = 200;
+          } else {
+            status     = 'ok';
+            httpStatus = 200;
+          }
+
+          _sendJson(res, httpStatus, { status, mode, ts, components });
+          return;
+        }
+
+        // ── /vnc/* → VncProxy middleware ──────────────────────────────────
+        if (url.startsWith('/vnc/')) {
+          vncMiddleware(req, res, () => {
+            // next() called means VncProxy didn't handle it → 404
+            _send404(res);
+          });
+          return;
+        }
+
+        // ── catch-all 404 ────────────────────────────────────────────────
+        _send404(res);
+      })().catch((err) => {
+        // Last-resort handler: async error inside the request IIFE.
+        logger.error('[ScpHttpServer] unhandled request error', err);
+        if (!res.headersSent) {
+          _sendJson(res, 500, { error: 'internal' });
+        }
+      });
     });
 
     // ── WebSocket upgrade → VncProxy.upgrade ─────────────────────────────────
@@ -168,16 +252,27 @@ export class ScpHttpServer {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 /**
+ * Send a JSON response with the given HTTP status code and body object.
+ *
+ * @param {import('node:http').ServerResponse} res
+ * @param {number} statusCode
+ * @param {object} body
+ */
+function _sendJson(res, statusCode, body) {
+  if (res.headersSent) return;
+  const raw = JSON.stringify(body);
+  res.writeHead(statusCode, {
+    'Content-Type':   'application/json',
+    'Content-Length': Buffer.byteLength(raw),
+  });
+  res.end(raw);
+}
+
+/**
  * Send a 404 JSON response.
  *
  * @param {import('node:http').ServerResponse} res
  */
 function _send404(res) {
-  if (res.headersSent) return;
-  const body = JSON.stringify({ error: 'not_found' });
-  res.writeHead(404, {
-    'Content-Type':   'application/json',
-    'Content-Length': Buffer.byteLength(body),
-  });
-  res.end(body);
+  _sendJson(res, 404, { error: 'not_found' });
 }
