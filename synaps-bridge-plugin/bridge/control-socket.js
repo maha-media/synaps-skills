@@ -70,6 +70,8 @@ export class ControlSocket extends EventEmitter {
    * @param {object}   [opts.heartbeatRepo]      - HeartbeatRepo (optional, Phase 6). Required for heartbeat_emit.
    * @param {object}   [opts.workspaceRepo]      - WorkspaceRepo (optional, Phase 6). Used for ownership check on heartbeat_emit.
    * @param {object}   [opts.mcpTokenRepo]       - McpTokenRepo (optional, Phase 7). When null, all mcp_token_* ops return mcp_disabled.
+   * @param {object}   [opts.mcpToolAclRepo]     - McpToolAclRepo (optional, Phase 9). When null, all mcp_acl_* ops return acl_disabled.
+   * @param {object}   [opts.mcpToolAclResolver] - McpToolAclResolver (optional, Phase 9). Used to invalidate cache after mcp_acl_set / mcp_acl_delete writes.
    * @param {object}   [opts.logger]             - Logger (default: console).
    * @param {string}   [opts.version]            - Daemon version string (default: "0.1.0").
    * @param {Function} [opts.nowMs]              - Returns current epoch ms (injectable for tests).
@@ -88,6 +90,8 @@ export class ControlSocket extends EventEmitter {
     heartbeatRepo = null,
     workspaceRepo = null,
     mcpTokenRepo = null,
+    mcpToolAclRepo = null,
+    mcpToolAclResolver = null,
     logger = console,
     version = '0.1.0',
     nowMs = () => Date.now(),
@@ -107,6 +111,8 @@ export class ControlSocket extends EventEmitter {
     this._heartbeatRepo      = heartbeatRepo;
     this._workspaceRepo      = workspaceRepo;
     this._mcpTokenRepo       = mcpTokenRepo;
+    this._mcpToolAclRepo     = mcpToolAclRepo;
+    this._mcpToolAclResolver = mcpToolAclResolver;
     this.logger              = logger;
     this._version            = version;
     this._nowMs              = nowMs;
@@ -297,6 +303,10 @@ export class ControlSocket extends EventEmitter {
       case 'mcp_token_issue':         return this._opMcpTokenIssue(req);
       case 'mcp_token_list':          return this._opMcpTokenList(req);
       case 'mcp_token_revoke':        return this._opMcpTokenRevoke(req);
+      // Phase 9 ops
+      case 'mcp_acl_list':            return this._opMcpAclList(req);
+      case 'mcp_acl_set':             return this._opMcpAclSet(req);
+      case 'mcp_acl_delete':          return this._opMcpAclDelete(req);
       default:
         return { ok: false, error: `unknown op: ${req.op}` };
     }
@@ -1221,6 +1231,124 @@ export class ControlSocket extends EventEmitter {
       return { ok: result.ok };
     } catch (err) {
       this.logger.warn?.('ControlSocket: mcp_token_revoke error', { err: err.message });
+      return { ok: false, error: err.message };
+    }
+  }
+
+  // ── Phase 9: MCP ACL ops ──────────────────────────────────────────────────
+
+  /**
+   * mcp_acl_list — List ACL rows.
+   *
+   * Request:  { op:'mcp_acl_list', synaps_user_id? }
+   *   - When synaps_user_id is provided: returns ACLs for that user only.
+   *   - When omitted: returns ALL ACLs (capped at 1000 by repo).
+   * Response: { ok:true, acls: [...] }
+   *         | { ok:false, error:'acl_disabled' }
+   *
+   * @param {object} req
+   * @returns {Promise<object>}
+   */
+  async _opMcpAclList(req) {
+    if (!this._mcpToolAclRepo) return { ok: false, error: 'acl_disabled' };
+    const { synaps_user_id } = req;
+    try {
+      const rows = synaps_user_id
+        ? await this._mcpToolAclRepo.list({ synaps_user_id })
+        : await this._mcpToolAclRepo.listAll();
+      const acls = rows.map((r) => ({
+        _id:            String(r._id),
+        synaps_user_id: String(r.synaps_user_id),
+        tool_name:      r.tool_name,
+        policy:         r.policy,
+        reason:         r.reason,
+        expires_at:     r.expires_at,
+        created_at:     r.created_at,
+      }));
+      return { ok: true, acls };
+    } catch (err) {
+      this.logger.warn?.('ControlSocket: mcp_acl_list error', { err: err.message });
+      return { ok: false, error: err.message };
+    }
+  }
+
+  /**
+   * mcp_acl_set — Upsert an ACL row.
+   *
+   * Request:  { op:'mcp_acl_set', synaps_user_id, tool_name, policy, reason?, expires_at? }
+   *   - policy: 'allow' | 'deny'
+   *   - tool_name: tool name OR '*' wildcard
+   *   - expires_at (optional): ISO string or epoch ms; null clears
+   * Response: { ok:true, acl: {...} }
+   *         | { ok:false, error:'acl_disabled' }
+   *         | { ok:false, error:'missing_fields' }
+   *         | { ok:false, error:'invalid_policy' }
+   *
+   * @param {object} req
+   * @returns {Promise<object>}
+   */
+  async _opMcpAclSet(req) {
+    if (!this._mcpToolAclRepo) return { ok: false, error: 'acl_disabled' };
+    const { synaps_user_id, tool_name, policy, reason, expires_at } = req;
+    if (!synaps_user_id || !tool_name || !policy) {
+      return { ok: false, error: 'missing_fields' };
+    }
+    if (policy !== 'allow' && policy !== 'deny') {
+      return { ok: false, error: 'invalid_policy' };
+    }
+    try {
+      const row = await this._mcpToolAclRepo.upsert({
+        synaps_user_id,
+        tool_name,
+        policy,
+        reason: reason ?? '',
+        expires_at: expires_at ? new Date(expires_at) : null,
+      });
+      // Invalidate the resolver's cache for the affected (user, tool).
+      this._mcpToolAclResolver?.invalidate?.({ synaps_user_id, tool_name });
+      return {
+        ok: true,
+        acl: {
+          _id:            String(row._id),
+          synaps_user_id: String(row.synaps_user_id),
+          tool_name:      row.tool_name,
+          policy:         row.policy,
+          reason:         row.reason,
+          expires_at:     row.expires_at,
+          created_at:     row.created_at,
+        },
+      };
+    } catch (err) {
+      this.logger.warn?.('ControlSocket: mcp_acl_set error', { err: err.message });
+      return { ok: false, error: err.message };
+    }
+  }
+
+  /**
+   * mcp_acl_delete — Remove an ACL row.
+   *
+   * Request:  { op:'mcp_acl_delete', synaps_user_id, tool_name }
+   * Response: { ok:true, deleted: bool }
+   *         | { ok:false, error:'acl_disabled' }
+   *         | { ok:false, error:'missing_fields' }
+   *
+   * @param {object} req
+   * @returns {Promise<object>}
+   */
+  async _opMcpAclDelete(req) {
+    if (!this._mcpToolAclRepo) return { ok: false, error: 'acl_disabled' };
+    const { synaps_user_id, tool_name } = req;
+    if (!synaps_user_id || !tool_name) {
+      return { ok: false, error: 'missing_fields' };
+    }
+    try {
+      const { deleted } = await this._mcpToolAclRepo.delete({ synaps_user_id, tool_name });
+      if (deleted) {
+        this._mcpToolAclResolver?.invalidate?.({ synaps_user_id, tool_name });
+      }
+      return { ok: true, deleted };
+    } catch (err) {
+      this.logger.warn?.('ControlSocket: mcp_acl_delete error', { err: err.message });
       return { ok: false, error: err.message };
     }
   }

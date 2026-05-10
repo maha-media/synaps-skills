@@ -2294,3 +2294,288 @@ describe('ControlSocket — op: mcp_token_revoke', () => {
     expect(afterRevoke).toBeNull();
   });
 });
+
+// ─── op: mcp_acl_list / mcp_acl_set / mcp_acl_delete ─────────────────────────
+
+/**
+ * Build a simple in-memory fake McpToolAclRepo.
+ * Mirrors the real McpToolAclRepo API used by the ACL ops.
+ */
+function makeFakeMcpToolAclRepo(seedRows = []) {
+  const store = new Map(); // key `${synaps_user_id}::${tool_name}` → row
+  let idCounter = 0;
+
+  function rowKey(synaps_user_id, tool_name) {
+    return `${synaps_user_id}::${tool_name}`;
+  }
+
+  // Seed initial rows.
+  for (const r of seedRows) {
+    const _id = `acl-id-${++idCounter}`;
+    const created_at = new Date();
+    store.set(rowKey(r.synaps_user_id, r.tool_name), { _id, created_at, ...r });
+  }
+
+  return {
+    _store: store,
+
+    async list({ synaps_user_id }) {
+      return Array.from(store.values()).filter((r) => r.synaps_user_id === synaps_user_id);
+    },
+
+    async listAll() {
+      return Array.from(store.values());
+    },
+
+    async upsert({ synaps_user_id, tool_name, policy, reason, expires_at }) {
+      const key = rowKey(synaps_user_id, tool_name);
+      const existing = store.get(key);
+      const _id        = existing?._id ?? `acl-id-${++idCounter}`;
+      const created_at = existing?.created_at ?? new Date();
+      const row = { _id, synaps_user_id, tool_name, policy, reason, expires_at, created_at };
+      store.set(key, row);
+      return row;
+    },
+
+    async delete({ synaps_user_id, tool_name }) {
+      const key = rowKey(synaps_user_id, tool_name);
+      const had = store.has(key);
+      store.delete(key);
+      return { deleted: had };
+    },
+  };
+}
+
+// ── Test 1 & shared disabled suite ───────────────────────────────────────────
+
+describe('ControlSocket — MCP ACL ops — acl_disabled (no repo)', () => {
+  let socketPath, cs;
+
+  beforeEach(async () => {
+    socketPath = tmpSocketPath();
+    cs = new ControlSocket({
+      socketPath,
+      sessionRouter: makeFakeRouter(),
+      // mcpToolAclRepo intentionally omitted → null
+      logger: makeLogger(),
+    });
+    await cs.start();
+  });
+
+  afterEach(async () => { await cs.stop(); });
+
+  // Test 1: mcp_acl_list → acl_disabled when no repo injected
+  it('mcp_acl_list → ok:false error:acl_disabled when repo not injected', async () => {
+    const resp = await sendRequest(socketPath, { op: 'mcp_acl_list' });
+    expect(resp.ok).toBe(false);
+    expect(resp.error).toBe('acl_disabled');
+  });
+
+  // Test 8a: mcp_acl_delete → acl_disabled when no repo injected
+  it('mcp_acl_delete → ok:false error:acl_disabled when repo not injected', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_acl_delete', synaps_user_id: 'u1', tool_name: 'my_tool',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.error).toBe('acl_disabled');
+  });
+});
+
+// ── Tests 2 & 3: mcp_acl_list ─────────────────────────────────────────────────
+
+describe('ControlSocket — op: mcp_acl_list', () => {
+  let socketPath, cs, mcpToolAclRepo;
+
+  beforeEach(async () => {
+    socketPath       = tmpSocketPath();
+    mcpToolAclRepo   = makeFakeMcpToolAclRepo([
+      { synaps_user_id: 'user-A', tool_name: 'tool_x', policy: 'allow', reason: '', expires_at: null },
+      { synaps_user_id: 'user-B', tool_name: 'tool_y', policy: 'deny',  reason: 'blocked', expires_at: null },
+    ]);
+    cs = new ControlSocket({
+      socketPath,
+      sessionRouter:    makeFakeRouter(),
+      mcpToolAclRepo,
+      logger:           makeLogger(),
+    });
+    await cs.start();
+  });
+
+  afterEach(async () => { await cs.stop(); });
+
+  // Test 2: mcp_acl_list with synaps_user_id → uses repo.list({synaps_user_id})
+  it('with synaps_user_id → returns only that user\'s rows via repo.list()', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_acl_list', synaps_user_id: 'user-A',
+    });
+    expect(resp.ok).toBe(true);
+    expect(Array.isArray(resp.acls)).toBe(true);
+    expect(resp.acls).toHaveLength(1);
+    expect(resp.acls[0].synaps_user_id).toBe('user-A');
+    expect(resp.acls[0].tool_name).toBe('tool_x');
+    expect(resp.acls[0].policy).toBe('allow');
+    // _id must be a string
+    expect(typeof resp.acls[0]._id).toBe('string');
+  });
+
+  // Test 3: mcp_acl_list without synaps_user_id → uses repo.listAll()
+  it('without synaps_user_id → returns ALL rows via repo.listAll()', async () => {
+    const resp = await sendRequest(socketPath, { op: 'mcp_acl_list' });
+    expect(resp.ok).toBe(true);
+    expect(Array.isArray(resp.acls)).toBe(true);
+    expect(resp.acls).toHaveLength(2);
+    const userIds = resp.acls.map((a) => a.synaps_user_id).sort();
+    expect(userIds).toEqual(['user-A', 'user-B']);
+  });
+});
+
+// ── Tests 4–7: mcp_acl_set ────────────────────────────────────────────────────
+
+describe('ControlSocket — op: mcp_acl_set', () => {
+  let socketPath, cs, mcpToolAclRepo, mcpToolAclResolver;
+
+  beforeEach(async () => {
+    socketPath          = tmpSocketPath();
+    mcpToolAclRepo      = makeFakeMcpToolAclRepo();
+    mcpToolAclResolver  = { invalidate: vi.fn() };
+    cs = new ControlSocket({
+      socketPath,
+      sessionRouter:      makeFakeRouter(),
+      mcpToolAclRepo,
+      mcpToolAclResolver,
+      logger:             makeLogger(),
+    });
+    await cs.start();
+  });
+
+  afterEach(async () => { await cs.stop(); });
+
+  // Test 4: missing required fields → missing_fields
+  it('missing synaps_user_id → ok:false error:missing_fields', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_acl_set', tool_name: 'tool_x', policy: 'allow',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.error).toBe('missing_fields');
+  });
+
+  it('missing tool_name → ok:false error:missing_fields', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_acl_set', synaps_user_id: 'u1', policy: 'allow',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.error).toBe('missing_fields');
+  });
+
+  it('missing policy → ok:false error:missing_fields', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_acl_set', synaps_user_id: 'u1', tool_name: 'tool_x',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.error).toBe('missing_fields');
+  });
+
+  // Test 5: invalid policy → invalid_policy
+  it('policy="read" → ok:false error:invalid_policy', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_acl_set', synaps_user_id: 'u1', tool_name: 'tool_x', policy: 'read',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.error).toBe('invalid_policy');
+  });
+
+  // Test 6: success → calls repo.upsert AND resolver.invalidate({synaps_user_id, tool_name})
+  it('valid upsert → calls repo.upsert and resolver.invalidate', async () => {
+    const upsertSpy = vi.spyOn(mcpToolAclRepo, 'upsert');
+
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_acl_set', synaps_user_id: 'u1', tool_name: 'tool_x', policy: 'allow',
+    });
+    expect(resp.ok).toBe(true);
+    expect(upsertSpy).toHaveBeenCalledOnce();
+    expect(upsertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ synaps_user_id: 'u1', tool_name: 'tool_x', policy: 'allow' }),
+    );
+    expect(mcpToolAclResolver.invalidate).toHaveBeenCalledOnce();
+    expect(mcpToolAclResolver.invalidate).toHaveBeenCalledWith({ synaps_user_id: 'u1', tool_name: 'tool_x' });
+  });
+
+  // Test 7: ok response contains acl payload with _id as string
+  it('success → ok:true with acl payload, _id coerced to string', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_acl_set', synaps_user_id: 'u2', tool_name: '*', policy: 'deny', reason: 'no wildcards',
+    });
+    expect(resp.ok).toBe(true);
+    expect(resp.acl).toBeDefined();
+    expect(typeof resp.acl._id).toBe('string');
+    expect(resp.acl.synaps_user_id).toBe('u2');
+    expect(resp.acl.tool_name).toBe('*');
+    expect(resp.acl.policy).toBe('deny');
+    expect(resp.acl.reason).toBe('no wildcards');
+  });
+});
+
+// ── Tests 8b & 9: mcp_acl_delete ─────────────────────────────────────────────
+
+describe('ControlSocket — op: mcp_acl_delete', () => {
+  let socketPath, cs, mcpToolAclRepo, mcpToolAclResolver;
+
+  beforeEach(async () => {
+    socketPath          = tmpSocketPath();
+    mcpToolAclRepo      = makeFakeMcpToolAclRepo([
+      { synaps_user_id: 'u1', tool_name: 'tool_x', policy: 'allow', reason: '', expires_at: null },
+    ]);
+    mcpToolAclResolver  = { invalidate: vi.fn() };
+    cs = new ControlSocket({
+      socketPath,
+      sessionRouter:      makeFakeRouter(),
+      mcpToolAclRepo,
+      mcpToolAclResolver,
+      logger:             makeLogger(),
+    });
+    await cs.start();
+  });
+
+  afterEach(async () => { await cs.stop(); });
+
+  // Test 8b: missing fields → missing_fields
+  it('missing tool_name → ok:false error:missing_fields', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_acl_delete', synaps_user_id: 'u1',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.error).toBe('missing_fields');
+  });
+
+  it('missing synaps_user_id → ok:false error:missing_fields', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_acl_delete', tool_name: 'tool_x',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.error).toBe('missing_fields');
+  });
+
+  // Test 9: repo.delete called; resolver.invalidate called ONLY when deleted:true
+  it('existing row → deleted:true AND resolver.invalidate called', async () => {
+    const deleteSpy = vi.spyOn(mcpToolAclRepo, 'delete');
+
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_acl_delete', synaps_user_id: 'u1', tool_name: 'tool_x',
+    });
+    expect(resp.ok).toBe(true);
+    expect(resp.deleted).toBe(true);
+    expect(deleteSpy).toHaveBeenCalledOnce();
+    expect(deleteSpy).toHaveBeenCalledWith({ synaps_user_id: 'u1', tool_name: 'tool_x' });
+    expect(mcpToolAclResolver.invalidate).toHaveBeenCalledOnce();
+    expect(mcpToolAclResolver.invalidate).toHaveBeenCalledWith({ synaps_user_id: 'u1', tool_name: 'tool_x' });
+  });
+
+  it('non-existent row → deleted:false AND resolver.invalidate NOT called', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_acl_delete', synaps_user_id: 'u1', tool_name: 'nonexistent_tool',
+    });
+    expect(resp.ok).toBe(true);
+    expect(resp.deleted).toBe(false);
+    expect(mcpToolAclResolver.invalidate).not.toHaveBeenCalled();
+  });
+});
