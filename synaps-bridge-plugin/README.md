@@ -473,3 +473,36 @@ su -l <user> -c 'node scripts/control-cli.mjs threads'
 ## License
 
 MIT — see `package.json`.
+
+---
+
+## Phase 1 — Workspace container (SCP mode)
+
+Phase 1 of the Synaps Control Plane is included in this branch but **off
+by default**. Existing Slack bridge behavior is unchanged. To opt in:
+
+1. Build the workspace image: `cd synaps-workspace && docker buildx bake dev`
+2. Set `[platform] mode = "scp"` in `bridge.toml`
+3. Run MongoDB locally and configure `[mongodb] uri`
+4. Optionally enable the SCP HTTP server (`[web] enabled = true`)
+
+Full smoke playbook: `docs/smoke/phase-1-scp-workspace.md`
+
+What Phase 1 ships:
+- `synaps-workspace/` — Ubuntu 22.04 + Chromium + KasmVNC + (placeholder) synaps Rust binary
+- `bridge/core/db/` — Mongoose schema + repo for `synaps_workspace`
+- `bridge/core/workspace-manager.js` — dockerode wrapper (boot/stop/exec)
+- `bridge/core/synaps-rpc-docker.js` — RPC over `docker exec`
+- `bridge/core/scp-http-server.js` + `vnc-proxy.js` — minimal HTTP surface, VNC reverse-proxy
+- `[platform]`, `[workspace]`, `[web]`, `[mongodb]` config sections
+
+What Phase 1 does NOT ship (planned for later phases):
+- Identity reconciliation across channels (Phase 3)
+- pria-cookie auth on `/vnc/*` (Phase 3)
+- MemoryGateway / axel wiring (Phase 2)
+- Credential broker (Phase 4)
+- Tetragon supervisor + reaper (Phase 5)
+- Scheduler + hooks (Phase 6)
+- MCP wire-compat (Phase 7)
+
+Spec: see [`synaps-skills/docs/plans/PLATFORM.SPEC.md`](../../synaps-skills/docs/plans/PLATFORM.SPEC.md).
