@@ -156,4 +156,57 @@ export class LinkCodeRepo {
     // expires_at <= now
     return { ok: false, reason: 'expired' };
   }
+
+  // ── IdentityRouter aliases ─────────────────────────────────────────────────
+
+  /**
+   * Find a link code by code string — does NOT filter on expiry or redemption
+   * status.  Used by IdentityRouter.redeemLinkCode which validates state
+   * in-memory after fetching the raw document.
+   *
+   * @param {string} code
+   * @returns {Promise<object|null>}
+   */
+  async findByCode(code) {
+    return this._model.findOne({ code }).lean();
+  }
+
+  /**
+   * Insert a pre-generated link code (vs. issue() which generates internally).
+   * Used when the caller (IdentityRouter) has already chosen the code value.
+   *
+   * @param {object} params
+   * @param {string} params.code
+   * @param {import('mongoose').Types.ObjectId|string} params.pria_user_id
+   * @param {import('mongoose').Types.ObjectId|string} params.synaps_user_id
+   * @param {Date}   params.expires_at
+   * @returns {Promise<object>}
+   */
+  async create({ code, pria_user_id, synaps_user_id, expires_at }) {
+    const doc = await this._model.create({
+      code,
+      pria_user_id,
+      synaps_user_id,
+      expires_at,
+      redeemed_at: null,
+    });
+    this._logger.info(`[LinkCodeRepo] Created code ${code} (via .create alias)`);
+    return doc;
+  }
+
+  /**
+   * Mark a link code as redeemed.  Assumes the caller already verified the
+   * row is unredeemed and unexpired (IdentityRouter does this in-memory).
+   *
+   * @param {string} code
+   * @param {{ redeemed_by: {channel:string, external_id:string, external_team_id:string} }} opts
+   * @returns {Promise<object|null>}  Updated doc or null if not found.
+   */
+  async markRedeemed(code, { redeemed_by }) {
+    return this._model.findOneAndUpdate(
+      { code },
+      { $set: { redeemed_at: new Date(), redeemed_by } },
+      { new: true },
+    ).lean();
+  }
 }

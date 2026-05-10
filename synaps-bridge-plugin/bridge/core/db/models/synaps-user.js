@@ -30,8 +30,11 @@ const CHANNEL_VALUES = ['slack', 'web', 'discord', 'telegram', 'teams'];
 export const synapsUserSchema = new Schema(
   {
     pria_user_id: {
-      type:     Schema.Types.ObjectId,
-      required: [true, 'pria_user_id is required'],
+      type:    Schema.Types.ObjectId,
+      ref:     'User',
+      default: null,
+      // unique: true is moved to schema.index below for partial filter expression
+      // index: true also moved
     },
     institution_id: {
       type: Schema.Types.ObjectId,
@@ -64,7 +67,14 @@ export const synapsUserSchema = new Schema(
 
 // ── Indexes ──────────────────────────────────────────────────────────────────
 
-synapsUserSchema.index({ pria_user_id: 1 }, { unique: true });
+synapsUserSchema.index(
+  { pria_user_id: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { pria_user_id: { $type: 'objectId' } },
+    name: 'pria_user_id_unique_when_set',
+  },
+);
 synapsUserSchema.index({ institution_id: 1 });
 
 /**

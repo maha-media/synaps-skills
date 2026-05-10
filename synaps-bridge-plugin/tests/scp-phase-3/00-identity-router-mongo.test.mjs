@@ -8,12 +8,13 @@
  * • MongoMemoryServer spins up an in-process MongoDB instance in beforeAll.
  * • We use a private mongoose.Mongoose() to avoid polluting the global
  *   singleton used by other test files.
- * • Models are built via the production model factories.
- * • Repos are wrapped in thin adapter objects that bridge the interface
- *   expected by IdentityRouter (findByChannelId / upsert / findByCode /
- *   create / markRedeemed) to the production repo method names
- *   (findByExternal / upsertExternal / findActiveByCode / issue / redeem).
- * • IdentityRouter receives injected repos — no global mongoose state touched.
+ * • Models are built via the production model factories (getSynapsUserModel,
+ *   getSynapsChannelIdentityModel, getSynapsLinkCodeModel).
+ * • Repos are the production classes (UserRepo, ChannelIdentityRepo,
+ *   LinkCodeRepo) wired directly — no adapter shims needed now that the
+ *   repos expose the IdentityRouter-expected interface via alias methods.
+ * • IdentityRouter receives the repos directly — no global mongoose state
+ *   touched.
  *
  * Scenarios (~10 tests)
  * ─────────────────────
@@ -41,47 +42,13 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 
+import { getSynapsUserModel }             from '../../bridge/core/db/models/synaps-user.js';
 import { getSynapsChannelIdentityModel }  from '../../bridge/core/db/models/synaps-channel-identity.js';
 import { getSynapsLinkCodeModel }         from '../../bridge/core/db/models/synaps-link-code.js';
 import { UserRepo }                       from '../../bridge/core/db/repositories/user-repo.js';
 import { ChannelIdentityRepo }            from '../../bridge/core/db/repositories/channel-identity-repo.js';
 import { LinkCodeRepo }                   from '../../bridge/core/db/repositories/link-code-repo.js';
 import { IdentityRouter }                 from '../../bridge/core/identity-router.js';
-
-// ─── Test-local SynapsUser schema ────────────────────────────────────────────
-//
-// The production SynapsUser schema marks pria_user_id as required.
-// For Slack synthetic users (IdentityRouter.resolve() creating a user for a
-// Slack-only user who hasn't linked their pria account), pria_user_id is null.
-// We use a looser test schema that matches the real production intent
-// (nullable pria_user_id for synthetic/inferred users).
-//
-// The web-user and link-code tests use the stricter pria_user_id form, so only
-// these resolve() tests require the relaxed schema.
-
-function buildLooseSynapsUserSchema(m) {
-  const { Schema } = m;
-  const s = new Schema(
-    {
-      pria_user_id:     { type: Schema.Types.ObjectId, default: null },
-      institution_id:   { type: Schema.Types.ObjectId },
-      display_name:     String,
-      workspace_id:     Schema.Types.ObjectId,
-      memory_namespace: { type: String, required: true },
-      default_channel:  { type: String, default: 'web' },
-    },
-    {
-      collection: 'synaps_users',
-      timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
-    },
-  );
-  return s;
-}
-
-function getSynapsUserModelLoose(m) {
-  if (m.models && m.models.SynapsUser) return m.models.SynapsUser;
-  return m.model('SynapsUser', buildLooseSynapsUserSchema(m));
-}
 
 // ─── Module-level fixtures ───────────────────────────────────────────────────
 
@@ -94,47 +61,6 @@ let router;
 /** Silent logger – keeps test output clean. */
 const silent = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
 
-// ─── Adapter builders ────────────────────────────────────────────────────────
-//
-// IdentityRouter calls:
-//   channelIdentityRepo.findByChannelId({ channel, external_id, external_team_id })
-//   channelIdentityRepo.upsert({ synaps_user_id, channel, external_id, external_team_id, display_name, link_method })
-//   linkCodeRepo.findByCode(code) → raw doc with code/redeemed_at/expires_at/synaps_user_id
-//   linkCodeRepo.create({ code, pria_user_id, synaps_user_id, expires_at })
-//   linkCodeRepo.markRedeemed(code, { redeemed_by })
-//
-// Real repos expose different method names; these thin wrappers reconcile.
-
-function makeChannelIdentityAdapter(repo) {
-  return {
-    async findByChannelId({ channel, external_id, external_team_id }) {
-      return repo.findByExternal({ channel, external_id, external_team_id });
-    },
-    async upsert({ synaps_user_id, channel, external_id, external_team_id, display_name, link_method }) {
-      return repo.upsertExternal({ synaps_user_id, channel, external_id, external_team_id, display_name, link_method });
-    },
-  };
-}
-
-function makeLinkCodeAdapter(repo, Model) {
-  return {
-    async findByCode(code) {
-      // Return any doc (including expired/redeemed) – IdentityRouter checks fields itself.
-      return Model.findOne({ code }).lean();
-    },
-    async create({ code, pria_user_id, synaps_user_id, expires_at }) {
-      const doc = await Model.create({ code, pria_user_id, synaps_user_id, expires_at });
-      return doc.toObject ? doc.toObject() : doc;
-    },
-    async markRedeemed(code, { redeemed_by }) {
-      await Model.findOneAndUpdate(
-        { code },
-        { $set: { redeemed_at: new Date(), redeemed_by } },
-      ).lean();
-    },
-  };
-}
-
 // ─── beforeAll / afterAll ────────────────────────────────────────────────────
 
 beforeAll(async () => {
@@ -143,21 +69,23 @@ beforeAll(async () => {
   m.set('strictQuery', true);
   await m.connect(mongod.getUri(), { serverSelectionTimeoutMS: 5000, autoIndex: true });
 
-  // Use the looser user model so resolve() can create synthetic Slack users
-  // with null pria_user_id (the prod schema is stricter; this models the
-  // intended real-world requirement for synthetic channel users).
-  UserModel  = getSynapsUserModelLoose(m);
-  CIModel    = getSynapsChannelIdentityModel(m);
-  LCModel    = getSynapsLinkCodeModel(m);
+  // Production model factories — no workaround schemas needed.
+  // The production SynapsUser schema now allows pria_user_id: null (Problem 2 fix).
+  UserModel = getSynapsUserModel(m);
+  CIModel   = getSynapsChannelIdentityModel(m);
+  LCModel   = getSynapsLinkCodeModel(m);
 
-  userRepo           = new UserRepo({ model: UserModel, logger: silent });
+  // Production repos — no adapter closures needed.
+  // ChannelIdentityRepo now exposes .findByChannelId() and .upsert() aliases.
+  // LinkCodeRepo now exposes .findByCode(), .create(), and .markRedeemed() aliases.
+  userRepo            = new UserRepo({ model: UserModel, logger: silent });
   channelIdentityRepo = new ChannelIdentityRepo({ model: CIModel, logger: silent });
-  linkCodeRepo       = new LinkCodeRepo({ model: LCModel, logger: silent });
+  linkCodeRepo        = new LinkCodeRepo({ model: LCModel, logger: silent });
 
   router = new IdentityRouter({
     userRepo,
-    channelIdentityRepo: makeChannelIdentityAdapter(channelIdentityRepo),
-    linkCodeRepo: makeLinkCodeAdapter(linkCodeRepo, LCModel),
+    channelIdentityRepo,
+    linkCodeRepo,
     logger: silent,
   });
 }, 60_000);
@@ -349,7 +277,7 @@ describe('IdentityRouter.redeemLinkCode() expired', () => {
   it('returns reason:expired when expires_at is in the past', async () => {
     const priaId = new m.Types.ObjectId();
 
-    // Issue then manually backddate expires_at.
+    // Issue then manually backdate expires_at.
     const { code } = await router.issueLinkCode({ pria_user_id: priaId, ttl_ms: 300_000 });
 
     await LCModel.findOneAndUpdate(

@@ -263,3 +263,73 @@ describe('ChannelIdentityRepo logger', () => {
     ).rejects.toThrow('disk full');
   });
 });
+
+// ── IdentityRouter aliases ────────────────────────────────────────────────────
+
+describe('ChannelIdentityRepo.findByChannelId() — IdentityRouter alias', () => {
+  it('returns the same doc as findByExternal() for the same key', async () => {
+    const synapsUserId = new m.Types.ObjectId();
+    await repo.create({
+      synaps_user_id:   synapsUserId,
+      channel:          'slack',
+      external_id:      'ALIAS_U1',
+      external_team_id: 'ALIAS_T1',
+      display_name:     'AliasUser',
+      link_method:      'inferred',
+    });
+
+    const viaAlias    = await repo.findByChannelId({ channel: 'slack', external_id: 'ALIAS_U1', external_team_id: 'ALIAS_T1' });
+    const viaDirect   = await repo.findByExternal({ channel: 'slack', external_id: 'ALIAS_U1', external_team_id: 'ALIAS_T1' });
+
+    expect(viaAlias).not.toBeNull();
+    expect(String(viaAlias._id)).toBe(String(viaDirect._id));
+    expect(viaAlias.display_name).toBe(viaDirect.display_name);
+  });
+
+  it('returns null when no matching document exists', async () => {
+    const result = await repo.findByChannelId({ channel: 'web', external_id: 'nosuch', external_team_id: '' });
+    expect(result).toBeNull();
+  });
+});
+
+describe('ChannelIdentityRepo.upsert() — IdentityRouter alias', () => {
+  it('returns the doc directly (not the {doc,isNew} tuple)', async () => {
+    const synapsUserId = new m.Types.ObjectId();
+    const result = await repo.upsert({
+      synaps_user_id:   synapsUserId,
+      channel:          'discord',
+      external_id:      'D001',
+      external_team_id: '',
+      display_name:     'DiscordUser',
+      link_method:      'inferred',
+    });
+
+    // Must be the doc itself — not { doc, isNew }.
+    expect(result).not.toBeNull();
+    expect(result._id).toBeDefined();
+    expect(result.isNew).toBeUndefined();
+    expect(String(result.synaps_user_id)).toBe(String(synapsUserId));
+    expect(result.channel).toBe('discord');
+  });
+
+  it('is idempotent — second call also returns just the doc', async () => {
+    const synapsUserId = new m.Types.ObjectId();
+    const params = {
+      synaps_user_id:   synapsUserId,
+      channel:          'teams',
+      external_id:      'MS001',
+      external_team_id: '',
+      display_name:     'TeamsUser',
+      link_method:      'oauth',
+    };
+
+    const first  = await repo.upsert(params);
+    const second = await repo.upsert({ ...params, display_name: 'TeamsUserUpdated' });
+
+    expect(first._id).toBeDefined();
+    expect(second._id).toBeDefined();
+    expect(String(first._id)).toBe(String(second._id)); // same document
+    expect(second.isNew).toBeUndefined();
+  });
+});
+

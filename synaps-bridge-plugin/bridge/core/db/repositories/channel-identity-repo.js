@@ -134,4 +134,37 @@ export class ChannelIdentityRepo {
     );
     return { doc, isNew: true };
   }
+
+  // ── IdentityRouter aliases ─────────────────────────────────────────────────
+
+  /**
+   * Alias for findByExternal — matches the IdentityRouter expected interface.
+   * @param {object} params
+   * @param {string} params.channel
+   * @param {string} params.external_id
+   * @param {string} params.external_team_id
+   * @returns {Promise<object|null>}
+   */
+  async findByChannelId({ channel, external_id, external_team_id }) {
+    return this.findByExternal({ channel, external_id, external_team_id });
+  }
+
+  /**
+   * Alias for upsertExternal — matches the IdentityRouter expected interface.
+   * Returns the doc directly (not {doc, isNew}) for compatibility with the
+   * router which doesn't check isNew on this call.
+   *
+   * @param {object} [params]
+   * @param {import('mongoose').Types.ObjectId|string} params.synaps_user_id
+   * @param {string} params.channel
+   * @param {string} params.external_id
+   * @param {string} params.external_team_id
+   * @param {string} [params.display_name]
+   * @param {string} [params.link_method]
+   * @returns {Promise<object>}
+   */
+  async upsert({ synaps_user_id, channel, external_id, external_team_id, display_name, link_method } = {}) {
+    const { doc } = await this.upsertExternal({ synaps_user_id, channel, external_id, external_team_id, display_name, link_method });
+    return doc;
+  }
 }

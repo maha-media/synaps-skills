@@ -343,3 +343,157 @@ describe('LinkCodeRepo logger', () => {
     );
   });
 });
+
+// ── IdentityRouter aliases ────────────────────────────────────────────────────
+
+describe('LinkCodeRepo.findByCode() — IdentityRouter alias', () => {
+  it('returns a fresh (non-expired, non-redeemed) code', async () => {
+    const { code } = await repo.issue({
+      pria_user_id:   new m.Types.ObjectId(),
+      synaps_user_id: new m.Types.ObjectId(),
+      ttl_ms:         300_000,
+    });
+
+    const found = await repo.findByCode(code);
+    expect(found).not.toBeNull();
+    expect(found.code).toBe(code);
+  });
+
+  it('returns an EXPIRED code (unlike findActiveByCode which would return null)', async () => {
+    const priaId   = new m.Types.ObjectId();
+    const synapsId = new m.Types.ObjectId();
+    const code     = 'EXPIRY1';
+
+    await Model.create({
+      code,
+      pria_user_id:   priaId,
+      synaps_user_id: synapsId,
+      expires_at:     new Date(Date.now() - 5_000), // already expired
+    });
+
+    // findActiveByCode would return null here — findByCode must return the doc.
+    const fromActive = await repo.findActiveByCode(code);
+    expect(fromActive).toBeNull();
+
+    const fromAlias = await repo.findByCode(code);
+    expect(fromAlias).not.toBeNull();
+    expect(fromAlias.code).toBe(code);
+  });
+
+  it('returns a REDEEMED code (unlike findActiveByCode which would return null)', async () => {
+    const { code } = await repo.issue({
+      pria_user_id:   new m.Types.ObjectId(),
+      synaps_user_id: new m.Types.ObjectId(),
+      ttl_ms:         300_000,
+    });
+
+    await repo.redeem({
+      code,
+      redeemed_by: { channel: 'slack', external_id: 'U_RED', external_team_id: 'T_RED' },
+    });
+
+    const fromActive = await repo.findActiveByCode(code);
+    expect(fromActive).toBeNull();
+
+    const fromAlias = await repo.findByCode(code);
+    expect(fromAlias).not.toBeNull();
+    expect(fromAlias.redeemed_at).toBeInstanceOf(Date);
+  });
+
+  it('returns null for an unknown code', async () => {
+    const result = await repo.findByCode('NOSUCH');
+    expect(result).toBeNull();
+  });
+});
+
+describe('LinkCodeRepo.create() — IdentityRouter alias', () => {
+  it('inserts a document with the caller-supplied code (no auto-generation)', async () => {
+    const priaId   = new m.Types.ObjectId();
+    const synapsId = new m.Types.ObjectId();
+    const code     = 'PRESET';
+    const expiresAt = new Date(Date.now() + 300_000);
+
+    const doc = await repo.create({ code, pria_user_id: priaId, synaps_user_id: synapsId, expires_at: expiresAt });
+
+    expect(doc).not.toBeNull();
+    expect(doc.code).toBe(code);
+    expect(String(doc.pria_user_id)).toBe(String(priaId));
+    expect(String(doc.synaps_user_id)).toBe(String(synapsId));
+    expect(doc.redeemed_at).toBeNull();
+  });
+
+  it('doc is retrievable via findByCode after create()', async () => {
+    const code = 'FETCH1';
+    await repo.create({
+      code,
+      pria_user_id:   new m.Types.ObjectId(),
+      synaps_user_id: new m.Types.ObjectId(),
+      expires_at:     new Date(Date.now() + 300_000),
+    });
+
+    const found = await repo.findByCode(code);
+    expect(found).not.toBeNull();
+    expect(found.code).toBe(code);
+  });
+
+  it('calls logger.info with create alias message', async () => {
+    const fakeLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const loggingRepo = new LinkCodeRepo({ model: Model, logger: fakeLogger });
+
+    const code = 'LOGME1';
+    await loggingRepo.create({
+      code,
+      pria_user_id:   new m.Types.ObjectId(),
+      synaps_user_id: new m.Types.ObjectId(),
+      expires_at:     new Date(Date.now() + 300_000),
+    });
+
+    expect(fakeLogger.info).toHaveBeenCalledWith(
+      expect.stringMatching(/\[LinkCodeRepo\] Created code LOGME1/),
+    );
+  });
+});
+
+describe('LinkCodeRepo.markRedeemed() — IdentityRouter alias', () => {
+  it('sets redeemed_at and redeemed_by on the document', async () => {
+    const { code } = await repo.issue({
+      pria_user_id:   new m.Types.ObjectId(),
+      synaps_user_id: new m.Types.ObjectId(),
+      ttl_ms:         300_000,
+    });
+
+    const updated = await repo.markRedeemed(code, {
+      redeemed_by: { channel: 'slack', external_id: 'U_MR', external_team_id: 'T_MR' },
+    });
+
+    expect(updated).not.toBeNull();
+    expect(updated.redeemed_at).toBeInstanceOf(Date);
+    expect(updated.redeemed_by.channel).toBe('slack');
+    expect(updated.redeemed_by.external_id).toBe('U_MR');
+    expect(updated.redeemed_by.external_team_id).toBe('T_MR');
+  });
+
+  it('returns null when the code does not exist', async () => {
+    const result = await repo.markRedeemed('NOSUCH', {
+      redeemed_by: { channel: 'slack', external_id: 'X', external_team_id: '' },
+    });
+    expect(result).toBeNull();
+  });
+
+  it('updated doc is reflected in subsequent findByCode call', async () => {
+    const { code } = await repo.issue({
+      pria_user_id:   new m.Types.ObjectId(),
+      synaps_user_id: new m.Types.ObjectId(),
+      ttl_ms:         300_000,
+    });
+
+    await repo.markRedeemed(code, {
+      redeemed_by: { channel: 'web', external_id: 'W_CHECK', external_team_id: '' },
+    });
+
+    const fetched = await repo.findByCode(code);
+    expect(fetched.redeemed_at).toBeInstanceOf(Date);
+    expect(fetched.redeemed_by.external_id).toBe('W_CHECK');
+  });
+});
+

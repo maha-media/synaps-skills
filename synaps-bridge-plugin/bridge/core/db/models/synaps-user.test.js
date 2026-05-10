@@ -24,19 +24,21 @@ describe('synapsUserSchema — validation (no DB)', () => {
     Model = m.model('SynapsUserValidation', synapsUserSchema);
   });
 
-  it('requires pria_user_id', async () => {
-    const doc = new Model({ memory_namespace: 'u_abc' });
-    await expect(doc.validate()).rejects.toThrow(/pria_user_id is required/);
+  it('allows pria_user_id to be null (synthetic / channel-only users)', async () => {
+    // IdentityRouter.resolve() creates SynapsUsers with pria_user_id: null for
+    // inbound channel identities before a pria account is linked.
+    const doc = new Model({ pria_user_id: null, memory_namespace: 'u_abc' });
+    const err = doc.validateSync();
+    expect(err).toBeUndefined();
   });
 
   it('requires memory_namespace', async () => {
-    const doc = new Model({ pria_user_id: new mongoose.Types.ObjectId() });
+    const doc = new Model({});
     await expect(doc.validate()).rejects.toThrow(/memory_namespace is required/);
   });
 
   it('rejects an invalid default_channel enum value', async () => {
     const doc = new Model({
-      pria_user_id:     new mongoose.Types.ObjectId(),
       memory_namespace: 'u_abc',
       default_channel:  'pigeon',
     });
@@ -47,7 +49,6 @@ describe('synapsUserSchema — validation (no DB)', () => {
     const channels = ['slack', 'web', 'discord', 'telegram', 'teams'];
     for (const channel of channels) {
       const doc = new Model({
-        pria_user_id:     new mongoose.Types.ObjectId(),
         memory_namespace: 'u_abc',
         default_channel:  channel,
       });
@@ -57,15 +58,13 @@ describe('synapsUserSchema — validation (no DB)', () => {
 
   it('defaults default_channel to "web"', () => {
     const doc = new Model({
-      pria_user_id:     new mongoose.Types.ObjectId(),
       memory_namespace: 'u_abc',
     });
     expect(doc.default_channel).toBe('web');
   });
 
-  it('passes validation with all required fields', async () => {
+  it('passes validation with only memory_namespace (pria_user_id is optional)', async () => {
     const doc = new Model({
-      pria_user_id:     new mongoose.Types.ObjectId(),
       memory_namespace: 'u_507f1f77bcf86cd799439011',
     });
     await expect(doc.validate()).resolves.toBeUndefined();
@@ -73,7 +72,6 @@ describe('synapsUserSchema — validation (no DB)', () => {
 
   it('accepts optional institution_id and workspace_id', async () => {
     const doc = new Model({
-      pria_user_id:     new mongoose.Types.ObjectId(),
       memory_namespace: 'u_abc',
       institution_id:   new mongoose.Types.ObjectId(),
       workspace_id:     new mongoose.Types.ObjectId(),
@@ -87,12 +85,19 @@ describe('synapsUserSchema — validation (no DB)', () => {
 // ── Index definitions (no DB) ────────────────────────────────────────────────
 
 describe('synapsUserSchema — indexes (no DB)', () => {
-  it('declares a unique index on pria_user_id', () => {
+  it('declares a partial unique index on pria_user_id (only when set)', () => {
     const indexes = synapsUserSchema.indexes();
     const entry = indexes.find(
-      ([fields, opts]) => fields.pria_user_id === 1 && opts.unique === true,
+      ([fields, opts]) =>
+        fields.pria_user_id === 1 &&
+        opts.unique === true &&
+        opts.partialFilterExpression != null,
     );
     expect(entry).toBeDefined();
+    // Confirm the partial filter only applies when field is an actual ObjectId.
+    expect(entry[1].partialFilterExpression).toEqual({
+      pria_user_id: { $type: 'objectId' },
+    });
   });
 
   it('declares a non-unique index on institution_id', () => {
@@ -151,7 +156,7 @@ describe('SynapsUser model — round-trip (in-memory DB)', () => {
     expect(doc.updated_at).toBeInstanceOf(Date);
   });
 
-  it('enforces unique pria_user_id index', async () => {
+  it('enforces unique pria_user_id index (only for real ObjectId values)', async () => {
     const priaId = new mongoose.Types.ObjectId();
     await Model.create({
       pria_user_id:     priaId,
@@ -163,6 +168,15 @@ describe('SynapsUser model — round-trip (in-memory DB)', () => {
         memory_namespace: `u_${priaId.toHexString()}_dup`,
       }),
     ).rejects.toThrow();
+  });
+
+  it('allows multiple documents with pria_user_id: null (partial index)', async () => {
+    // Synthetic/channel-only SynapsUsers created by IdentityRouter.resolve()
+    // all have null pria_user_id — the partial index must not reject them.
+    await Model.create({ pria_user_id: null, memory_namespace: 'u_null_a' });
+    await Model.create({ pria_user_id: null, memory_namespace: 'u_null_b' });
+    const count = await Model.countDocuments({ pria_user_id: null });
+    expect(count).toBe(2);
   });
 
   it('getSynapsUserModel returns the same model when called twice', () => {
