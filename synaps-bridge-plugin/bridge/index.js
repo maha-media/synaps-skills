@@ -9,15 +9,34 @@
  *
  * No I/O in constructor.  All side effects are in start() / stop().
  * No top-level await.
+ *
+ * SCP mode (platform.mode === 'scp'):
+ *   - Connects to MongoDB on start().
+ *   - Creates WorkspaceManager (backed by real Docker socket from config).
+ *   - Optionally creates VncProxy + ScpHttpServer when web.enabled = true.
+ *   - Wires DockerExecSynapsRpc as the rpcFactory for SessionRouter.
+ *   - Synaps-user resolution is a Phase-1 stub: uses SCP_DEFAULT_USER_ID env
+ *     var (or config fallback).  Full IdentityRouter lands in Phase 3.
+ *
+ * Bridge mode (default, platform.mode === 'bridge'):
+ *   Behaviour is unchanged — host-spawn SynapsRpc, no MongoDB, no Docker.
+ *
+ * Spec reference: PLATFORM.SPEC.md §3.1, §5, §12.5
  */
 
-import { EventEmitter } from 'node:events';
-import { SessionRouter } from './core/session-router.js';
-import { SessionStore } from './core/session-store.js';
-import { SynapsRpc } from './core/synaps-rpc.js';
-import { ControlSocket } from './control-socket.js';
-import { readSlackAuth } from './sources/slack/auth.js';
-import { SlackAdapter } from './sources/slack/index.js';
+import { EventEmitter }          from 'node:events';
+import { SessionRouter }         from './core/session-router.js';
+import { SessionStore }          from './core/session-store.js';
+import { SynapsRpc }             from './core/synaps-rpc.js';
+import { DockerExecSynapsRpc }   from './core/synaps-rpc-docker.js';
+import { ControlSocket }         from './control-socket.js';
+import { readSlackAuth }         from './sources/slack/auth.js';
+import { SlackAdapter }          from './sources/slack/index.js';
+import { getMongoose, WorkspaceRepo, getSynapsWorkspaceModel } from './core/db/index.js';
+import { WorkspaceManager }      from './core/workspace-manager.js';
+import { VncProxy }              from './core/vnc-proxy.js';
+import { ScpHttpServer }         from './core/scp-http-server.js';
+import Docker                    from 'dockerode';
 
 // ─── default factories ────────────────────────────────────────────────────────
 
@@ -25,22 +44,47 @@ import { SlackAdapter } from './sources/slack/index.js';
  * Default SessionRouter factory.
  * Closes over config to wire up the rpcFactory.
  *
+ * In SCP mode the rpcFactory instantiates DockerExecSynapsRpc; in bridge mode
+ * it instantiates the host-spawn SynapsRpc.  The SessionRouter API is
+ * identical in both cases.
+ *
+ * Phase-1 SCP note: SessionRouter passes { sessionId, model } to rpcFactory.
+ * It does NOT pass synapsUserId.  For Phase 1 we resolve the user from
+ * scpDeps.synapsUserIdResolver() which returns a hardcoded default.
+ * Proper per-thread resolution (IdentityRouter) lands in Phase 3.
+ *
  * @param {import('./config.js').NormalizedConfig} config
  * @param {object} logger
+ * @param {{ workspaceManager: WorkspaceManager, synapsUserIdResolver: Function }|null} scpDeps
  * @returns {SessionRouter}
  */
-function defaultSessionRouterFactory(config, logger) {
+function defaultSessionRouterFactory(config, logger, scpDeps = null) {
   const store = new SessionStore({ logger });
+  const isScp = config.platform.mode === 'scp';
+
+  const rpcFactory = isScp
+    ? ({ sessionId = null, model = null } = {}) =>
+        new DockerExecSynapsRpc({
+          workspaceManager: scpDeps.workspaceManager,
+          synapsUserId: scpDeps.synapsUserIdResolver(),
+          binPath: config.rpc.binary,
+          sessionId,
+          model: model ?? config.rpc.default_model,
+          profile: config.rpc.default_profile || null,
+          logger,
+        })
+    : ({ sessionId = null, model = null } = {}) =>
+        new SynapsRpc({
+          binPath: config.rpc.binary,
+          sessionId,
+          model: model ?? config.rpc.default_model,
+          profile: config.rpc.default_profile || null,
+          logger,
+        });
+
   return new SessionRouter({
     store,
-    rpcFactory: ({ sessionId = null, model = null } = {}) =>
-      new SynapsRpc({
-        binPath: config.rpc.binary,
-        sessionId,
-        model: model ?? config.rpc.default_model,
-        profile: config.rpc.default_profile || null,
-        logger,
-      }),
+    rpcFactory,
     idleTtlMs: config.bridge.session_idle_timeout_secs * 1000,
     logger,
   });
@@ -74,10 +118,13 @@ export class BridgeDaemon extends EventEmitter {
    * @param {import('./config.js').NormalizedConfig} opts.config
    * @param {object}   [opts.logger]                   - Logger (default: console).
    * @param {NodeJS.ProcessEnv} [opts.env]             - Environment (default: process.env).
-   * @param {Function} [opts.sessionRouterFactory]     - (config, logger) => SessionRouter.
+   * @param {Function} [opts.sessionRouterFactory]     - (config, logger, scpDeps) => SessionRouter.
    * @param {Function} [opts.slackAdapterFactory]      - ({ auth, sessionRouter, logger }) => SlackAdapter.
    * @param {Function} [opts.controlSocketFactory]     - ({ sessionRouter, logger, version }) => ControlSocket.
    * @param {Function} [opts.onShutdown]               - Called after stop() completes.
+   * @param {Function} [opts.mongoConnectFactory]      - (uri) => Promise<mongoose> — injectable for tests.
+   * @param {Function} [opts.workspaceManagerFactory]  - (repo, docker, config) => WorkspaceManager — injectable for tests.
+   * @param {Function} [opts.scpHttpServerFactory]     - (opts) => ScpHttpServer — injectable for tests.
    */
   constructor({
     config,
@@ -87,16 +134,24 @@ export class BridgeDaemon extends EventEmitter {
     slackAdapterFactory = null,
     controlSocketFactory = null,
     onShutdown = null,
+    mongoConnectFactory = null,
+    workspaceManagerFactory = null,
+    scpHttpServerFactory = null,
   } = {}) {
     super();
 
     this._config = config;
     this.logger = logger;
     this._env = env;
-    this._sessionRouterFactory = sessionRouterFactory ?? defaultSessionRouterFactory;
-    this._slackAdapterFactory  = slackAdapterFactory  ?? defaultSlackAdapterFactory;
-    this._controlSocketFactory = controlSocketFactory ?? defaultControlSocketFactory;
-    this._onShutdown = onShutdown;
+    this._sessionRouterFactory  = sessionRouterFactory  ?? defaultSessionRouterFactory;
+    this._slackAdapterFactory   = slackAdapterFactory   ?? defaultSlackAdapterFactory;
+    this._controlSocketFactory  = controlSocketFactory  ?? defaultControlSocketFactory;
+    this._onShutdown            = onShutdown;
+
+    // SCP DI hooks (test-injectable).
+    this._mongoConnectFactory      = mongoConnectFactory      ?? ((uri) => getMongoose(uri));
+    this._workspaceManagerFactory  = workspaceManagerFactory  ?? null;  // null → build inline
+    this._scpHttpServerFactory     = scpHttpServerFactory     ?? null;  // null → build inline
 
     /** @type {SessionRouter|null} */
     this._sessionRouter = null;
@@ -104,6 +159,14 @@ export class BridgeDaemon extends EventEmitter {
     this._slackAdapter = null;
     /** @type {ControlSocket|null} */
     this._controlSocket = null;
+
+    // SCP-only runtime state.
+    /** @type {object|null} mongoose instance */
+    this._mongoose = null;
+    /** @type {WorkspaceManager|null} */
+    this._workspaceManager = null;
+    /** @type {ScpHttpServer|null} */
+    this._scpHttpServer = null;
 
     this._started = false;
     this._stopped = false;
@@ -119,8 +182,62 @@ export class BridgeDaemon extends EventEmitter {
     if (this._started) return;
     this._started = true;
 
+    const isScp = this._config.platform?.mode === 'scp';
+    let scpDeps = null;
+
+    // ── SCP mode bootstrap ────────────────────────────────────────────────
+    if (isScp) {
+      // 1. Connect to MongoDB.
+      this._mongoose = await this._mongoConnectFactory(this._config.mongodb.uri);
+
+      // 2. Build repo + WorkspaceManager.
+      const model = getSynapsWorkspaceModel(this._mongoose);
+      const repo  = new WorkspaceRepo({ model, logger: this.logger });
+
+      if (this._workspaceManagerFactory) {
+        this._workspaceManager = this._workspaceManagerFactory(repo, this._config);
+      } else {
+        const docker = new Docker({ socketPath: this._config.workspace.docker_socket });
+        this._workspaceManager = new WorkspaceManager({
+          docker,
+          repo,
+          logger:        this.logger,
+          image:         this._config.workspace.image,
+          volumeRoot:    this._config.workspace.volume_root,
+          defaultLimits: {
+            cpu:    this._config.workspace.default_cpu,
+            mem_mb: this._config.workspace.default_mem_mb,
+            pids:   this._config.workspace.default_pids,
+          },
+        });
+      }
+
+      // 3. Phase-1 user resolver: returns hardcoded default from env / config.
+      const defaultUserId =
+        this._env.SCP_DEFAULT_USER_ID ??
+        '000000000000000000000001';   // fallback ObjectId stub
+
+      /** @type {Function} */
+      const synapsUserIdResolver = () => defaultUserId;
+
+      scpDeps = { workspaceManager: this._workspaceManager, synapsUserIdResolver };
+
+      // 4. Optional HTTP server + VNC proxy.
+      if (this._config.web.enabled) {
+        let scpServer;
+        if (this._scpHttpServerFactory) {
+          scpServer = this._scpHttpServerFactory({ config: this._config, repo, logger: this.logger });
+        } else {
+          const vncProxy = new VncProxy({ repo, logger: this.logger });
+          scpServer = new ScpHttpServer({ config: this._config, vncProxy, logger: this.logger });
+        }
+        this._scpHttpServer = scpServer;
+        await this._scpHttpServer.start();
+      }
+    }
+
     // 1. Session router.
-    this._sessionRouter = this._sessionRouterFactory(this._config, this.logger);
+    this._sessionRouter = this._sessionRouterFactory(this._config, this.logger, scpDeps);
     await this._sessionRouter.start();
 
     // 2. Slack adapter (if enabled).
@@ -183,6 +300,26 @@ export class BridgeDaemon extends EventEmitter {
         await this._sessionRouter.stop();
       } catch (err) {
         this.logger.warn?.(`BridgeDaemon: session router stop error: ${err.message}`);
+      }
+    }
+
+    // SCP teardown: ScpHttpServer → Mongoose disconnect.
+    if (this._scpHttpServer) {
+      try {
+        await this._scpHttpServer.stop();
+      } catch (err) {
+        this.logger.warn?.(`BridgeDaemon: scp http server stop error: ${err.message}`);
+      }
+    }
+
+    if (this._mongoose) {
+      try {
+        // Disconnect only if the mongoose instance exposes disconnect().
+        if (typeof this._mongoose.disconnect === 'function') {
+          await this._mongoose.disconnect();
+        }
+      } catch (err) {
+        this.logger.warn?.(`BridgeDaemon: mongoose disconnect error: ${err.message}`);
       }
     }
 
