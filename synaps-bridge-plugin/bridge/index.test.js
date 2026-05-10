@@ -1798,3 +1798,390 @@ describe('BridgeDaemon — heartbeatRepo threaded into ScpHttpServer', () => {
   });
 });
 
+
+
+// ─── Phase 6 — Scheduler / HookBus / InboxNotifier wiring ─────────────────────
+
+import {
+  defaultSchedulerFactory,
+  defaultHookBusFactory,
+  defaultInboxNotifierFactory,
+} from './index.js';
+import { NoopHookBus }      from './core/hook-bus.js';
+import { NoopInboxNotifier } from './core/inbox-notifier.js';
+import { NoopScheduler }    from './core/scheduler.js';
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+/** Base config with all Phase 6 sections at defaults (all disabled). */
+function makePhase6Config(overrides = {}) {
+  return {
+    ...BRIDGE_CONFIG_DEFAULTS,
+    bridge:    { ...BRIDGE_CONFIG_DEFAULTS.bridge },
+    rpc:       { ...BRIDGE_CONFIG_DEFAULTS.rpc },
+    sources:   { slack: { ...BRIDGE_CONFIG_DEFAULTS.sources.slack, enabled: false } },
+    memory:    { ...BRIDGE_CONFIG_DEFAULTS.memory, enabled: false },
+    creds:     { ...BRIDGE_CONFIG_DEFAULTS.creds, enabled: false },
+    supervisor: { ...BRIDGE_CONFIG_DEFAULTS.supervisor, enabled: false },
+    scheduler: { ...BRIDGE_CONFIG_DEFAULTS.scheduler, enabled: false },
+    hooks:     { ...BRIDGE_CONFIG_DEFAULTS.hooks, enabled: false },
+    inbox:     { ...BRIDGE_CONFIG_DEFAULTS.inbox, enabled: false },
+    ...overrides,
+  };
+}
+
+/** Build a BridgeDaemon with all Phase 6 factories injectable. */
+function buildPhase6Daemon({
+  config,
+  logger,
+  schedulerFactory,
+  hookBusFactory,
+  inboxNotifierFactory,
+  heartbeatFactory,
+  inboxDirFor = null,
+  mongoConnectFactory,
+} = {}) {
+  const _logger  = logger  ?? makeLogger();
+  const _config  = config  ?? makePhase6Config();
+
+  const daemon = new BridgeDaemon({
+    config: _config,
+    logger: _logger,
+    env: {},
+    sessionRouterFactory:  vi.fn(() => makeFakeRouter()),
+    slackAdapterFactory:   vi.fn(() => makeFakeAdapter()),
+    controlSocketFactory:  vi.fn(() => makeFakeSocket()),
+    memoryGatewayFactory:  vi.fn(() => ({ start: vi.fn(async () => {}), stop: vi.fn(async () => {}), enabled: false })),
+    schedulerFactory,
+    hookBusFactory,
+    inboxNotifierFactory,
+    heartbeatFactory,
+    inboxDirFor,
+    mongoConnectFactory,
+  });
+
+  return { daemon };
+}
+
+// ─── defaultSchedulerFactory — unit tests ─────────────────────────────────────
+
+describe('defaultSchedulerFactory — unit tests', () => {
+  it('returns NoopScheduler when scheduler.enabled = false', async () => {
+    const config = makePhase6Config({ scheduler: { ...BRIDGE_CONFIG_DEFAULTS.scheduler, enabled: false } });
+    const result = await defaultSchedulerFactory(config, makeLogger(), null, null);
+    expect(result).toBeInstanceOf(NoopScheduler);
+  });
+
+  it('returns NoopScheduler when enabled but mongoose unavailable', async () => {
+    const config = makePhase6Config({ scheduler: { ...BRIDGE_CONFIG_DEFAULTS.scheduler, enabled: true } });
+    const logger = makeLogger();
+    const result = await defaultSchedulerFactory(config, logger, async () => null, null);
+    expect(result).toBeInstanceOf(NoopScheduler);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('mongoose unavailable'));
+  });
+
+  it('returns NoopScheduler when enabled + mongoose present but no dispatcher', async () => {
+    const config = makePhase6Config({ scheduler: { ...BRIDGE_CONFIG_DEFAULTS.scheduler, enabled: true } });
+    const logger = makeLogger();
+    const fakeMongo = { Schema: (await import('mongoose')).default.Schema, model: vi.fn().mockReturnValue({}), models: {} };
+    const result = await defaultSchedulerFactory(config, logger, async () => fakeMongo, null);
+    expect(result).toBeInstanceOf(NoopScheduler);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('dispatcher'));
+  });
+});
+
+// ─── defaultHookBusFactory — unit tests ──────────────────────────────────────
+
+describe('defaultHookBusFactory — unit tests', () => {
+  it('returns NoopHookBus when hooks.enabled = false', async () => {
+    const config = makePhase6Config({ hooks: { ...BRIDGE_CONFIG_DEFAULTS.hooks, enabled: false } });
+    const result = await defaultHookBusFactory(config, makeLogger(), null);
+    expect(result).toBeInstanceOf(NoopHookBus);
+  });
+
+  it('returns NoopHookBus when enabled but mongoose unavailable', async () => {
+    const config = makePhase6Config({ hooks: { ...BRIDGE_CONFIG_DEFAULTS.hooks, enabled: true } });
+    const logger = makeLogger();
+    const result = await defaultHookBusFactory(config, logger, async () => null);
+    expect(result).toBeInstanceOf(NoopHookBus);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('mongoose unavailable'));
+  });
+
+  it('returns real HookBus when enabled and mongoose available', async () => {
+    const { HookBus } = await import('./core/hook-bus.js');
+    const config = makePhase6Config({ hooks: { ...BRIDGE_CONFIG_DEFAULTS.hooks, enabled: true } });
+    const logger = makeLogger();
+    const mongoose = await import('mongoose');
+    const fakeModel = {
+      find: vi.fn().mockResolvedValue([]),
+      findById: vi.fn().mockResolvedValue(null),
+    };
+    const fakeMongo = {
+      Schema: mongoose.default.Schema,
+      model: vi.fn().mockReturnValue(fakeModel),
+      models: {},
+    };
+    const result = await defaultHookBusFactory(config, logger, async () => fakeMongo);
+    expect(result).toBeInstanceOf(HookBus);
+  });
+});
+
+// ─── defaultInboxNotifierFactory — unit tests ──────────────────────────────────
+
+describe('defaultInboxNotifierFactory — unit tests', () => {
+  it('returns NoopInboxNotifier when inbox.enabled = false', () => {
+    const config = makePhase6Config({ inbox: { ...BRIDGE_CONFIG_DEFAULTS.inbox, enabled: false } });
+    const result = defaultInboxNotifierFactory(config, makeLogger(), null);
+    expect(result).toBeInstanceOf(NoopInboxNotifier);
+  });
+
+  it('returns NoopInboxNotifier + warns when enabled but getInboxDirFor is null', () => {
+    const config = makePhase6Config({ inbox: { ...BRIDGE_CONFIG_DEFAULTS.inbox, enabled: true } });
+    const logger = makeLogger();
+    const result = defaultInboxNotifierFactory(config, logger, null);
+    expect(result).toBeInstanceOf(NoopInboxNotifier);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('no getInboxDirFor'));
+  });
+
+  it('returns a real (non-noop) object when enabled and getInboxDirFor provided', () => {
+    const config = makePhase6Config({ inbox: { ...BRIDGE_CONFIG_DEFAULTS.inbox, enabled: true } });
+    const getInboxDirFor = vi.fn((wsId) => `/var/inbox/${wsId}`);
+    const result = defaultInboxNotifierFactory(config, makeLogger(), getInboxDirFor);
+    expect(result).not.toBeInstanceOf(NoopInboxNotifier);
+    expect(typeof result.notifyWorkspaceReaped).toBe('function');
+  });
+});
+
+// ─── BridgeDaemon — Phase 6 default-off paths return Noops ───────────────────
+
+describe('BridgeDaemon — Phase 6 default-off paths return Noops', () => {
+  it('daemon._scheduler is NoopScheduler by default (scheduler.enabled=false)', async () => {
+    const { daemon } = buildPhase6Daemon();
+    await daemon.start();
+    expect(daemon._scheduler).toBeInstanceOf(NoopScheduler);
+    await daemon.stop();
+  });
+
+  it('daemon._hookBus is NoopHookBus by default (hooks.enabled=false)', async () => {
+    const { daemon } = buildPhase6Daemon();
+    await daemon.start();
+    expect(daemon._hookBus).toBeInstanceOf(NoopHookBus);
+    await daemon.stop();
+  });
+
+  it('daemon._inboxNotifier is NoopInboxNotifier by default (inbox.enabled=false)', async () => {
+    const { daemon } = buildPhase6Daemon();
+    await daemon.start();
+    expect(daemon._inboxNotifier).toBeInstanceOf(NoopInboxNotifier);
+    await daemon.stop();
+  });
+});
+
+// ─── BridgeDaemon — custom factory injection honored ─────────────────────────
+
+describe('BridgeDaemon — custom Phase 6 factory injection honored', () => {
+  it('custom schedulerFactory is called and its return value stored in _scheduler', async () => {
+    const fakeScheduler = { start: vi.fn(async () => {}), stop: vi.fn(async () => {}) };
+    const factory = vi.fn(async () => fakeScheduler);
+    const { daemon } = buildPhase6Daemon({ schedulerFactory: factory });
+    await daemon.start();
+    expect(factory).toHaveBeenCalledOnce();
+    expect(daemon._scheduler).toBe(fakeScheduler);
+    await daemon.stop();
+  });
+
+  it('custom hookBusFactory is called and its return value stored in _hookBus', async () => {
+    const fakeHookBus = { emit: vi.fn(async () => ({ fired: 0, blocked: false, results: [] })) };
+    const factory = vi.fn(async () => fakeHookBus);
+    const { daemon } = buildPhase6Daemon({ hookBusFactory: factory });
+    await daemon.start();
+    expect(factory).toHaveBeenCalledOnce();
+    expect(daemon._hookBus).toBe(fakeHookBus);
+    await daemon.stop();
+  });
+
+  it('custom inboxNotifierFactory is called and its return value stored in _inboxNotifier', async () => {
+    const fakeNotifier = { notifyWorkspaceReaped: vi.fn(async () => ({ written: false })) };
+    const factory = vi.fn(() => fakeNotifier);
+    const { daemon } = buildPhase6Daemon({ inboxNotifierFactory: factory });
+    await daemon.start();
+    expect(factory).toHaveBeenCalledOnce();
+    expect(daemon._inboxNotifier).toBe(fakeNotifier);
+    await daemon.stop();
+  });
+});
+
+// ─── BridgeDaemon — Reaper receives inboxNotifier + inboxDirFor ────────────────
+
+describe('BridgeDaemon — Reaper receives inboxNotifier + inboxDirFor via heartbeatFactory', () => {
+  it('Reaper receives inboxNotifier + inboxDirFor when supervisor + inbox both enabled', async () => {
+    let capturedExtras = null;
+
+    const heartbeatFactory = vi.fn(async (cfg, log, getMongo, extras) => {
+      capturedExtras = extras;
+      return null; // short-circuit — we only care about extras
+    });
+
+    const fakeNotifier = { notifyWorkspaceReaped: vi.fn() };
+    const inboxNotifierFactory = vi.fn(() => fakeNotifier);
+    const inboxDirFor = vi.fn((wsId) => `/inbox/${wsId}`);
+
+    const config = makePhase6Config({
+      supervisor: { ...BRIDGE_CONFIG_DEFAULTS.supervisor, enabled: true },
+      inbox: { ...BRIDGE_CONFIG_DEFAULTS.inbox, enabled: true },
+    });
+
+    const { daemon } = buildPhase6Daemon({
+      config,
+      heartbeatFactory,
+      inboxNotifierFactory,
+      inboxDirFor,
+    });
+
+    await daemon.start();
+
+    expect(capturedExtras).not.toBeNull();
+    expect(capturedExtras.inboxNotifier).toBe(fakeNotifier);
+    expect(capturedExtras.inboxDirFor).toBe(inboxDirFor);
+
+    await daemon.stop();
+  });
+
+  it('Reaper receives null inboxNotifier when supervisor enabled but inbox disabled', async () => {
+    let capturedExtras = null;
+
+    const heartbeatFactory = vi.fn(async (cfg, log, getMongo, extras) => {
+      capturedExtras = extras;
+      return null;
+    });
+
+    const config = makePhase6Config({
+      supervisor: { ...BRIDGE_CONFIG_DEFAULTS.supervisor, enabled: true },
+      inbox: { ...BRIDGE_CONFIG_DEFAULTS.inbox, enabled: false },
+    });
+
+    const { daemon } = buildPhase6Daemon({ config, heartbeatFactory });
+    await daemon.start();
+
+    expect(capturedExtras.inboxNotifier).toBeInstanceOf(NoopInboxNotifier);
+    // inboxDirFor is null because no inboxDirFor was passed to the daemon
+    expect(capturedExtras.inboxDirFor).toBeNull();
+
+    await daemon.stop();
+  });
+});
+
+// ─── BridgeDaemon — teardown order: scheduler → hookBus → inboxNotifier ───────
+
+describe('BridgeDaemon — Phase 6 teardown order', () => {
+  it('scheduler.stop() called before hookBus.stop(), hookBus.stop() before inboxNotifier.stop()', async () => {
+    const stopOrder = [];
+
+    const fakeScheduler = {
+      start: vi.fn(async () => {}),
+      stop:  vi.fn(async () => stopOrder.push('scheduler')),
+    };
+    const fakeHookBus = {
+      stop: vi.fn(async () => stopOrder.push('hookBus')),
+    };
+    const fakeNotifier = {
+      notifyWorkspaceReaped: vi.fn(),
+      stop: vi.fn(async () => stopOrder.push('inboxNotifier')),
+    };
+
+    const { daemon } = buildPhase6Daemon({
+      schedulerFactory:     vi.fn(async () => fakeScheduler),
+      hookBusFactory:       vi.fn(async () => fakeHookBus),
+      inboxNotifierFactory: vi.fn(() => fakeNotifier),
+    });
+
+    await daemon.start();
+    await daemon.stop();
+
+    // Verify stop order within Phase 6 teardown.
+    const sIdx   = stopOrder.indexOf('scheduler');
+    const hbIdx  = stopOrder.indexOf('hookBus');
+    const inbIdx = stopOrder.indexOf('inboxNotifier');
+
+    expect(sIdx).toBeGreaterThanOrEqual(0);
+    expect(hbIdx).toBeGreaterThanOrEqual(0);
+    expect(inbIdx).toBeGreaterThanOrEqual(0);
+    expect(sIdx).toBeLessThan(hbIdx);
+    expect(hbIdx).toBeLessThan(inbIdx);
+  });
+
+  it('teardown errors do not propagate — each stop throws but daemon.stop() resolves', async () => {
+    const fakeScheduler = {
+      start: vi.fn(async () => {}),
+      stop:  vi.fn(async () => { throw new Error('scheduler stop boom'); }),
+    };
+    const fakeHookBus = {
+      stop: vi.fn(async () => { throw new Error('hookBus stop boom'); }),
+    };
+    const fakeNotifier = {
+      notifyWorkspaceReaped: vi.fn(),
+      stop: vi.fn(async () => { throw new Error('inboxNotifier stop boom'); }),
+    };
+
+    const { daemon } = buildPhase6Daemon({
+      schedulerFactory:     vi.fn(async () => fakeScheduler),
+      hookBusFactory:       vi.fn(async () => fakeHookBus),
+      inboxNotifierFactory: vi.fn(() => fakeNotifier),
+    });
+
+    await daemon.start();
+    await expect(daemon.stop()).resolves.toBeUndefined();
+  });
+
+  it('teardown errors are warn-logged but stop continues', async () => {
+    const logger = makeLogger();
+    const fakeScheduler = {
+      start: vi.fn(async () => {}),
+      stop:  vi.fn(async () => { throw new Error('sched-err'); }),
+    };
+    const fakeHookBus = {
+      stop: vi.fn(async () => { throw new Error('hub-err'); }),
+    };
+    const fakeNotifier = {
+      notifyWorkspaceReaped: vi.fn(),
+      stop: vi.fn(async () => { throw new Error('notifier-err'); }),
+    };
+
+    const { daemon } = buildPhase6Daemon({
+      logger,
+      schedulerFactory:     vi.fn(async () => fakeScheduler),
+      hookBusFactory:       vi.fn(async () => fakeHookBus),
+      inboxNotifierFactory: vi.fn(() => fakeNotifier),
+    });
+
+    await daemon.start();
+    await daemon.stop();
+
+    const warnMsgs = logger.warn.mock.calls.map(([msg]) => msg ?? '');
+    expect(warnMsgs.some(m => m.includes('sched-err'))).toBe(true);
+    expect(warnMsgs.some(m => m.includes('hub-err'))).toBe(true);
+    expect(warnMsgs.some(m => m.includes('notifier-err'))).toBe(true);
+  });
+});
+
+// ─── BridgeDaemon — inbox enabled but no inboxDirFor → Noop + warn ────────────
+
+describe('BridgeDaemon — inbox.enabled=true but no inboxDirFor → NoopInboxNotifier + warn', () => {
+  it('warns and uses NoopInboxNotifier when inbox.enabled=true but inboxDirFor is null', async () => {
+    const logger = makeLogger();
+    const config = makePhase6Config({
+      inbox: { ...BRIDGE_CONFIG_DEFAULTS.inbox, enabled: true },
+    });
+
+    // No inboxDirFor passed → default is null.
+    const { daemon } = buildPhase6Daemon({ config, logger });
+    await daemon.start();
+
+    expect(daemon._inboxNotifier).toBeInstanceOf(NoopInboxNotifier);
+    // The warn should have come from defaultInboxNotifierFactory.
+    const warnMsgs = logger.warn.mock.calls.map(([msg]) => msg ?? '');
+    expect(warnMsgs.some(m => m.includes('no getInboxDirFor'))).toBe(true);
+
+    await daemon.stop();
+  });
+});

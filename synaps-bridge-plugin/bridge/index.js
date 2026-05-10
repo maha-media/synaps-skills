@@ -57,7 +57,12 @@ import { InfisicalClient }       from './core/cred-broker/infisical-client.js';
 import { NoOpIdentityRouter }    from './core/identity-router.js';
 import { HeartbeatEmitter }      from './core/heartbeat-emitter.js';
 import { Reaper }                from './core/reaper.js';
-import { makeHeartbeatRepo }     from './core/db/index.js';
+import { makeHeartbeatRepo, makeScheduledTaskRepo } from './core/db/index.js';
+import { HookRepo }                from './core/db/repositories/hook-repo.js';
+import { makeHookModel }           from './core/db/models/synaps-hook.js';
+import { HookBus, NoopHookBus }  from './core/hook-bus.js';
+import { InboxNotifier, NoopInboxNotifier } from './core/inbox-notifier.js';
+import { Scheduler, NoopScheduler } from './core/scheduler.js';
 import Docker                    from 'dockerode';
 
 // ─── default factories ────────────────────────────────────────────────────────
@@ -157,9 +162,11 @@ export function defaultCredBrokerFactory(config, logger) {
  * @param {object} [extras]
  * @param {object}   [extras.workspaceManager] - forwarded to Reaper if provided
  * @param {Function} [extras.rpcKiller]        - forwarded to Reaper if provided
+ * @param {object}   [extras.inboxNotifier]    - forwarded to Reaper (Phase 6)
+ * @param {Function} [extras.inboxDirFor]      - forwarded to Reaper (Phase 6)
  * @returns {Promise<{repo, emitter, reaper}|null>}
  */
-export async function defaultHeartbeatFactory(config, logger, getMongooseFn, { workspaceManager, rpcKiller } = {}) {
+export async function defaultHeartbeatFactory(config, logger, getMongooseFn, { workspaceManager, rpcKiller, inboxNotifier, inboxDirFor } = {}) {
   if (!config.supervisor?.enabled) return null;
 
   const mongoose = await getMongooseFn?.();
@@ -188,10 +195,148 @@ export async function defaultHeartbeatFactory(config, logger, getMongooseFn, { w
     },
     workspaceManager: workspaceManager ?? null,
     rpcKiller:        rpcKiller        ?? null,
+    inboxNotifier:    inboxNotifier    ?? null,
+    inboxDirFor:      inboxDirFor      ?? null,
     logger,
   });
 
   return { repo, emitter, reaper };
+}
+
+/**
+ * Convenience factory: makeHookRepo(mongooseInstance) → HookRepo.
+ * Created inline since db/index.js may not yet export it (Wave A2 in parallel).
+ *
+ * @param {import('mongoose').Mongoose} mongooseInstance
+ * @returns {HookRepo}
+ */
+function _makeHookRepo(mongooseInstance) {
+  const HookModel = makeHookModel(mongooseInstance);
+  return new HookRepo({ model: HookModel });
+}
+
+/**
+ * Build the appropriate Scheduler based on config.
+ *
+ * - `config.scheduler.enabled = false` or missing mongoose/dispatcher → NoopScheduler.
+ * - Otherwise → real Scheduler with agenda.
+ *
+ * Note: agenda is a CJS module imported inside scheduler.js via createRequire.
+ * This factory only resolves a live Scheduler when enabled AND both mongoose and
+ * dispatcher are present.
+ *
+ * Exported so tests can exercise the factory branches directly.
+ *
+ * @param {import('./config.js').NormalizedConfig} config
+ * @param {{info,warn,error,debug}} logger
+ * @param {Function|null} getMongooseFn  - () => mongoose instance
+ * @param {Function|null} getDispatcher  - () => dispatcher fn
+ * @returns {Promise<Scheduler|NoopScheduler>}
+ */
+export async function defaultSchedulerFactory(config, logger, getMongooseFn, getDispatcher) {
+  if (!config.scheduler?.enabled) {
+    return new NoopScheduler();
+  }
+
+  const mongoose = await getMongooseFn?.();
+  if (!mongoose) {
+    logger.warn('scheduler enabled but mongoose unavailable; using NoopScheduler');
+    return new NoopScheduler();
+  }
+
+  const dispatcher = typeof getDispatcher === 'function' ? getDispatcher() : null;
+  if (!dispatcher) {
+    logger.warn('scheduler enabled but no dispatcher available; using NoopScheduler');
+    return new NoopScheduler();
+  }
+
+  const repo = makeScheduledTaskRepo(mongoose);
+
+  // Lazy-import agenda at runtime — only when config.scheduler.enabled.
+  // Scheduler.js handles the CJS compat layer via createRequire.
+  return new Scheduler({
+    repo,
+    dispatcher,
+    processEverySecs: config.scheduler.process_every_secs,
+    maxConcurrency:   config.scheduler.max_concurrency,
+    logger,
+  });
+}
+
+/**
+ * Build the appropriate HookBus based on config.
+ *
+ * - `config.hooks.enabled = false` or missing mongoose → NoopHookBus.
+ * - Otherwise → real HookBus wired to HookRepo.
+ *
+ * Exported so tests can exercise the factory branches directly.
+ *
+ * @param {import('./config.js').NormalizedConfig} config
+ * @param {{info,warn,error,debug}} logger
+ * @param {Function|null} getMongooseFn  - () => mongoose instance
+ * @returns {Promise<HookBus|NoopHookBus>}
+ */
+export async function defaultHookBusFactory(config, logger, getMongooseFn) {
+  if (!config.hooks?.enabled) {
+    return new NoopHookBus();
+  }
+
+  const mongoose = await getMongooseFn?.();
+  if (!mongoose) {
+    logger.warn('hooks enabled but mongoose unavailable; using NoopHookBus');
+    return new NoopHookBus();
+  }
+
+  const repo = _makeHookRepo(mongoose);
+
+  return new HookBus({
+    repo,
+    timeoutMs: config.hooks.timeout_ms,
+    logger,
+  });
+}
+
+/**
+ * Build the appropriate InboxNotifier based on config.
+ *
+ * - `config.inbox.enabled = false` → NoopInboxNotifier.
+ * - `config.inbox.enabled = true` but `getInboxDirFor` is null → NoopInboxNotifier + warn.
+ * - Otherwise → DynamicInboxNotifier: a shim that calls getInboxDirFor(workspaceId)
+ *   at notification time and delegates to a per-workspace InboxNotifier.
+ *   The Reaper also receives the bare `inboxDirFor` ref so it can scope its calls.
+ *
+ * Exported so tests can exercise the factory branches directly.
+ *
+ * @param {import('./config.js').NormalizedConfig} config
+ * @param {{info,warn,error,debug}} logger
+ * @param {Function|null} getInboxDirFor  - (workspaceId) => string path
+ * @returns {InboxNotifier|NoopInboxNotifier}
+ */
+export function defaultInboxNotifierFactory(config, logger, getInboxDirFor) {
+  if (!config.inbox?.enabled) {
+    return new NoopInboxNotifier();
+  }
+
+  if (!getInboxDirFor) {
+    logger.warn('inbox.enabled=true but no getInboxDirFor provided; using NoopInboxNotifier');
+    return new NoopInboxNotifier();
+  }
+
+  // Return a dynamic notifier that creates a per-workspace InboxNotifier at call time.
+  // This avoids the need for a fixed inboxDir at daemon startup.
+  return {
+    /** @type {true} */
+    _dynamic: true,
+    async notifyWorkspaceReaped({ workspaceId, synapsUserId, reason, details } = {}) {
+      const inboxDir = getInboxDirFor(workspaceId);
+      if (!inboxDir) {
+        logger.warn('InboxNotifier: no inboxDir for workspaceId', { workspaceId });
+        return { written: false, reason: 'no_inbox_dir' };
+      }
+      const notifier = new InboxNotifier({ inboxDir, logger });
+      return notifier.notifyWorkspaceReaped({ workspaceId, synapsUserId, reason, details });
+    },
+  };
 }
 
 /**
@@ -327,6 +472,10 @@ export class BridgeDaemon extends EventEmitter {
    * @param {Function} [opts.identityRouterFactory]    - ({ config, logger }) => Promise<IdentityRouter|NoOpIdentityRouter> — injectable for tests.
    * @param {Function} [opts.credBrokerFactory]        - (config, logger) => CredBroker|NoopCredBroker — injectable for tests.
    * @param {Function} [opts.heartbeatFactory]         - async (config, logger, getMongoose, extras) => {repo,emitter,reaper}|null — injectable for tests.
+   * @param {Function} [opts.schedulerFactory]         - async (config, logger, getMongoose, getDispatcher) => Scheduler|NoopScheduler — injectable for tests.
+   * @param {Function} [opts.hookBusFactory]           - async (config, logger, getMongoose) => HookBus|NoopHookBus — injectable for tests.
+   * @param {Function} [opts.inboxNotifierFactory]     - (config, logger, getInboxDirFor) => InboxNotifier|NoopInboxNotifier — injectable for tests.
+   * @param {Function} [opts.inboxDirFor]              - (workspaceId) => string — injected inbox dir resolver; null in most deployments.
    */
   constructor({
     config,
@@ -343,6 +492,10 @@ export class BridgeDaemon extends EventEmitter {
     identityRouterFactory = null,
     credBrokerFactory = null,
     heartbeatFactory = null,
+    schedulerFactory = null,
+    hookBusFactory = null,
+    inboxNotifierFactory = null,
+    inboxDirFor = null,
   } = {}) {
     super();
 
@@ -371,6 +524,12 @@ export class BridgeDaemon extends EventEmitter {
     // Heartbeat factory (test-injectable).
     this._heartbeatFactory = heartbeatFactory ?? defaultHeartbeatFactory;
 
+    // Scheduler / HookBus / InboxNotifier factories (test-injectable).
+    this._schedulerFactory     = schedulerFactory     ?? defaultSchedulerFactory;
+    this._hookBusFactory       = hookBusFactory       ?? defaultHookBusFactory;
+    this._inboxNotifierFactory = inboxNotifierFactory ?? defaultInboxNotifierFactory;
+    this._inboxDirFor          = inboxDirFor          ?? null;
+
     /** @type {SessionRouter|null} */
     this._sessionRouter = null;
     /** @type {SlackAdapter|null} */
@@ -398,6 +557,14 @@ export class BridgeDaemon extends EventEmitter {
     // Supervisor (built in start() when supervisor.enabled = true and mongoose available).
     /** @type {{repo: object, emitter: HeartbeatEmitter, reaper: Reaper}|null} */
     this.supervisor = null;
+
+    // Phase 6 new subsystems.
+    /** @type {Scheduler|NoopScheduler|null} */
+    this._scheduler = null;
+    /** @type {HookBus|NoopHookBus|null} */
+    this._hookBus = null;
+    /** @type {InboxNotifier|NoopInboxNotifier|object|null} */
+    this._inboxNotifier = null;
 
     // Identity router (built in start()).
     /** @type {import('./core/identity-router.js').IdentityRouter|import('./core/identity-router.js').NoOpIdentityRouter|null} */
@@ -480,6 +647,9 @@ export class BridgeDaemon extends EventEmitter {
     // 4a. Supervisor (heartbeat + reaper) — runs in both bridge and scp modes.
     //     Built here (before the HTTP server) so heartbeatRepo is available to /health.
     //     In bridge mode getMongoose() returns null → defaultHeartbeatFactory yields null.
+    //     Phase 6: build inboxNotifier first so Reaper gets it.
+    this._inboxNotifier = this._inboxNotifierFactory(this._config, this.logger, this._inboxDirFor);
+
     const _getMongoose = () => this._mongoose;
     this.supervisor = await this._heartbeatFactory(
       this._config,
@@ -488,6 +658,8 @@ export class BridgeDaemon extends EventEmitter {
       {
         workspaceManager: this._workspaceManager ?? undefined,
         rpcKiller:        undefined,
+        inboxNotifier:    this._inboxNotifier,
+        inboxDirFor:      this._inboxDirFor,
       },
     );
     if (this.supervisor) {
@@ -522,6 +694,10 @@ export class BridgeDaemon extends EventEmitter {
       await this._scpHttpServer.start();
     }
 
+    // 4c. HookBus — built after supervisor + HTTP server, before slackAdapter.
+    // Hooks must exist when first events fire.
+    this._hookBus = await this._hookBusFactory(this._config, this.logger, _getMongoose);
+
     // 1. Session router.
     this._sessionRouter = this._sessionRouterFactory(this._config, this.logger, scpDeps);
     await this._sessionRouter.start();
@@ -539,15 +715,20 @@ export class BridgeDaemon extends EventEmitter {
       await this._slackAdapter.start();
     }
 
-    // 3. Control socket.
+    // 3. Control socket (pass hookBus + scheduler when ready).
     this._controlSocket = this._controlSocketFactory({
       sessionRouter: this._sessionRouter,
       identityRouter: this._identityRouter,
       credBroker: this._credBroker,
+      hookBus: this._hookBus,
       logger: this.logger,
       version: '0.1.0',
     });
     await this._controlSocket.start();
+
+    // 4. Scheduler — built last (needs the dispatch surface to exist).
+    const _getDispatcher = () => null; // v0 dispatcher stub — Wave C wires the real one
+    this._scheduler = await this._schedulerFactory(this._config, this.logger, _getMongoose, _getDispatcher);
 
     this.emit('started');
     this.logger.info?.('BridgeDaemon: started');
@@ -631,6 +812,31 @@ export class BridgeDaemon extends EventEmitter {
       try { await this.supervisor.emitter.stop(); } catch (e) { this.logger.warn?.(`BridgeDaemon: supervisor emitter stop failed: ${e.message}`); }
       try { this.supervisor.reaper.stop();        } catch (e) { this.logger.warn?.(`BridgeDaemon: supervisor reaper stop failed: ${e.message}`); }
       this.logger.info?.('supervisor stopped');
+    }
+
+    // Phase 6 teardown: scheduler → hookBus → inboxNotifier (best-effort each).
+    if (this._scheduler && typeof this._scheduler.stop === 'function') {
+      try {
+        await this._scheduler.stop();
+      } catch (err) {
+        this.logger.warn?.(`BridgeDaemon: scheduler stop error: ${err.message}`);
+      }
+    }
+
+    if (this._hookBus && typeof this._hookBus.stop === 'function') {
+      try {
+        await this._hookBus.stop();
+      } catch (err) {
+        this.logger.warn?.(`BridgeDaemon: hookBus stop error: ${err.message}`);
+      }
+    }
+
+    if (this._inboxNotifier && typeof this._inboxNotifier.stop === 'function') {
+      try {
+        await this._inboxNotifier.stop();
+      } catch (err) {
+        this.logger.warn?.(`BridgeDaemon: inboxNotifier stop error: ${err.message}`);
+      }
     }
 
     // Cred broker — clear cache after memory gateway.

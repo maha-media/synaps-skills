@@ -1371,3 +1371,317 @@ describe('loadBridgeConfig — supervisor unknown keys', () => {
   });
 });
 
+// ─── Phase 6 new sections ─────────────────────────────────────────────────────
+
+// ─── [scheduler] defaults ────────────────────────────────────────────────────
+
+describe('BRIDGE_CONFIG_DEFAULTS includes scheduler section', () => {
+  it('has scheduler section with correct defaults', () => {
+    const s = BRIDGE_CONFIG_DEFAULTS.scheduler;
+    expect(s).toBeDefined();
+    expect(s.enabled).toBe(false);
+    expect(s.process_every_secs).toBe(30);
+    expect(s.max_concurrency).toBe(5);
+  });
+
+  it('scheduler default sub-object is frozen', () => {
+    expect(Object.isFrozen(BRIDGE_CONFIG_DEFAULTS.scheduler)).toBe(true);
+  });
+});
+
+describe('loadBridgeConfig — scheduler section defaults', () => {
+  it('returns all scheduler defaults when [scheduler] is absent', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    const s = config.scheduler;
+    expect(s.enabled).toBe(false);
+    expect(s.process_every_secs).toBe(30);
+    expect(s.max_concurrency).toBe(5);
+  });
+
+  it('result.scheduler is frozen', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(Object.isFrozen(config.scheduler)).toBe(true);
+  });
+
+  it('honours scheduler.enabled = true', async () => {
+    const toml = `[scheduler]\nenabled = true\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.scheduler.enabled).toBe(true);
+  });
+
+  it('honours custom process_every_secs', async () => {
+    const toml = `[scheduler]\nprocess_every_secs = 60\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.scheduler.process_every_secs).toBe(60);
+  });
+
+  it('accepts process_every_secs = 0 (zero is valid non-negative)', async () => {
+    const toml = `[scheduler]\nprocess_every_secs = 0\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.scheduler.process_every_secs).toBe(0);
+  });
+
+  it('falls back on process_every_secs < 0 and warns', async () => {
+    const toml = `[scheduler]\nprocess_every_secs = -1\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.scheduler.process_every_secs).toBe(30);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('scheduler.process_every_secs'));
+  });
+
+  it('falls back on non-integer process_every_secs and warns', async () => {
+    const toml = `[scheduler]\nprocess_every_secs = 1.5\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.scheduler.process_every_secs).toBe(30);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('scheduler.process_every_secs'));
+  });
+
+  it('honours custom max_concurrency', async () => {
+    const toml = `[scheduler]\nmax_concurrency = 10\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.scheduler.max_concurrency).toBe(10);
+  });
+
+  it('falls back on max_concurrency = 0 and warns (must be >= 1)', async () => {
+    const toml = `[scheduler]\nmax_concurrency = 0\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.scheduler.max_concurrency).toBe(5);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('scheduler.max_concurrency'));
+  });
+
+  it('falls back on negative max_concurrency and warns', async () => {
+    const toml = `[scheduler]\nmax_concurrency = -2\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.scheduler.max_concurrency).toBe(5);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('scheduler.max_concurrency'));
+  });
+
+  it('warns on unknown key inside [scheduler] and drops it', async () => {
+    const toml = `[scheduler]\nfuture_opt = "xyz"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('unknown scheduler key "future_opt"'),
+    );
+    expect(config.scheduler.future_opt).toBeUndefined();
+  });
+});
+
+// ─── [hooks] defaults ─────────────────────────────────────────────────────────
+
+describe('BRIDGE_CONFIG_DEFAULTS includes hooks section', () => {
+  it('has hooks section with correct defaults', () => {
+    const h = BRIDGE_CONFIG_DEFAULTS.hooks;
+    expect(h).toBeDefined();
+    expect(h.enabled).toBe(false);
+    expect(h.timeout_ms).toBe(5000);
+    expect(h.max_parallel).toBe(16);
+  });
+
+  it('hooks default sub-object is frozen', () => {
+    expect(Object.isFrozen(BRIDGE_CONFIG_DEFAULTS.hooks)).toBe(true);
+  });
+});
+
+describe('loadBridgeConfig — hooks section defaults', () => {
+  it('returns all hooks defaults when [hooks] is absent', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(config.hooks.enabled).toBe(false);
+    expect(config.hooks.timeout_ms).toBe(5000);
+    expect(config.hooks.max_parallel).toBe(16);
+  });
+
+  it('result.hooks is frozen', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(Object.isFrozen(config.hooks)).toBe(true);
+  });
+
+  it('honours hooks.enabled = true', async () => {
+    const toml = `[hooks]\nenabled = true\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.hooks.enabled).toBe(true);
+  });
+
+  it('honours custom hooks.timeout_ms', async () => {
+    const toml = `[hooks]\ntimeout_ms = 10000\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.hooks.timeout_ms).toBe(10000);
+  });
+
+  it('accepts hooks.timeout_ms = 0 (non-negative)', async () => {
+    const toml = `[hooks]\ntimeout_ms = 0\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.hooks.timeout_ms).toBe(0);
+  });
+
+  it('falls back on hooks.timeout_ms < 0 and warns', async () => {
+    const toml = `[hooks]\ntimeout_ms = -100\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.hooks.timeout_ms).toBe(5000);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('hooks.timeout_ms'));
+  });
+
+  it('falls back on non-integer hooks.timeout_ms and warns', async () => {
+    const toml = `[hooks]\ntimeout_ms = 5000.5\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.hooks.timeout_ms).toBe(5000);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('hooks.timeout_ms'));
+  });
+
+  it('honours custom hooks.max_parallel', async () => {
+    const toml = `[hooks]\nmax_parallel = 32\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.hooks.max_parallel).toBe(32);
+  });
+
+  it('falls back on hooks.max_parallel = 0 and warns (must be >= 1)', async () => {
+    const toml = `[hooks]\nmax_parallel = 0\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.hooks.max_parallel).toBe(16);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('hooks.max_parallel'));
+  });
+
+  it('falls back on negative hooks.max_parallel and warns', async () => {
+    const toml = `[hooks]\nmax_parallel = -5\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.hooks.max_parallel).toBe(16);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('hooks.max_parallel'));
+  });
+
+  it('warns on unknown key inside [hooks] and drops it', async () => {
+    const toml = `[hooks]\nfuture_opt = "xyz"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('unknown hooks key "future_opt"'),
+    );
+    expect(config.hooks.future_opt).toBeUndefined();
+  });
+});
+
+// ─── [inbox] defaults ─────────────────────────────────────────────────────────
+
+describe('BRIDGE_CONFIG_DEFAULTS includes inbox section', () => {
+  it('has inbox section with correct defaults', () => {
+    const i = BRIDGE_CONFIG_DEFAULTS.inbox;
+    expect(i).toBeDefined();
+    expect(i.enabled).toBe(false);
+    expect(i.dir_template).toBe('');
+  });
+
+  it('inbox default sub-object is frozen', () => {
+    expect(Object.isFrozen(BRIDGE_CONFIG_DEFAULTS.inbox)).toBe(true);
+  });
+});
+
+describe('loadBridgeConfig — inbox section defaults', () => {
+  it('returns all inbox defaults when [inbox] is absent', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(config.inbox.enabled).toBe(false);
+    expect(config.inbox.dir_template).toBe('');
+  });
+
+  it('result.inbox is frozen', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(Object.isFrozen(config.inbox)).toBe(true);
+  });
+
+  it('honours inbox.enabled = true', async () => {
+    const toml = `[inbox]\nenabled = true\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.inbox.enabled).toBe(true);
+  });
+
+  it('defaults inbox.enabled to false and does not warn', async () => {
+    const toml = `[inbox]\nenabled = false\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.inbox.enabled).toBe(false);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('honours custom inbox.dir_template', async () => {
+    const toml = `[inbox]\ndir_template = "/var/synaps/inbox/{workspaceId}"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.inbox.dir_template).toBe('/var/synaps/inbox/{workspaceId}');
+  });
+
+  it('warns on unknown key inside [inbox] and drops it', async () => {
+    const toml = `[inbox]\nfuture_opt = "xyz"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('unknown inbox key "future_opt"'),
+    );
+    expect(config.inbox.future_opt).toBeUndefined();
+  });
+});
+
+// ─── [scheduler] [hooks] [inbox] not listed as unknown top-level keys ─────────
+
+describe('loadBridgeConfig — scheduler / hooks / inbox are not treated as unknown top-level', () => {
+  it('does not warn about [scheduler] as unknown key', async () => {
+    const toml = `[scheduler]\nenabled = false\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('unknown top-level key "scheduler"'),
+    );
+  });
+
+  it('does not warn about [hooks] as unknown key', async () => {
+    const toml = `[hooks]\nenabled = false\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('unknown top-level key "hooks"'),
+    );
+  });
+
+  it('does not warn about [inbox] as unknown key', async () => {
+    const toml = `[inbox]\nenabled = false\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('unknown top-level key "inbox"'),
+    );
+  });
+});
