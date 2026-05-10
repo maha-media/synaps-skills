@@ -1396,3 +1396,272 @@ describe('BridgeDaemon — cred broker', () => {
     await daemon.stop();
   });
 });
+
+// ─── BridgeDaemon — supervisor wiring ────────────────────────────────────────
+
+import { defaultHeartbeatFactory } from './index.js';
+
+/**
+ * Build a config with supervisor overrides; all heavy subsystems disabled.
+ */
+function makeSupervisorConfig(supervisorOverrides = {}) {
+  return {
+    ...BRIDGE_CONFIG_DEFAULTS,
+    bridge:    { ...BRIDGE_CONFIG_DEFAULTS.bridge },
+    rpc:       { ...BRIDGE_CONFIG_DEFAULTS.rpc },
+    sources:   { slack: { ...BRIDGE_CONFIG_DEFAULTS.sources.slack, enabled: false } },
+    memory:    { ...BRIDGE_CONFIG_DEFAULTS.memory, enabled: false },
+    creds:     { ...BRIDGE_CONFIG_DEFAULTS.creds, enabled: false },
+    supervisor: { ...BRIDGE_CONFIG_DEFAULTS.supervisor, ...supervisorOverrides },
+  };
+}
+
+/** Minimal fake repo/emitter/reaper for injection. */
+function makeFakeSupervisor() {
+  return {
+    repo:    {},
+    emitter: { start: vi.fn(), stop: vi.fn(async () => {}) },
+    reaper:  { start: vi.fn(), stop: vi.fn() },
+  };
+}
+
+/** Build a BridgeDaemon wired for supervisor tests. */
+function buildSupervisorDaemon({
+  config,
+  logger,
+  heartbeatFactory,
+  mongoConnectFactory,
+} = {}) {
+  const _logger = logger ?? makeLogger();
+  const _config = config ?? makeSupervisorConfig();
+  const fakeRouter = makeFakeRouter();
+  const fakeGateway = { start: vi.fn(async () => {}), stop: vi.fn(async () => {}), enabled: false };
+
+  const daemon = new BridgeDaemon({
+    config: _config,
+    logger: _logger,
+    env: {},
+    sessionRouterFactory:  vi.fn(() => fakeRouter),
+    slackAdapterFactory:   vi.fn(() => makeFakeAdapter()),
+    controlSocketFactory:  vi.fn(() => makeFakeSocket()),
+    memoryGatewayFactory:  vi.fn(() => fakeGateway),
+    mongoConnectFactory:   mongoConnectFactory ?? null,
+    heartbeatFactory,
+  });
+
+  return { daemon, fakeRouter };
+}
+
+describe('defaultHeartbeatFactory — unit tests', () => {
+  it('returns null when supervisor.enabled = false', async () => {
+    const config = makeSupervisorConfig({ enabled: false });
+    const result = await defaultHeartbeatFactory(config, makeLogger(), null);
+    expect(result).toBeNull();
+  });
+
+  it('returns null when supervisor.enabled = true but getMongoose is null', async () => {
+    const config = makeSupervisorConfig({ enabled: true });
+    const logger = makeLogger();
+    const result = await defaultHeartbeatFactory(config, logger, null);
+    expect(result).toBeNull();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('mongoose unavailable'));
+  });
+
+  it('returns null when getMongoose returns undefined/falsy', async () => {
+    const config = makeSupervisorConfig({ enabled: true });
+    const logger = makeLogger();
+    const result = await defaultHeartbeatFactory(config, logger, async () => null);
+    expect(result).toBeNull();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('mongoose unavailable'));
+  });
+
+  it('returns {repo, emitter, reaper} when enabled and mongoose available', async () => {
+    const config = makeSupervisorConfig({ enabled: true });
+    // Use a proper mongoose-shaped stub that makeHeartbeatModel can work with.
+    // makeHeartbeatModel calls new mongoose.Schema(...) and mongoose.model(...)
+    // so we need the real mongoose Schema class.
+    const mongoose = await import('mongoose');
+    // Provide a stub instance that wraps the real Schema but stubs model() to
+    // avoid connecting to any DB.
+    const fakeModel = {
+      findOneAndUpdate: vi.fn().mockResolvedValue({}),
+      find:             vi.fn().mockResolvedValue([]),
+      deleteOne:        vi.fn().mockResolvedValue({}),
+    };
+    const fakeMongo = {
+      Schema: mongoose.default.Schema,
+      model:  vi.fn().mockReturnValue(fakeModel),
+      models: {},
+    };
+    const result = await defaultHeartbeatFactory(config, makeLogger(), async () => fakeMongo);
+    expect(result).not.toBeNull();
+    expect(result.repo).toBeDefined();
+    expect(result.emitter).toBeDefined();
+    expect(result.reaper).toBeDefined();
+  });
+
+  it('factory receives (config, logger, getMongoose) args — verified via custom factory', async () => {
+    const config = makeSupervisorConfig({ enabled: false });
+    const logger = makeLogger();
+    const fakeGetMongoose = vi.fn();
+    let capturedArgs = null;
+
+    const customFactory = vi.fn(async (...args) => {
+      capturedArgs = args;
+      return null;
+    });
+
+    const { daemon } = buildSupervisorDaemon({ config, logger, heartbeatFactory: customFactory });
+    await daemon.start();
+
+    expect(customFactory).toHaveBeenCalledOnce();
+    expect(capturedArgs[0]).toBe(config);     // config
+    expect(capturedArgs[1]).toBe(logger);     // logger
+    expect(typeof capturedArgs[2]).toBe('function'); // getMongoose accessor
+    await daemon.stop();
+  });
+});
+
+describe('BridgeDaemon — supervisor wiring', () => {
+  it('daemon.supervisor is null when supervisor.enabled = false (default)', async () => {
+    const { daemon } = buildSupervisorDaemon({ config: makeSupervisorConfig({ enabled: false }) });
+    await daemon.start();
+    expect(daemon.supervisor).toBeNull();
+    await daemon.stop();
+  });
+
+  it('custom heartbeatFactory honored — daemon.supervisor receives its return value', async () => {
+    const sentinel = makeFakeSupervisor();
+    const factory = vi.fn(async () => sentinel);
+
+    const { daemon } = buildSupervisorDaemon({ heartbeatFactory: factory });
+    await daemon.start();
+
+    expect(daemon.supervisor).toBe(sentinel);
+    await daemon.stop();
+  });
+
+  it('start() calls emitter.start() then reaper.start() when supervisor built', async () => {
+    const callOrder = [];
+    const sup = {
+      repo:    {},
+      emitter: { start: vi.fn(() => callOrder.push('emitter')), stop: vi.fn(async () => {}) },
+      reaper:  { start: vi.fn(() => callOrder.push('reaper')),  stop: vi.fn() },
+    };
+    const factory = vi.fn(async () => sup);
+
+    const { daemon } = buildSupervisorDaemon({ heartbeatFactory: factory });
+    await daemon.start();
+
+    expect(callOrder).toEqual(['emitter', 'reaper']);
+    await daemon.stop();
+  });
+
+  it('stop() calls emitter.stop() before reaper.stop()', async () => {
+    const stopOrder = [];
+    const sup = {
+      repo:    {},
+      emitter: { start: vi.fn(), stop: vi.fn(async () => stopOrder.push('emitter')) },
+      reaper:  { start: vi.fn(), stop: vi.fn(() => stopOrder.push('reaper')) },
+    };
+    const factory = vi.fn(async () => sup);
+
+    const { daemon } = buildSupervisorDaemon({ heartbeatFactory: factory });
+    await daemon.start();
+    await daemon.stop();
+
+    expect(stopOrder).toEqual(['emitter', 'reaper']);
+  });
+
+  it('stop() does not throw if emitter.stop() throws', async () => {
+    const sup = {
+      repo:    {},
+      emitter: { start: vi.fn(), stop: vi.fn(async () => { throw new Error('emitter boom'); }) },
+      reaper:  { start: vi.fn(), stop: vi.fn() },
+    };
+    const factory = vi.fn(async () => sup);
+
+    const { daemon } = buildSupervisorDaemon({ heartbeatFactory: factory });
+    await daemon.start();
+    await expect(daemon.stop()).resolves.toBeUndefined();
+  });
+
+  it('stop() does not throw if reaper.stop() throws', async () => {
+    const sup = {
+      repo:    {},
+      emitter: { start: vi.fn(), stop: vi.fn(async () => {}) },
+      reaper:  { start: vi.fn(), stop: vi.fn(() => { throw new Error('reaper boom'); }) },
+    };
+    const factory = vi.fn(async () => sup);
+
+    const { daemon } = buildSupervisorDaemon({ heartbeatFactory: factory });
+    await daemon.start();
+    await expect(daemon.stop()).resolves.toBeUndefined();
+  });
+
+  it('start() logs "supervisor started" when supervisor is built', async () => {
+    const sup = makeFakeSupervisor();
+    const logger = makeLogger();
+    const factory = vi.fn(async () => sup);
+
+    const { daemon } = buildSupervisorDaemon({ logger, heartbeatFactory: factory });
+    await daemon.start();
+
+    const infoCalls = logger.info.mock.calls.map(([msg]) => msg);
+    expect(infoCalls.some(msg => msg?.includes?.('supervisor started'))).toBe(true);
+    await daemon.stop();
+  });
+
+  it('workspaceManager threaded through to factory extras when present in SCP mode', async () => {
+    // Wire an SCP-mode daemon; verify heartbeatFactory receives workspaceManager in extras.
+    let capturedExtras = null;
+
+    const factory = vi.fn(async (cfg, log, getMongo, extras) => {
+      capturedExtras = extras;
+      return null;
+    });
+
+    const fakeMongo = {
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      models: {},
+      model: vi.fn().mockReturnValue({}),
+    };
+
+    const fakeWm = { stopWorkspace: vi.fn(), markReaped: vi.fn() };
+
+    const scpConfig = {
+      ...BRIDGE_CONFIG_DEFAULTS,
+      platform:  { mode: 'scp' },
+      bridge:    { ...BRIDGE_CONFIG_DEFAULTS.bridge },
+      rpc:       { ...BRIDGE_CONFIG_DEFAULTS.rpc },
+      web:       { ...BRIDGE_CONFIG_DEFAULTS.web, enabled: false },
+      mongodb:   { uri: 'mongodb://localhost/testdb' },
+      workspace: { ...BRIDGE_CONFIG_DEFAULTS.workspace },
+      sources:   { slack: { ...BRIDGE_CONFIG_DEFAULTS.sources.slack, enabled: false } },
+      memory:    { ...BRIDGE_CONFIG_DEFAULTS.memory, enabled: false },
+      creds:     { ...BRIDGE_CONFIG_DEFAULTS.creds, enabled: false },
+      supervisor: { ...BRIDGE_CONFIG_DEFAULTS.supervisor, enabled: false },
+    };
+
+    const daemon = new BridgeDaemon({
+      config: scpConfig,
+      logger: makeLogger(),
+      env: {},
+      sessionRouterFactory:    vi.fn(() => makeFakeRouter()),
+      slackAdapterFactory:     vi.fn(() => makeFakeAdapter()),
+      controlSocketFactory:    vi.fn(() => makeFakeSocket()),
+      memoryGatewayFactory:    vi.fn(() => ({ start: vi.fn(async () => {}), stop: vi.fn(async () => {}), enabled: false })),
+      mongoConnectFactory:     vi.fn().mockResolvedValue(fakeMongo),
+      workspaceManagerFactory: vi.fn().mockReturnValue(fakeWm),
+      heartbeatFactory:        factory,
+    });
+
+    await daemon.start();
+
+    expect(capturedExtras).not.toBeNull();
+    expect(capturedExtras.workspaceManager).toBe(fakeWm);
+
+    await daemon.stop();
+  });
+});
+

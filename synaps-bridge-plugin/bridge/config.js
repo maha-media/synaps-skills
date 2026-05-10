@@ -84,6 +84,15 @@ export const BRIDGE_CONFIG_DEFAULTS = Object.freeze({
     cache_ttl_secs: 300,            // 5 min last-known-good cache
     audit_attribute_user: true,     // include synaps_user_id in Infisical metadata
   }),
+  supervisor: Object.freeze({
+    enabled:               false,        // default off
+    heartbeat_interval_ms: 10_000,
+    reaper_interval_ms:    60_000,
+    workspace_stale_ms:    1_800_000,    // 30 min
+    rpc_stale_ms:             300_000,   // 5 min
+    scp_stale_ms:              30_000,   // 30 s (info only)
+    bridge_critical_ms:        60_000,   // /health 503 threshold
+  }),
 });
 
 /** Default config file path. */
@@ -187,7 +196,7 @@ function _buildConfig(parsed, logger) {
   const D = BRIDGE_CONFIG_DEFAULTS;
 
   // ── warn on unknown top-level keys ────────────────────────────────────────
-  const knownTopLevel = new Set(['bridge', 'rpc', 'sources', 'platform', 'workspace', 'web', 'mongodb', 'memory', 'identity', 'creds']);
+  const knownTopLevel = new Set(['bridge', 'rpc', 'sources', 'platform', 'workspace', 'web', 'mongodb', 'memory', 'identity', 'creds', 'supervisor']);
   for (const k of Object.keys(parsed)) {
     if (!knownTopLevel.has(k)) {
       logger.warn(`bridge/config: unknown top-level key "${k}" — ignoring`);
@@ -446,6 +455,45 @@ function _buildConfig(parsed, logger) {
     }
   }
 
+  // ── [supervisor] ──────────────────────────────────────────────────────────
+  const rawSupervisor = (parsed.supervisor && typeof parsed.supervisor === 'object') ? parsed.supervisor : {};
+  const DSUP = D.supervisor;
+
+  const supervisorEnabled = rawSupervisor.enabled !== undefined ? Boolean(rawSupervisor.enabled) : DSUP.enabled;
+
+  // Helper: validate a non-negative integer ms field, warn + default on failure.
+  function validateNonNegIntMs(rawVal, defaultVal, fieldName) {
+    if (rawVal === undefined) return defaultVal;
+    if (!Number.isInteger(rawVal) || rawVal < 0) {
+      logger.warn(`bridge/config: invalid supervisor.${fieldName} "${rawVal}" — falling back to ${defaultVal}`);
+      return defaultVal;
+    }
+    return rawVal;
+  }
+
+  const supHeartbeatIntervalMs = validateNonNegIntMs(rawSupervisor.heartbeat_interval_ms, DSUP.heartbeat_interval_ms, 'heartbeat_interval_ms');
+  const supReaperIntervalMs    = validateNonNegIntMs(rawSupervisor.reaper_interval_ms,    DSUP.reaper_interval_ms,    'reaper_interval_ms');
+  const supWorkspaceStaleMs    = validateNonNegIntMs(rawSupervisor.workspace_stale_ms,    DSUP.workspace_stale_ms,    'workspace_stale_ms');
+  const supRpcStaleMs          = validateNonNegIntMs(rawSupervisor.rpc_stale_ms,          DSUP.rpc_stale_ms,          'rpc_stale_ms');
+  const supScpStaleMs          = validateNonNegIntMs(rawSupervisor.scp_stale_ms,          DSUP.scp_stale_ms,          'scp_stale_ms');
+  const supBridgeCriticalMs    = validateNonNegIntMs(rawSupervisor.bridge_critical_ms,    DSUP.bridge_critical_ms,    'bridge_critical_ms');
+
+  // Warn on unknown keys inside [supervisor].
+  const knownSupervisorKeys = new Set([
+    'enabled',
+    'heartbeat_interval_ms',
+    'reaper_interval_ms',
+    'workspace_stale_ms',
+    'rpc_stale_ms',
+    'scp_stale_ms',
+    'bridge_critical_ms',
+  ]);
+  for (const k of Object.keys(rawSupervisor)) {
+    if (!knownSupervisorKeys.has(k)) {
+      logger.warn(`bridge/config: unknown supervisor key "${k}" — ignoring`);
+    }
+  }
+
   return Object.freeze({
     bridge: Object.freeze({
       log_level: logLevel,
@@ -499,6 +547,15 @@ function _buildConfig(parsed, logger) {
       infisical_token_file: credsInfisicalTokenFile,
       cache_ttl_secs: credsCacheTtlSecs,
       audit_attribute_user: credsAuditAttributeUser,
+    }),
+    supervisor: Object.freeze({
+      enabled:               supervisorEnabled,
+      heartbeat_interval_ms: supHeartbeatIntervalMs,
+      reaper_interval_ms:    supReaperIntervalMs,
+      workspace_stale_ms:    supWorkspaceStaleMs,
+      rpc_stale_ms:          supRpcStaleMs,
+      scp_stale_ms:          supScpStaleMs,
+      bridge_critical_ms:    supBridgeCriticalMs,
     }),
   });
 }
