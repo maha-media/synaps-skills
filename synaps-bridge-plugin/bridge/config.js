@@ -108,11 +108,27 @@ export const BRIDGE_CONFIG_DEFAULTS = Object.freeze({
     dir_template: '',
   }),
   mcp: Object.freeze({
-    enabled:         false,
-    audit:           false,
-    chat_timeout_ms: 120_000,
-    max_body_bytes:  262_144,
-    policy_name:     'synaps-control-plane',
+    enabled:           false,
+    audit:             false,
+    chat_timeout_ms:   120_000,
+    max_body_bytes:    262_144,
+    policy_name:       'synaps-control-plane',
+    surface_rpc_tools: false,
+    rate_limit: Object.freeze({
+      enabled:          true,
+      per_token_capacity: 60,
+      per_token_refill:   1,
+      per_ip_capacity:  120,
+      per_ip_refill:      2,
+    }),
+    sse: Object.freeze({
+      enabled: false,
+    }),
+    dcr: Object.freeze({
+      enabled:             false,
+      registration_secret: '',
+      token_ttl_ms:        365 * 24 * 60 * 60 * 1_000,
+    }),
   }),
 });
 
@@ -637,8 +653,90 @@ function _buildConfig(parsed, logger) {
     throw new Error('bridge/config: invalid mcp.policy_name — must be a non-empty string');
   }
 
+  // ── [mcp] surface_rpc_tools ────────────────────────────────────────────────
+  const mcpSurfaceRpcTools = rawMcp.surface_rpc_tools !== undefined
+    ? Boolean(rawMcp.surface_rpc_tools)
+    : DMCP.surface_rpc_tools;
+
+  // ── [mcp.rate_limit] ───────────────────────────────────────────────────────
+  const rawRateLimit = (rawMcp.rate_limit && typeof rawMcp.rate_limit === 'object')
+    ? rawMcp.rate_limit
+    : {};
+  const DMCP_RL = DMCP.rate_limit;
+
+  const rlEnabled         = rawRateLimit.enabled !== undefined ? Boolean(rawRateLimit.enabled) : DMCP_RL.enabled;
+  const rlPerTokenCapacity = rawRateLimit.per_token_capacity !== undefined
+    ? rawRateLimit.per_token_capacity : DMCP_RL.per_token_capacity;
+  const rlPerTokenRefill  = rawRateLimit.per_token_refill !== undefined
+    ? rawRateLimit.per_token_refill : DMCP_RL.per_token_refill;
+  const rlPerIpCapacity   = rawRateLimit.per_ip_capacity !== undefined
+    ? rawRateLimit.per_ip_capacity : DMCP_RL.per_ip_capacity;
+  const rlPerIpRefill     = rawRateLimit.per_ip_refill !== undefined
+    ? rawRateLimit.per_ip_refill : DMCP_RL.per_ip_refill;
+
+  // Validate rate_limit integers
+  for (const [key, val] of [
+    ['mcp.rate_limit.per_token_capacity', rlPerTokenCapacity],
+    ['mcp.rate_limit.per_token_refill',   rlPerTokenRefill],
+    ['mcp.rate_limit.per_ip_capacity',    rlPerIpCapacity],
+    ['mcp.rate_limit.per_ip_refill',      rlPerIpRefill],
+  ]) {
+    if (!Number.isFinite(val) || val <= 0) {
+      throw new Error(`bridge/config: invalid ${key} "${val}" — must be a positive number`);
+    }
+  }
+
+  // Warn on unknown keys inside [mcp.rate_limit].
+  const knownRlKeys = new Set(['enabled', 'per_token_capacity', 'per_token_refill', 'per_ip_capacity', 'per_ip_refill']);
+  for (const k of Object.keys(rawRateLimit)) {
+    if (!knownRlKeys.has(k)) {
+      logger.warn(`bridge/config: unknown mcp.rate_limit key "${k}" — ignoring`);
+    }
+  }
+
+  // ── [mcp.sse] ──────────────────────────────────────────────────────────────
+  const rawSse = (rawMcp.sse && typeof rawMcp.sse === 'object') ? rawMcp.sse : {};
+  const DMCP_SSE = DMCP.sse;
+
+  const sseEnabled = rawSse.enabled !== undefined ? Boolean(rawSse.enabled) : DMCP_SSE.enabled;
+
+  // Warn on unknown keys inside [mcp.sse].
+  const knownSseKeys = new Set(['enabled']);
+  for (const k of Object.keys(rawSse)) {
+    if (!knownSseKeys.has(k)) {
+      logger.warn(`bridge/config: unknown mcp.sse key "${k}" — ignoring`);
+    }
+  }
+
+  // ── [mcp.dcr] ─────────────────────────────────────────────────────────────
+  const rawDcr = (rawMcp.dcr && typeof rawMcp.dcr === 'object') ? rawMcp.dcr : {};
+  const DMCP_DCR = DMCP.dcr;
+
+  const dcrEnabled            = rawDcr.enabled !== undefined ? Boolean(rawDcr.enabled) : DMCP_DCR.enabled;
+  const dcrRegistrationSecret = rawDcr.registration_secret !== undefined
+    ? String(rawDcr.registration_secret)
+    : DMCP_DCR.registration_secret;
+
+  let dcrTokenTtlMs = rawDcr.token_ttl_ms !== undefined ? rawDcr.token_ttl_ms : DMCP_DCR.token_ttl_ms;
+  if (!Number.isInteger(dcrTokenTtlMs) || dcrTokenTtlMs < 60_000) {
+    throw new Error(
+      `bridge/config: invalid mcp.dcr.token_ttl_ms "${dcrTokenTtlMs}" — must be integer >= 60000`,
+    );
+  }
+
+  // Warn on unknown keys inside [mcp.dcr].
+  const knownDcrKeys = new Set(['enabled', 'registration_secret', 'token_ttl_ms']);
+  for (const k of Object.keys(rawDcr)) {
+    if (!knownDcrKeys.has(k)) {
+      logger.warn(`bridge/config: unknown mcp.dcr key "${k}" — ignoring`);
+    }
+  }
+
   // Warn on unknown keys inside [mcp].
-  const knownMcpKeys = new Set(['enabled', 'audit', 'chat_timeout_ms', 'max_body_bytes', 'policy_name']);
+  const knownMcpKeys = new Set([
+    'enabled', 'audit', 'chat_timeout_ms', 'max_body_bytes', 'policy_name',
+    'surface_rpc_tools', 'rate_limit', 'sse', 'dcr',
+  ]);
   for (const k of Object.keys(rawMcp)) {
     if (!knownMcpKeys.has(k)) {
       logger.warn(`bridge/config: unknown mcp key "${k}" — ignoring`);
@@ -723,11 +821,27 @@ function _buildConfig(parsed, logger) {
       dir_template: inboxDirTemplate,
     }),
     mcp: Object.freeze({
-      enabled:         mcpEnabled,
-      audit:           mcpAudit,
-      chat_timeout_ms: mcpChatTimeoutMs,
-      max_body_bytes:  mcpMaxBodyBytes,
-      policy_name:     mcpPolicyName,
+      enabled:           mcpEnabled,
+      audit:             mcpAudit,
+      chat_timeout_ms:   mcpChatTimeoutMs,
+      max_body_bytes:    mcpMaxBodyBytes,
+      policy_name:       mcpPolicyName,
+      surface_rpc_tools: mcpSurfaceRpcTools,
+      rate_limit: Object.freeze({
+        enabled:            rlEnabled,
+        per_token_capacity: rlPerTokenCapacity,
+        per_token_refill:   rlPerTokenRefill,
+        per_ip_capacity:    rlPerIpCapacity,
+        per_ip_refill:      rlPerIpRefill,
+      }),
+      sse: Object.freeze({
+        enabled: sseEnabled,
+      }),
+      dcr: Object.freeze({
+        enabled:             dcrEnabled,
+        registration_secret: dcrRegistrationSecret,
+        token_ttl_ms:        dcrTokenTtlMs,
+      }),
     }),
   });
 }

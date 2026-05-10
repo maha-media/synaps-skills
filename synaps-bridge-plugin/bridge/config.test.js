@@ -1815,3 +1815,218 @@ describe('loadBridgeConfig — [mcp] is not treated as unknown top-level', () =>
     expect(config.mcp.future_opt).toBeUndefined();
   });
 });
+
+// ─── [mcp] Phase 8 Wave B — new sub-keys ──────────────────────────────────────
+
+describe('loadBridgeConfig — [mcp] surface_rpc_tools (Phase 8)', () => {
+  it('BRIDGE_CONFIG_DEFAULTS.mcp.surface_rpc_tools = false', () => {
+    expect(BRIDGE_CONFIG_DEFAULTS.mcp.surface_rpc_tools).toBe(false);
+  });
+
+  it('defaults to false when key absent', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(config.mcp.surface_rpc_tools).toBe(false);
+  });
+
+  it('surface_rpc_tools = true parses correctly', async () => {
+    const toml = `[mcp]\nsurface_rpc_tools = true\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.mcp.surface_rpc_tools).toBe(true);
+  });
+
+  it('surface_rpc_tools is not treated as unknown key', async () => {
+    const toml = `[mcp]\nsurface_rpc_tools = true\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('unknown mcp key "surface_rpc_tools"'),
+    );
+  });
+});
+
+describe('loadBridgeConfig — [mcp.rate_limit] (Phase 8)', () => {
+  it('BRIDGE_CONFIG_DEFAULTS.mcp.rate_limit is frozen with correct defaults', () => {
+    const rl = BRIDGE_CONFIG_DEFAULTS.mcp.rate_limit;
+    expect(Object.isFrozen(rl)).toBe(true);
+    expect(rl.enabled).toBe(true);
+    expect(rl.per_token_capacity).toBe(60);
+    expect(rl.per_token_refill).toBe(1);
+    expect(rl.per_ip_capacity).toBe(120);
+    expect(rl.per_ip_refill).toBe(2);
+  });
+
+  it('defaults when [mcp.rate_limit] absent', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(config.mcp.rate_limit.enabled).toBe(true);
+    expect(config.mcp.rate_limit.per_token_capacity).toBe(60);
+    expect(config.mcp.rate_limit.per_ip_capacity).toBe(120);
+  });
+
+  it('result.mcp.rate_limit is frozen', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(Object.isFrozen(config.mcp.rate_limit)).toBe(true);
+  });
+
+  it('rate_limit.enabled = false disables limiter', async () => {
+    const toml = `[mcp.rate_limit]\nenabled = false\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.mcp.rate_limit.enabled).toBe(false);
+  });
+
+  it('rate_limit custom capacities parse correctly', async () => {
+    const toml = `[mcp.rate_limit]\nper_token_capacity = 100\nper_ip_capacity = 200\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.mcp.rate_limit.per_token_capacity).toBe(100);
+    expect(config.mcp.rate_limit.per_ip_capacity).toBe(200);
+  });
+
+  it('rate_limit custom refill rates parse correctly', async () => {
+    const toml = `[mcp.rate_limit]\nper_token_refill = 5\nper_ip_refill = 10\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.mcp.rate_limit.per_token_refill).toBe(5);
+    expect(config.mcp.rate_limit.per_ip_refill).toBe(10);
+  });
+
+  it('per_token_capacity = 0 → validation error', async () => {
+    const toml = `[mcp.rate_limit]\nper_token_capacity = 0\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    await expect(loadBridgeConfig({ path: '/cfg.toml', fsImpl })).rejects.toThrow(
+      /mcp\.rate_limit\.per_token_capacity/,
+    );
+  });
+
+  it('per_ip_refill = -1 → validation error', async () => {
+    const toml = `[mcp.rate_limit]\nper_ip_refill = -1\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    await expect(loadBridgeConfig({ path: '/cfg.toml', fsImpl })).rejects.toThrow(
+      /mcp\.rate_limit\.per_ip_refill/,
+    );
+  });
+
+  it('unknown key inside [mcp.rate_limit] warns and is dropped', async () => {
+    const toml = `[mcp.rate_limit]\nfuture_opt = "x"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('unknown mcp.rate_limit key "future_opt"'),
+    );
+    expect(config.mcp.rate_limit.future_opt).toBeUndefined();
+  });
+});
+
+describe('loadBridgeConfig — [mcp.sse] (Phase 8)', () => {
+  it('BRIDGE_CONFIG_DEFAULTS.mcp.sse.enabled = false (opt-in)', () => {
+    expect(BRIDGE_CONFIG_DEFAULTS.mcp.sse.enabled).toBe(false);
+    expect(Object.isFrozen(BRIDGE_CONFIG_DEFAULTS.mcp.sse)).toBe(true);
+  });
+
+  it('defaults when [mcp.sse] absent', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(config.mcp.sse.enabled).toBe(false);
+  });
+
+  it('result.mcp.sse is frozen', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(Object.isFrozen(config.mcp.sse)).toBe(true);
+  });
+
+  it('mcp.sse.enabled = true parses correctly', async () => {
+    const toml = `[mcp.sse]\nenabled = true\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.mcp.sse.enabled).toBe(true);
+  });
+
+  it('unknown key inside [mcp.sse] warns and is dropped', async () => {
+    const toml = `[mcp.sse]\nfoo = "bar"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('unknown mcp.sse key "foo"'),
+    );
+    expect(config.mcp.sse.foo).toBeUndefined();
+  });
+});
+
+describe('loadBridgeConfig — [mcp.dcr] (Phase 8)', () => {
+  it('BRIDGE_CONFIG_DEFAULTS.mcp.dcr has correct defaults', () => {
+    const dcr = BRIDGE_CONFIG_DEFAULTS.mcp.dcr;
+    expect(Object.isFrozen(dcr)).toBe(true);
+    expect(dcr.enabled).toBe(false);
+    expect(dcr.registration_secret).toBe('');
+    expect(dcr.token_ttl_ms).toBe(365 * 24 * 60 * 60 * 1_000);
+  });
+
+  it('defaults when [mcp.dcr] absent', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(config.mcp.dcr.enabled).toBe(false);
+    expect(config.mcp.dcr.registration_secret).toBe('');
+    expect(config.mcp.dcr.token_ttl_ms).toBe(365 * 24 * 60 * 60 * 1_000);
+  });
+
+  it('result.mcp.dcr is frozen', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(Object.isFrozen(config.mcp.dcr)).toBe(true);
+  });
+
+  it('mcp.dcr.enabled = true parses correctly', async () => {
+    const toml = `[mcp.dcr]\nenabled = true\nregistration_secret = "s3cr3t"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.mcp.dcr.enabled).toBe(true);
+    expect(config.mcp.dcr.registration_secret).toBe('s3cr3t');
+  });
+
+  it('mcp.dcr.token_ttl_ms custom value parses correctly', async () => {
+    const toml = `[mcp.dcr]\ntoken_ttl_ms = 86400000\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.mcp.dcr.token_ttl_ms).toBe(86_400_000);
+  });
+
+  it('mcp.dcr.token_ttl_ms < 60000 → validation error', async () => {
+    const toml = `[mcp.dcr]\ntoken_ttl_ms = 1000\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    await expect(loadBridgeConfig({ path: '/cfg.toml', fsImpl })).rejects.toThrow(
+      /mcp\.dcr\.token_ttl_ms/,
+    );
+  });
+
+  it('unknown key inside [mcp.dcr] warns and is dropped', async () => {
+    const toml = `[mcp.dcr]\nfoo = "bar"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('unknown mcp.dcr key "foo"'),
+    );
+    expect(config.mcp.dcr.foo).toBeUndefined();
+  });
+});
+
+describe('loadBridgeConfig — [mcp] sub-sections not treated as unknown top-level mcp keys', () => {
+  it('does not warn about rate_limit, sse, dcr as unknown mcp keys', async () => {
+    const toml = `[mcp.rate_limit]\nenabled = true\n[mcp.sse]\nenabled = false\n[mcp.dcr]\nenabled = false\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    const warnCalls = logger.warn.mock.calls.map(([m]) => String(m));
+    expect(warnCalls.some(m => m.includes('unknown mcp key "rate_limit"'))).toBe(false);
+    expect(warnCalls.some(m => m.includes('unknown mcp key "sse"'))).toBe(false);
+    expect(warnCalls.some(m => m.includes('unknown mcp key "dcr"'))).toBe(false);
+  });
+});
