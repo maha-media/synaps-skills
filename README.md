@@ -134,3 +134,38 @@ Bug reports and feature requests welcome via [GitHub Issues](https://github.com/
 ## 📜 License
 
 [MIT](LICENSE) — [JR Morton](https://github.com/maha-media)
+
+---
+
+## 🌐 Synaps Control Plane (SCP) — Bridge Plugin
+
+The [`synaps-bridge-plugin/`](synaps-bridge-plugin/) subdirectory contains the
+long-running daemon that connects external chat platforms (Slack + web) to the
+Synaps AI engine.
+
+### SCP Phase status
+
+| Phase | Feature | Status |
+|-------|---------|--------|
+| Phase 1 | Workspace containers (Docker/SCP mode) | ✅ Landed |
+| Phase 2 | Per-user memory gateway (axel) | ✅ Landed |
+| **Phase 3** | **Web dashboard + Identity reconciliation** | **✅ Landed (PR #N pending)** |
+| Phase 4 | Credential broker | 🔜 Planned |
+| Phase 5 | Tetragon supervisor + cleanup jobs | 🔜 Planned |
+
+### Phase 3 — Web dashboard + Identity (landed 2026-05-10)
+
+- **`IdentityRouter`** — resolves inbound `(channel, external_id)` pairs to a
+  unified `SynapsUser`; handles web-user resolution and 6-char link-code flow.
+- **`NoOpIdentityRouter`** — drop-in fallback preserving Phase-2 Slack behavior
+  when `[identity] enabled = false`.
+- **`WebStreamBridge`** — translates SCP RPC chunks to AI SDK numbered
+  data-stream frames (SSE).
+- **MongoDB collections:** `synaps_users`, `synaps_channel_identities`,
+  `synaps_link_codes`.
+- **New ControlSocket ops:** `link_code_issue`, `link_code_redeem`,
+  `identity_resolve_web`, `chat_stream_start`.
+- **40 new acceptance tests** in `synaps-bridge-plugin/tests/scp-phase-3/`.
+
+Full docs: [`synaps-bridge-plugin/README.md`](synaps-bridge-plugin/README.md) §Phase 3 |
+Smoke playbook: [`synaps-bridge-plugin/docs/smoke/phase-3-web-identity.md`](synaps-bridge-plugin/docs/smoke/phase-3-web-identity.md)

@@ -569,3 +569,102 @@ recall_max_chars = 2000        # cap on injected text size
 See `docs/smoke/phase-2-memory.md` for the full smoke test procedure including:
 axel binary sanity, config validation, recall-on-second-thread verification,
 namespace isolation verification, and disabled-mode confirmation.
+
+---
+
+## Phase 3 — Web dashboard + Identity
+
+**Status:** Web dashboard + Identity — landed (PR #N pending).
+
+Per-user identity reconciliation across Slack + web, backed by MongoDB.
+A 6-char link-code flow lets users merge their Slack and pria web identities.
+Web chat streams from SCP via SSE using the AI SDK numbered data-stream protocol.
+**Disabled by default** — set `[identity] enabled = true` to opt in.
+
+**Quick links:**
+- Brief: [`/tmp/synaps-design/PHASE_3_BRIEF.md`](/tmp/synaps-design/PHASE_3_BRIEF.md)
+- Smoke playbook: [`docs/smoke/phase-3-web-identity.md`](docs/smoke/phase-3-web-identity.md)
+- IdentityRouter: [`bridge/core/identity-router.js`](bridge/core/identity-router.js)
+- ControlSocket: [`bridge/control-socket.js`](bridge/control-socket.js)
+- Release notes: [`docs/plans/2026-05-10-phase-3-summary.md`](docs/plans/2026-05-10-phase-3-summary.md)
+
+### New config: `[identity]`
+
+```toml
+[identity]
+enabled             = false        # opt-in — set true to activate
+link_code_ttl_secs  = 300          # 6-char code TTL (60–3600 s)
+default_institution_id = ""        # optional 24-hex ObjectId fallback
+```
+
+When `enabled = false`, a `NoOpIdentityRouter` is wired in — memory namespace
+falls back to `u_<external_id>` (Phase 2 behaviour preserved).
+
+### New ControlSocket ops (Phase 3)
+
+| Op | Request fields | Response |
+|----|---------------|---------|
+| `link_code_issue` | `pria_user_id`, `ttl_secs?` | `{ ok, code, expires_at }` |
+| `link_code_redeem` | `code`, `channel`, `external_id`, `external_team_id?` | `{ ok, synaps_user_id, was_relinked }` or `{ ok:false, error }` |
+| `identity_resolve_web` | `pria_user_id`, `institution_id?`, `display_name?` | `{ ok, synaps_user_id, is_new, memory_namespace }` |
+| `chat_stream_start` | `synaps_user_id`, `channel?`, `thread_key?`, `text`, `model?` | Stream of `{ kind:'chunk'… }` lines, terminated by `{ kind:'done' }` or `{ kind:'error' }` |
+
+### New MongoDB collections
+
+| Collection | Key fields | Index |
+|-----------|-----------|-------|
+| `synaps_users` | `pria_user_id`, `memory_namespace` | `{ pria_user_id: 1 }` UNIQUE |
+| `synaps_channel_identities` | `channel`, `external_id`, `external_team_id`, `synaps_user_id` | `{ channel, external_id, external_team_id }` UNIQUE |
+| `synaps_link_codes` | `code`, `pria_user_id`, `synaps_user_id`, `expires_at` | `{ code: 1 }` UNIQUE + TTL on `expires_at` |
+
+### AI SDK data-stream frame mapping
+
+| Chunk type | Frame prefix | Format |
+|-----------|-------------|--------|
+| `markdown_text` | `0:` | `0:"<text>"\n` |
+| `task_update` | `2:` | `2:[{"type":"task_update",...}]\n` |
+| `plan_update` | `2:` | `2:[{"type":"plan_update",...}]\n` |
+| `suggested_response` | `8:` | `8:[{"type":"suggested_response",...}]\n` |
+| `agent_end` | `e:` + `d:` | step-finish frame + done frame |
+| `error` | `3:` | `3:"<message>"\n` |
+| Unknown | `2:` | defensive pass-through |
+
+### What Phase 3 ships
+
+- `bridge/core/identity-router.js` — `IdentityRouter` + `NoOpIdentityRouter`
+- `bridge/core/web-stream-bridge.js` — AI SDK frame translator (pure functions)
+- `bridge/core/db/models/synaps-user.js` — Mongoose schema + factory
+- `bridge/core/db/models/synaps-channel-identity.js` — Mongoose schema + factory
+- `bridge/core/db/models/synaps-link-code.js` — Mongoose schema + factory
+- `bridge/core/db/repositories/{user,channel-identity,link-code}-repo.js`
+- `[identity]` config section in `bridge/config.js`
+- `link_code_issue`, `link_code_redeem`, `identity_resolve_web`, `chat_stream_start` ops in `bridge/control-socket.js`
+- `defaultIdentityRouterFactory` in `bridge/index.js`
+- pria-ui-v22 `feat/synaps-web-dashboard` branch: Express SSE route + React chat + link-code UI
+
+### Acceptance tests
+
+| File | Tests |
+|------|-------|
+| `tests/scp-phase-3/00-identity-router-mongo.test.mjs` | 10 |
+| `tests/scp-phase-3/01-control-socket-link-flow.test.mjs` | 6 |
+| `tests/scp-phase-3/02-control-socket-chat-stream.test.mjs` | 5 |
+| `tests/scp-phase-3/03-web-stream-bridge-integration.test.mjs` | 12 |
+| `tests/scp-phase-3/04-bridge-daemon-config-toggle.test.mjs` | 7 |
+| **Total new** | **40** |
+
+### Operator playbook
+
+See `docs/smoke/phase-3-web-identity.md` for the full 14-step smoke test
+procedure including: MongoDB setup, web chat verification, link-code flow,
+cross-channel memory recall, and rollback instructions.
+
+### Known limitations (Phase 3 v0)
+
+1. **Memory namespace migration:** Phase 2 used `u_<slackUserId>`; Phase 3 uses
+   `u_<synapsUserId>`. Existing brain files are not auto-migrated. Manual rename
+   procedure documented in the smoke playbook.
+2. **Orphaned synthetic users:** Pre-link Slack-only `SynapsUser` docs remain
+   in the DB after linking. A Phase 5 cleanup job will reap them.
+3. **Web task-tree styling:** `task_update` data arrives in SSE frames but the
+   React UI renders it as raw JSON only. Full styling deferred to Phase 5.
