@@ -123,6 +123,10 @@ export const BRIDGE_CONFIG_DEFAULTS = Object.freeze({
       per_ip_refill:      2,
     }),
     sse: Object.freeze({
+      enabled:       false,
+      stream_deltas: false,
+    }),
+    acl: Object.freeze({
       enabled: false,
     }),
     dcr: Object.freeze({
@@ -130,6 +134,11 @@ export const BRIDGE_CONFIG_DEFAULTS = Object.freeze({
       registration_secret: '',
       token_ttl_ms:        365 * 24 * 60 * 60 * 1_000,
     }),
+  }),
+  metrics: Object.freeze({
+    enabled: false,
+    path:    '/metrics',
+    bind:    '127.0.0.1',
   }),
 });
 
@@ -243,7 +252,7 @@ function _buildConfig(parsed, logger) {
   const D = BRIDGE_CONFIG_DEFAULTS;
 
   // ── warn on unknown top-level keys ────────────────────────────────────────
-  const knownTopLevel = new Set(['bridge', 'rpc', 'sources', 'platform', 'workspace', 'web', 'mongodb', 'memory', 'identity', 'creds', 'supervisor', 'scheduler', 'hooks', 'inbox', 'mcp']);
+  const knownTopLevel = new Set(['bridge', 'rpc', 'sources', 'platform', 'workspace', 'web', 'mongodb', 'memory', 'identity', 'creds', 'supervisor', 'scheduler', 'hooks', 'inbox', 'mcp', 'metrics']);
   for (const k of Object.keys(parsed)) {
     if (!knownTopLevel.has(k)) {
       logger.warn(`bridge/config: unknown top-level key "${k}" — ignoring`);
@@ -700,13 +709,28 @@ function _buildConfig(parsed, logger) {
   const rawSse = (rawMcp.sse && typeof rawMcp.sse === 'object') ? rawMcp.sse : {};
   const DMCP_SSE = DMCP.sse;
 
-  const sseEnabled = rawSse.enabled !== undefined ? Boolean(rawSse.enabled) : DMCP_SSE.enabled;
+  const sseEnabled      = rawSse.enabled       !== undefined ? Boolean(rawSse.enabled)       : DMCP_SSE.enabled;
+  const streamDeltas    = rawSse.stream_deltas  !== undefined ? Boolean(rawSse.stream_deltas) : DMCP_SSE.stream_deltas;
 
   // Warn on unknown keys inside [mcp.sse].
-  const knownSseKeys = new Set(['enabled']);
+  const knownSseKeys = new Set(['enabled', 'stream_deltas']);
   for (const k of Object.keys(rawSse)) {
     if (!knownSseKeys.has(k)) {
       logger.warn(`bridge/config: unknown mcp.sse key "${k}" — ignoring`);
+    }
+  }
+
+  // ── [mcp.acl] ─────────────────────────────────────────────────────────────
+  const rawAcl = (rawMcp.acl && typeof rawMcp.acl === 'object') ? rawMcp.acl : {};
+  const DMCP_ACL = DMCP.acl;
+
+  const aclEnabled = rawAcl.enabled !== undefined ? Boolean(rawAcl.enabled) : DMCP_ACL.enabled;
+
+  // Warn on unknown keys inside [mcp.acl].
+  const knownAclKeys = new Set(['enabled']);
+  for (const k of Object.keys(rawAcl)) {
+    if (!knownAclKeys.has(k)) {
+      logger.warn(`bridge/config: unknown mcp.acl key "${k}" — ignoring`);
     }
   }
 
@@ -737,11 +761,39 @@ function _buildConfig(parsed, logger) {
   // Warn on unknown keys inside [mcp].
   const knownMcpKeys = new Set([
     'enabled', 'audit', 'chat_timeout_ms', 'max_body_bytes', 'policy_name',
-    'surface_rpc_tools', 'rate_limit', 'sse', 'dcr',
+    'surface_rpc_tools', 'rate_limit', 'sse', 'acl', 'dcr',
   ]);
   for (const k of Object.keys(rawMcp)) {
     if (!knownMcpKeys.has(k)) {
       logger.warn(`bridge/config: unknown mcp key "${k}" — ignoring`);
+    }
+  }
+
+  // ── [metrics] ─────────────────────────────────────────────────────────────
+  const rawMetrics = (parsed.metrics && typeof parsed.metrics === 'object') ? parsed.metrics : {};
+  const DMETRICS = D.metrics;
+
+  const metricsEnabled = rawMetrics.enabled !== undefined ? Boolean(rawMetrics.enabled) : DMETRICS.enabled;
+
+  let metricsPath = rawMetrics.path !== undefined ? String(rawMetrics.path) : DMETRICS.path;
+  if (!metricsPath.startsWith('/')) {
+    throw new Error(
+      `bridge/config: invalid metrics.path "${metricsPath}" — must start with "/"`,
+    );
+  }
+
+  let metricsBind = rawMetrics.bind !== undefined ? String(rawMetrics.bind) : DMETRICS.bind;
+  if (typeof metricsBind !== 'string' || metricsBind.length === 0) {
+    throw new Error(
+      `bridge/config: invalid metrics.bind "${metricsBind}" — must be a non-empty string`,
+    );
+  }
+
+  // Warn on unknown keys inside [metrics].
+  const knownMetricsKeys = new Set(['enabled', 'path', 'bind']);
+  for (const k of Object.keys(rawMetrics)) {
+    if (!knownMetricsKeys.has(k)) {
+      logger.warn(`bridge/config: unknown metrics key "${k}" — ignoring`);
     }
   }
 
@@ -838,13 +890,22 @@ function _buildConfig(parsed, logger) {
         per_ip_refill:      rlPerIpRefill,
       }),
       sse: Object.freeze({
-        enabled: sseEnabled,
+        enabled:       sseEnabled,
+        stream_deltas: streamDeltas,
+      }),
+      acl: Object.freeze({
+        enabled: aclEnabled,
       }),
       dcr: Object.freeze({
         enabled:             dcrEnabled,
         registration_secret: dcrRegistrationSecret,
         token_ttl_ms:        dcrTokenTtlMs,
       }),
+    }),
+    metrics: Object.freeze({
+      enabled: metricsEnabled,
+      path:    metricsPath,
+      bind:    metricsBind,
     }),
   });
 }

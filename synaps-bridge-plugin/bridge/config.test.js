@@ -2030,3 +2030,129 @@ describe('loadBridgeConfig — [mcp] sub-sections not treated as unknown top-lev
     expect(warnCalls.some(m => m.includes('unknown mcp key "dcr"'))).toBe(false);
   });
 });
+
+// ─── Phase 9 Wave B — new config sections ─────────────────────────────────────
+
+describe('loadBridgeConfig — [mcp.sse] stream_deltas (Phase 9)', () => {
+  it('BRIDGE_CONFIG_DEFAULTS.mcp.sse.stream_deltas = false (opt-in)', () => {
+    expect(BRIDGE_CONFIG_DEFAULTS.mcp.sse.stream_deltas).toBe(false);
+  });
+
+  it('stream_deltas defaults to false when [mcp.sse] is absent', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(config.mcp.sse.stream_deltas).toBe(false);
+  });
+
+  it('stream_deltas = true parses correctly', async () => {
+    const toml = `[mcp.sse]\nstream_deltas = true\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.mcp.sse.stream_deltas).toBe(true);
+  });
+});
+
+describe('loadBridgeConfig — [mcp.acl] enabled (Phase 9)', () => {
+  it('BRIDGE_CONFIG_DEFAULTS.mcp.acl.enabled = false (opt-in)', () => {
+    expect(BRIDGE_CONFIG_DEFAULTS.mcp.acl.enabled).toBe(false);
+    expect(Object.isFrozen(BRIDGE_CONFIG_DEFAULTS.mcp.acl)).toBe(true);
+  });
+
+  it('acl.enabled defaults to false when [mcp.acl] is absent', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(config.mcp.acl.enabled).toBe(false);
+    expect(Object.isFrozen(config.mcp.acl)).toBe(true);
+  });
+
+  it('acl.enabled = true parses correctly', async () => {
+    const toml = `[mcp.acl]\nenabled = true\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.mcp.acl.enabled).toBe(true);
+  });
+
+  it('unknown key inside [mcp.acl] warns and is dropped', async () => {
+    const toml = `[mcp.acl]\nfuture_key = "x"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('unknown mcp.acl key "future_key"'),
+    );
+    expect(config.mcp.acl.future_key).toBeUndefined();
+  });
+});
+
+describe('loadBridgeConfig — [metrics] enabled/path/bind (Phase 9)', () => {
+  it('BRIDGE_CONFIG_DEFAULTS.metrics has correct defaults', () => {
+    const m = BRIDGE_CONFIG_DEFAULTS.metrics;
+    expect(Object.isFrozen(m)).toBe(true);
+    expect(m.enabled).toBe(false);
+    expect(m.path).toBe('/metrics');
+    expect(m.bind).toBe('127.0.0.1');
+  });
+
+  it('metrics defaults when [metrics] section is absent', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(config.metrics.enabled).toBe(false);
+    expect(config.metrics.path).toBe('/metrics');
+    expect(config.metrics.bind).toBe('127.0.0.1');
+    expect(Object.isFrozen(config.metrics)).toBe(true);
+  });
+
+  it('metrics.enabled = true parses correctly', async () => {
+    const toml = `[metrics]\nenabled = true\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.metrics.enabled).toBe(true);
+  });
+
+  it('metrics.path not starting with "/" throws', async () => {
+    const toml = `[metrics]\npath = "metrics"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    await expect(loadBridgeConfig({ path: '/cfg.toml', fsImpl })).rejects.toThrow(
+      /metrics\.path/,
+    );
+  });
+
+  it('metrics.bind empty string throws', async () => {
+    const toml = `[metrics]\nbind = ""\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    await expect(loadBridgeConfig({ path: '/cfg.toml', fsImpl })).rejects.toThrow(
+      /metrics\.bind/,
+    );
+  });
+
+  it('unknown key inside [metrics] warns and is dropped', async () => {
+    const toml = `[metrics]\nfoo = "bar"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('unknown metrics key "foo"'),
+    );
+    expect(config.metrics.foo).toBeUndefined();
+  });
+});
+
+describe('loadBridgeConfig — acl/metrics not treated as unknown mcp or top-level keys', () => {
+  it('does not warn about acl as unknown mcp key', async () => {
+    const toml = `[mcp.acl]\nenabled = false\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    const warnCalls = logger.warn.mock.calls.map(([m]) => String(m));
+    expect(warnCalls.some(m => m.includes('unknown mcp key "acl"'))).toBe(false);
+  });
+
+  it('does not warn about metrics as unknown top-level key', async () => {
+    const toml = `[metrics]\nenabled = false\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    const warnCalls = logger.warn.mock.calls.map(([m]) => String(m));
+    expect(warnCalls.some(m => m.includes('unknown top-level key "metrics"'))).toBe(false);
+  });
+});
