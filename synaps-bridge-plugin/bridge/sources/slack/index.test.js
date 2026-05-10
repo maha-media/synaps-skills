@@ -393,7 +393,7 @@ describe('SlackAdapter — file attachments', () => {
 // ─── _onAssistantThreadStarted ────────────────────────────────────────────────
 
 describe('SlackAdapter — _onAssistantThreadStarted', () => {
-  it('calls client.assistant.threads.setStatus with channel_id, thread_ts, and status', async () => {
+  it('calls client.assistant.threads.setSuggestedPrompts with channel_id, thread_ts, and prompts', async () => {
     const { adapter, app } = buildAdapter();
     await adapter.start();
     const handler = app.handlers.events.get('assistant_thread_started');
@@ -409,13 +409,32 @@ describe('SlackAdapter — _onAssistantThreadStarted', () => {
       client,
       ack: vi.fn(),
     });
-    expect(client.assistant.threads.setStatus).toHaveBeenCalledWith(
+    expect(client.assistant.threads.setSuggestedPrompts).toHaveBeenCalledWith(
       expect.objectContaining({
         channel_id: 'C123',
         thread_ts: '1620000000.000100',
-        status: expect.any(String),
+        prompts: expect.any(Array),
       }),
     );
+  });
+
+  it('does NOT call setStatus on thread open (would hang the AI-app UI)', async () => {
+    const { adapter, app } = buildAdapter();
+    await adapter.start();
+    const handler = app.handlers.events.get('assistant_thread_started');
+    const client = mockClient(true);
+    await handler({
+      event: {
+        assistant_thread: {
+          user_id: 'U001',
+          channel_id: 'C123',
+          thread_ts: '1620000000.000100',
+        },
+      },
+      client,
+      ack: vi.fn(),
+    });
+    expect(client.assistant.threads.setStatus).not.toHaveBeenCalled();
   });
 
   it('is silent when client.assistant is undefined (no AI-app methods)', async () => {

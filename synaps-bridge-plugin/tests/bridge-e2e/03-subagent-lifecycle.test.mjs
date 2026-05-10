@@ -61,18 +61,18 @@ describe('03 — subagent lifecycle', () => {
     const appendCalls = findCalls(fakeApp, 'chat.appendStream');
 
     // 1. At least one appendStream is a task_update.
-    const taskUpdates = appendCalls.filter((c) => c.args.chunk?.type === 'task_update');
+    const taskUpdates = appendCalls.filter((c) => Array.isArray(c.args.chunks) && c.args.chunks.some((x) => x.type === 'task_update'));
     expect(taskUpdates.length).toBeGreaterThanOrEqual(1);
 
     // 2. At least one task_update is for 'SA1'.
     const saUpdates = taskUpdates.filter(
-      (c) => c.args.chunk?.task_update?.id === 'SA1',
+      (c) => Array.isArray(c.args.chunks) && c.args.chunks.some((x) => x.type === 'task_update' && x.task_update?.id === 'SA1'),
     );
     expect(saUpdates.length).toBeGreaterThanOrEqual(2);
 
     // 3. The final SA1 task_update has status 'done'.
     // (SubagentTracker maps 'done' from subagent_done events.)
-    const statuses = saUpdates.map((c) => c.args.chunk.task_update.status);
+    const statuses = saUpdates.map((c) => c.args.chunks.find((x) => x.type === 'task_update').task_update.status);
     expect(statuses).toContain('done');
 
     // 4. 'done' is the last status emitted — earlier ones are 'running'.

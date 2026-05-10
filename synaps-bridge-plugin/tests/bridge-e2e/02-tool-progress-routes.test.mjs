@@ -39,18 +39,18 @@ async function waitForToolStatus(app, toolId, status, timeoutMs = 2000) {
   await waitFor(
     () => {
       const updates = findCalls(app, 'chat.appendStream').filter(
-        (c) => c.args.chunk?.type === 'task_update' && c.args.chunk?.task_update?.id === toolId,
+        (c) => Array.isArray(c.args.chunks) && c.args.chunks.some((x) => x.type === 'task_update' && x.task_update?.id === toolId),
       );
-      return updates.some((c) => c.args.chunk.task_update.status === status);
+      return updates.some((c) => c.args.chunks.find((x) => x.type === 'task_update').task_update.status === status);
     },
     { timeoutMs, message: `task_update status '${status}' for tool '${toolId}' never appeared` },
   );
 
   return findCalls(app, 'chat.appendStream')
     .filter(
-      (c) => c.args.chunk?.type === 'task_update' && c.args.chunk?.task_update?.id === toolId,
+      (c) => Array.isArray(c.args.chunks) && c.args.chunks.some((x) => x.type === 'task_update' && x.task_update?.id === toolId),
     )
-    .map((c) => c.args.chunk.task_update.status);
+    .map((c) => c.args.chunks.find((x) => x.type === 'task_update').task_update.status);
 }
 
 describe('02 — tool progress routes', () => {

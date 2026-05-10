@@ -77,8 +77,8 @@ describe('01 — prompt streams text', () => {
 
     // 4. Cumulative text equals "Hello, world!".
     const allText = appendCalls
-      .filter((c) => c.args.chunk?.type === 'markdown_text')
-      .map((c) => c.args.chunk?.markdown_text ?? '')
+      .filter((c) => typeof c.args.markdown_text === 'string')
+      .map((c) => c.args.markdown_text ?? '')
       .join('');
     expect(allText).toBe('Hello, world!');
   });

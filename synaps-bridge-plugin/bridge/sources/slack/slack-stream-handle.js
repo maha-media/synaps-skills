@@ -66,8 +66,10 @@ export class SlackStreamHandle extends StreamHandle {
     this._logger = logger;
 
     // ── native path state ─────────────────────────────────────────────────
-    /** @type {string|null} stream_id returned by chat.startStream */
-    this._streamId = null;
+    /** @type {string|null} channel id (echoed by chat.startStream response) */
+    this._streamChannel = null;
+    /** @type {string|null} message ts returned by chat.startStream */
+    this._streamTs = null;
 
     // ── fallback path state ───────────────────────────────────────────────
     /** @type {string|null} ts of the placeholder postMessage */
@@ -114,7 +116,10 @@ export class SlackStreamHandle extends StreamHandle {
         throw new Error(`chat.startStream failed: ${res.error ?? 'unknown'}`);
       }
 
-      this._streamId = res.stream_id;
+      // Slack returns { ok, channel, ts } — no stream_id. The (channel, ts)
+      // pair is the stream identifier used by appendStream / stopStream.
+      this._streamChannel = res.channel ?? this._channel;
+      this._streamTs = res.ts;
     } else {
       const params = {
         channel: this._channel,
@@ -198,22 +203,28 @@ export class SlackStreamHandle extends StreamHandle {
    * @param {import('../../core/abstractions/stream-handle.js').StreamChunk} chunk
    */
   async _nativeAppend(chunk) {
-    let slackChunk;
+    // Slack's chat.appendStream expects EITHER:
+    //   - top-level `markdown_text: "..."` (string), OR
+    //   - top-level `chunks: [...]` (array of typed chunks).
+    // NOT a singular `chunk: {...}` field. Build the right payload shape.
+
+    let payload;
 
     switch (chunk.type) {
       case 'markdown_text': {
         const mrkdwn = this._formatter.formatMarkdown(chunk.content ?? '');
-        slackChunk = { type: 'markdown_text', markdown_text: mrkdwn };
+        // Plain markdown: send as top-level string (simplest path).
+        payload = { markdown_text: mrkdwn };
         break;
       }
       case 'task_update':
-        slackChunk = { type: 'task_update', task_update: chunk.task };
+        payload = { chunks: [{ type: 'task_update', task_update: chunk.task }] };
         break;
       case 'plan_update':
-        slackChunk = { type: 'plan_update', plan_update: chunk.plan };
+        payload = { chunks: [{ type: 'plan_update', plan_update: chunk.plan }] };
         break;
       case 'blocks':
-        slackChunk = { type: 'blocks', blocks: chunk.blocks };
+        payload = { chunks: [{ type: 'blocks', blocks: chunk.blocks }] };
         break;
       default:
         // Should be unreachable after the SUPPORTED_CHUNK_TYPES guard in append().
@@ -223,8 +234,10 @@ export class SlackStreamHandle extends StreamHandle {
 
     try {
       await this._client.chat.appendStream({
-        stream_id: this._streamId,
-        chunk: slackChunk,
+        channel: this._streamChannel,
+        ts: this._streamTs,
+        ...(this._thread_ts ? { thread_ts: this._thread_ts } : {}),
+        ...payload,
       });
     } catch (err) {
       this._logger.warn('SlackStreamHandle: chat.appendStream error', err);
@@ -239,7 +252,9 @@ export class SlackStreamHandle extends StreamHandle {
   async _nativeStop({ blocks } = {}) {
     try {
       await this._client.chat.stopStream({
-        stream_id: this._streamId,
+        channel: this._streamChannel,
+        ts: this._streamTs,
+        ...(this._thread_ts ? { thread_ts: this._thread_ts } : {}),
         ...(blocks != null ? { blocks } : {}),
       });
     } catch (err) {

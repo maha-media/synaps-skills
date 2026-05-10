@@ -126,11 +126,15 @@ export class SlackAdapter extends AdapterInstance {
     }
 
     // Lazy import — only reached in production, never in tests that inject a factory.
-    const { App } = await import('@slack/bolt');
+    const { App, LogLevel } = await import('@slack/bolt');
+    const boltLogLevel = process.env.SYNAPS_BRIDGE_BOLT_LOG_LEVEL === 'debug'
+      ? LogLevel.DEBUG
+      : LogLevel.INFO;
     return new App({
       token: this._auth.botToken,
       appToken: this._auth.appToken,
       socketMode: true,
+      logLevel: boltLogLevel,
     });
   }
 
@@ -161,7 +165,16 @@ export class SlackAdapter extends AdapterInstance {
   // ── event handlers ────────────────────────────────────────────────────────
 
   /**
-   * Handle assistant_thread_started — set a "thinking…" status.
+   * Handle assistant_thread_started — initialize the assistant thread.
+   *
+   * IMPORTANT: do NOT call setStatus("is thinking…") here. The Slack AI-app
+   * surface treats setStatus as a signal that the bot is *currently working*
+   * on a response; setting it before any user message arrives makes Slack
+   * wait for a streaming reply that will never come, and the UI shows
+   * "Couldn't load thread" after a timeout.
+   *
+   * Status is set later, only when a real user message is being processed.
+   * Optionally call setSuggestedPrompts to populate welcome chips.
    *
    * @param {object} args
    * @param {object} args.event
@@ -173,18 +186,21 @@ export class SlackAdapter extends AdapterInstance {
 
     const { channel_id, thread_ts } = event?.assistant_thread ?? {};
 
-    // Set status — silently skip if the AI-app methods are not available.
-    if (client?.assistant?.threads?.setStatus) {
+    // Optional: set welcome suggestions. Silently skip if API not present.
+    if (client?.assistant?.threads?.setSuggestedPrompts) {
       try {
-        await client.assistant.threads.setStatus({
+        await client.assistant.threads.setSuggestedPrompts({
           channel_id,
           thread_ts,
-          status: 'is thinking…',
+          prompts: [
+            { title: 'Say hi', message: 'Hi!' },
+            { title: 'Help', message: 'What can you do?' },
+          ],
         });
       } catch (err) {
         try {
           this.logger.warn(
-            `[SlackAdapter] setStatus failed: ${redactTokens(err.message)}`,
+            `[SlackAdapter] setSuggestedPrompts failed: ${redactTokens(err.message)}`,
           );
         } catch { /* swallow */ }
       }
@@ -247,6 +263,16 @@ export class SlackAdapter extends AdapterInstance {
 
     // Bot-loop prevention: drop any message that originated from a bot.
     if (event.bot_id || event.subtype === 'bot_message') return;
+
+    // Drop ALL message subtypes (edits, deletes, joins, hidden assistant-thread
+    // updates, etc.) — we only want plain user messages, which have no subtype.
+    if (event.subtype) return;
+
+    // Defensive: drop events with no user (rare but possible for system msgs).
+    if (!event.user) return;
+
+    // Drop empty text and no-attachment messages.
+    if (!event.text && (!event.files || event.files.length === 0)) return;
 
     // Only handle DMs in this handler; channel messages arrive via app_mention.
     if (event.channel_type !== 'im') return;

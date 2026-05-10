@@ -14,7 +14,7 @@ import { SlackFormatter } from './slack-formatter.js';
 function mockClient() {
   return {
     chat: {
-      startStream:  vi.fn().mockResolvedValue({ ok: true, stream_id: 'stream_1' }),
+      startStream:  vi.fn().mockResolvedValue({ ok: true, channel: 'C123', ts: '9999.111' }),
       appendStream: vi.fn().mockResolvedValue({ ok: true }),
       stopStream:   vi.fn().mockResolvedValue({ ok: true }),
       postMessage:  vi.fn().mockResolvedValue({ ok: true, ts: '1234.567' }),
@@ -59,11 +59,12 @@ describe('SlackStreamHandle — native: start()', () => {
     );
   });
 
-  it('stores stream_id returned by chat.startStream', async () => {
+  it('stores channel + ts returned by chat.startStream', async () => {
     const client = mockClient();
     const handle = makeNative(client);
     await handle.start();
-    expect(handle._streamId).toBe('stream_1');
+    expect(handle._streamChannel).toBe('C123');
+    expect(handle._streamTs).toBe('9999.111');
   });
 
   it('passes recipient_user_id when recipient is supplied', async () => {
@@ -96,10 +97,12 @@ describe('SlackStreamHandle — native: append()', () => {
     const handle = makeNative(client);
     await handle.start();
     await handle.append({ type: 'markdown_text', content: '**hi**' });
-    expect(client.chat.appendStream).toHaveBeenCalledWith({
-      stream_id: 'stream_1',
-      chunk: { type: 'markdown_text', markdown_text: '*hi*' },
-    });
+    expect(client.chat.appendStream).toHaveBeenCalledWith(expect.objectContaining({
+      channel: 'C123',
+      ts: '9999.111',
+      thread_ts: '1111.222',
+      markdown_text: '*hi*',
+    }));
   });
 
   it('task_update: calls appendStream with task_update chunk', async () => {
@@ -108,10 +111,12 @@ describe('SlackStreamHandle — native: append()', () => {
     await handle.start();
     const task = { id: 't1', title: 'my task', status: 'in_progress' };
     await handle.append({ type: 'task_update', task });
-    expect(client.chat.appendStream).toHaveBeenCalledWith({
-      stream_id: 'stream_1',
-      chunk: { type: 'task_update', task_update: task },
-    });
+    expect(client.chat.appendStream).toHaveBeenCalledWith(expect.objectContaining({
+      channel: 'C123',
+      ts: '9999.111',
+      thread_ts: '1111.222',
+      chunks: [{ type: 'task_update', task_update: task }],
+    }));
   });
 
   it('plan_update: calls appendStream with plan_update chunk', async () => {
@@ -120,10 +125,12 @@ describe('SlackStreamHandle — native: append()', () => {
     await handle.start();
     const plan = { steps: ['a', 'b'] };
     await handle.append({ type: 'plan_update', plan });
-    expect(client.chat.appendStream).toHaveBeenCalledWith({
-      stream_id: 'stream_1',
-      chunk: { type: 'plan_update', plan_update: plan },
-    });
+    expect(client.chat.appendStream).toHaveBeenCalledWith(expect.objectContaining({
+      channel: 'C123',
+      ts: '9999.111',
+      thread_ts: '1111.222',
+      chunks: [{ type: 'plan_update', plan_update: plan }],
+    }));
   });
 
   it('blocks: calls appendStream with blocks chunk', async () => {
@@ -132,10 +139,12 @@ describe('SlackStreamHandle — native: append()', () => {
     await handle.start();
     const blocks = [{ type: 'section', text: { type: 'mrkdwn', text: 'hi' } }];
     await handle.append({ type: 'blocks', blocks });
-    expect(client.chat.appendStream).toHaveBeenCalledWith({
-      stream_id: 'stream_1',
-      chunk: { type: 'blocks', blocks },
-    });
+    expect(client.chat.appendStream).toHaveBeenCalledWith(expect.objectContaining({
+      channel: 'C123',
+      ts: '9999.111',
+      thread_ts: '1111.222',
+      chunks: [{ type: 'blocks', blocks }],
+    }));
   });
 
   it('unknown chunk type: logs warn, makes no API call', async () => {
@@ -162,13 +171,13 @@ describe('SlackStreamHandle — native: append()', () => {
 });
 
 describe('SlackStreamHandle — native: stop()', () => {
-  it('calls chat.stopStream with stream_id', async () => {
+  it('calls chat.stopStream with channel + ts', async () => {
     const client = mockClient();
     const handle = makeNative(client);
     await handle.start();
     await handle.stop();
     expect(client.chat.stopStream).toHaveBeenCalledWith(
-      expect.objectContaining({ stream_id: 'stream_1' })
+      expect.objectContaining({ channel: 'C123', ts: '9999.111' })
     );
   });
 
