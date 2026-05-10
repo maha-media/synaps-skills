@@ -15,6 +15,9 @@
  *   makeHeartbeatModel       – model factory for synaps_heartbeat
  *   HeartbeatRepo            – repository class for synaps_heartbeat
  *   makeHeartbeatRepo        – convenience factory: makeHeartbeatRepo(mongoose, opts?)
+ *   makeHookModel            – model factory for synaps_hook      (Phase 6 Wave A2)
+ *   HookRepo                 – repository class for synaps_hook   (Phase 6 Wave A2)
+ *   makeHookRepo             – convenience factory: makeHookRepo(mongoose)
  */
 
 export { getMongoose, disconnect, isConnected } from './connect.js';
@@ -23,14 +26,18 @@ export { getSynapsUserModel }                   from './models/synaps-user.js';
 export { getSynapsChannelIdentityModel }        from './models/synaps-channel-identity.js';
 export { getSynapsLinkCodeModel }               from './models/synaps-link-code.js';
 export { makeHeartbeatModel }                   from './models/synaps-heartbeat.js';
+export { makeHookModel }                        from './models/synaps-hook.js';
 export { WorkspaceRepo }                        from './repositories/workspace-repo.js';
 export { UserRepo }                             from './repositories/user-repo.js';
 export { ChannelIdentityRepo }                  from './repositories/channel-identity-repo.js';
 export { LinkCodeRepo }                         from './repositories/link-code-repo.js';
 export { HeartbeatRepo }                        from './repositories/heartbeat-repo.js';
+export { HookRepo }                             from './repositories/hook-repo.js';
 
 import { makeHeartbeatModel as _makeHeartbeatModel } from './models/synaps-heartbeat.js';
 import { HeartbeatRepo as _HeartbeatRepo }           from './repositories/heartbeat-repo.js';
+import { makeHookModel as _makeHookModel }           from './models/synaps-hook.js';
+import { HookRepo as _HookRepo }                     from './repositories/hook-repo.js';
 
 /**
  * Convenience factory — builds a HeartbeatRepo wired to the Heartbeat model
@@ -44,4 +51,16 @@ import { HeartbeatRepo as _HeartbeatRepo }           from './repositories/heartb
 export function makeHeartbeatRepo(mongooseInstance, opts = {}) {
   const Heartbeat = _makeHeartbeatModel(mongooseInstance);
   return new _HeartbeatRepo({ Heartbeat, ...opts });
+}
+
+/**
+ * Convenience factory — builds a HookRepo wired to the Hook model
+ * for the given mongoose instance.
+ *
+ * @param {import('mongoose').Mongoose} mongooseInstance
+ * @returns {HookRepo}
+ */
+export function makeHookRepo(mongooseInstance) {
+  const Hook = _makeHookModel(mongooseInstance);
+  return new _HookRepo({ Hook });
 }
