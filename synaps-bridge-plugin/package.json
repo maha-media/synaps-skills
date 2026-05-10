@@ -17,11 +17,14 @@
     "lint": "echo 'lint: noop (eslint TBD)'"
   },
   "dependencies": {
+    "@iarna/toml": "^2.2.5",
     "@slack/bolt": "^4.5.0",
-    "@iarna/toml": "^2.2.5"
+    "dockerode": "^4.0.2",
+    "mongoose": "^8.6.0"
   },
   "devDependencies": {
-    "vitest": "^2.1.0",
-    "@vitest/coverage-v8": "^2.1.0"
+    "@vitest/coverage-v8": "^2.1.0",
+    "mongodb-memory-server": "^10.0.0",
+    "vitest": "^2.1.0"
   }
 }

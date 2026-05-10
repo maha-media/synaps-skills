@@ -267,3 +267,285 @@ describe('loadBridgeConfig — partial config merges with defaults', () => {
     expect(config.rpc.default_profile).toBe(BRIDGE_CONFIG_DEFAULTS.rpc.default_profile);
   });
 });
+
+// ─── platform section ─────────────────────────────────────────────────────────
+
+describe('loadBridgeConfig — platform section defaults', () => {
+  it('returns platform.mode = "bridge" by default', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(config.platform.mode).toBe('bridge');
+  });
+
+  it('accepts mode = "scp"', async () => {
+    const toml = `[platform]\nmode = "scp"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.platform.mode).toBe('scp');
+  });
+
+  it('accepts mode = "bridge"', async () => {
+    const toml = `[platform]\nmode = "bridge"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.platform.mode).toBe('bridge');
+  });
+
+  it('falls back to "bridge" on invalid mode and warns', async () => {
+    const toml = `[platform]\nmode = "cluster"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.platform.mode).toBe('bridge');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('platform.mode'));
+  });
+
+  it('result.platform is frozen', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(Object.isFrozen(config.platform)).toBe(true);
+  });
+});
+
+// ─── workspace section ────────────────────────────────────────────────────────
+
+describe('loadBridgeConfig — workspace section defaults', () => {
+  it('returns all workspace defaults on empty config', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    const ws = config.workspace;
+    expect(ws.image).toBe('synaps/workspace:0.1.0');
+    expect(ws.docker_socket).toBe('/var/run/docker.sock');
+    expect(ws.volume_root).toBe('/efs/agents');
+    expect(ws.default_cpu).toBe(1.0);
+    expect(ws.default_mem_mb).toBe(2048);
+    expect(ws.default_pids).toBe(256);
+    expect(ws.idle_reap_minutes).toBe(30);
+  });
+
+  it('overrides workspace fields from TOML', async () => {
+    const toml = `[workspace]\nimage = "synaps/workspace:1.2.3"\ndefault_cpu = 2.0\nidle_reap_minutes = 60\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.workspace.image).toBe('synaps/workspace:1.2.3');
+    expect(config.workspace.default_cpu).toBe(2.0);
+    expect(config.workspace.idle_reap_minutes).toBe(60);
+    // unchanged defaults
+    expect(config.workspace.docker_socket).toBe(BRIDGE_CONFIG_DEFAULTS.workspace.docker_socket);
+  });
+
+  it('falls back on idle_reap_minutes = 0 and warns', async () => {
+    const toml = `[workspace]\nidle_reap_minutes = 0\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.workspace.idle_reap_minutes).toBe(30);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('idle_reap_minutes'));
+  });
+
+  it('falls back on negative idle_reap_minutes and warns', async () => {
+    const toml = `[workspace]\nidle_reap_minutes = -5\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.workspace.idle_reap_minutes).toBe(30);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('idle_reap_minutes'));
+  });
+
+  it('falls back on non-integer idle_reap_minutes and warns', async () => {
+    const toml = `[workspace]\nidle_reap_minutes = 1.5\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.workspace.idle_reap_minutes).toBe(30);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('idle_reap_minutes'));
+  });
+
+  it('falls back on default_cpu = 0 and warns', async () => {
+    const toml = `[workspace]\ndefault_cpu = 0\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.workspace.default_cpu).toBe(1.0);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('default_cpu'));
+  });
+
+  it('falls back on negative default_cpu and warns', async () => {
+    const toml = `[workspace]\ndefault_cpu = -1.0\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.workspace.default_cpu).toBe(1.0);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('default_cpu'));
+  });
+
+  it('result.workspace is frozen', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(Object.isFrozen(config.workspace)).toBe(true);
+  });
+});
+
+// ─── web section ──────────────────────────────────────────────────────────────
+
+describe('loadBridgeConfig — web section defaults', () => {
+  it('returns all web defaults on empty config', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    const web = config.web;
+    expect(web.enabled).toBe(false);
+    expect(web.http_port).toBe(0);
+    expect(web.bind).toBe('127.0.0.1');
+    expect(web.trust_proxy_header).toBe('x-synaps-user-id');
+    expect(web.allowed_origin).toBe('');
+  });
+
+  it('overrides web fields from TOML', async () => {
+    const toml = `[web]\nenabled = true\nhttp_port = 8080\nbind = "0.0.0.0"\nallowed_origin = "https://example.com"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.web.enabled).toBe(true);
+    expect(config.web.http_port).toBe(8080);
+    expect(config.web.bind).toBe('0.0.0.0');
+    expect(config.web.allowed_origin).toBe('https://example.com');
+  });
+
+  it('accepts http_port = 0', async () => {
+    const toml = `[web]\nhttp_port = 0\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.web.http_port).toBe(0);
+  });
+
+  it('accepts http_port = 65535', async () => {
+    const toml = `[web]\nhttp_port = 65535\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.web.http_port).toBe(65535);
+  });
+
+  it('falls back on http_port > 65535 and warns', async () => {
+    const toml = `[web]\nhttp_port = 99999\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.web.http_port).toBe(0);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('http_port'));
+  });
+
+  it('falls back on negative http_port and warns', async () => {
+    const toml = `[web]\nhttp_port = -1\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.web.http_port).toBe(0);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('http_port'));
+  });
+
+  it('falls back on non-integer http_port and warns', async () => {
+    const toml = `[web]\nhttp_port = 8080.5\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.web.http_port).toBe(0);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('http_port'));
+  });
+
+  it('result.web is frozen', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(Object.isFrozen(config.web)).toBe(true);
+  });
+});
+
+// ─── mongodb section ──────────────────────────────────────────────────────────
+
+describe('loadBridgeConfig — mongodb section defaults', () => {
+  it('returns mongodb.uri default on empty config', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(config.mongodb.uri).toBe('mongodb://localhost/priadb');
+  });
+
+  it('accepts mongodb:// URI', async () => {
+    const toml = `[mongodb]\nuri = "mongodb://mongo-host:27017/mydb"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.mongodb.uri).toBe('mongodb://mongo-host:27017/mydb');
+  });
+
+  it('accepts mongodb+srv:// URI', async () => {
+    const toml = `[mongodb]\nuri = "mongodb+srv://user:pass@cluster.example.com/mydb"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.mongodb.uri).toBe('mongodb+srv://user:pass@cluster.example.com/mydb');
+  });
+
+  it('falls back on invalid (non-mongodb) URI and warns', async () => {
+    const toml = `[mongodb]\nuri = "postgres://localhost/mydb"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.mongodb.uri).toBe('mongodb://localhost/priadb');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('mongodb.uri'));
+  });
+
+  it('result.mongodb is frozen', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(Object.isFrozen(config.mongodb)).toBe(true);
+  });
+});
+
+// ─── new sections present in defaults ────────────────────────────────────────
+
+describe('BRIDGE_CONFIG_DEFAULTS includes new sections', () => {
+  it('has platform section', () => {
+    expect(BRIDGE_CONFIG_DEFAULTS.platform).toBeDefined();
+    expect(BRIDGE_CONFIG_DEFAULTS.platform.mode).toBe('bridge');
+  });
+
+  it('has workspace section', () => {
+    expect(BRIDGE_CONFIG_DEFAULTS.workspace).toBeDefined();
+    expect(BRIDGE_CONFIG_DEFAULTS.workspace.idle_reap_minutes).toBe(30);
+  });
+
+  it('has web section', () => {
+    expect(BRIDGE_CONFIG_DEFAULTS.web).toBeDefined();
+    expect(BRIDGE_CONFIG_DEFAULTS.web.http_port).toBe(0);
+  });
+
+  it('has mongodb section', () => {
+    expect(BRIDGE_CONFIG_DEFAULTS.mongodb).toBeDefined();
+    expect(BRIDGE_CONFIG_DEFAULTS.mongodb.uri).toMatch(/^mongodb:\/\//);
+  });
+
+  it('all new default sub-objects are frozen', () => {
+    expect(Object.isFrozen(BRIDGE_CONFIG_DEFAULTS.platform)).toBe(true);
+    expect(Object.isFrozen(BRIDGE_CONFIG_DEFAULTS.workspace)).toBe(true);
+    expect(Object.isFrozen(BRIDGE_CONFIG_DEFAULTS.web)).toBe(true);
+    expect(Object.isFrozen(BRIDGE_CONFIG_DEFAULTS.mongodb)).toBe(true);
+  });
+});
+
+// ─── partial overrides don't lose sibling defaults ───────────────────────────
+
+describe('loadBridgeConfig — partial new sections merge correctly', () => {
+  it('partial [workspace] keeps unspecified defaults', async () => {
+    const toml = `[workspace]\nimage = "custom:latest"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.workspace.image).toBe('custom:latest');
+    expect(config.workspace.docker_socket).toBe(BRIDGE_CONFIG_DEFAULTS.workspace.docker_socket);
+    expect(config.workspace.idle_reap_minutes).toBe(30);
+  });
+
+  it('partial [web] keeps unspecified defaults', async () => {
+    const toml = `[web]\nenabled = true\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.web.enabled).toBe(true);
+    expect(config.web.http_port).toBe(BRIDGE_CONFIG_DEFAULTS.web.http_port);
+    expect(config.web.bind).toBe(BRIDGE_CONFIG_DEFAULTS.web.bind);
+  });
+});
