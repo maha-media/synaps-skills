@@ -1095,3 +1095,304 @@ describe('BridgeDaemon — IdentityRouter wiring', () => {
     await daemon.stop();
   });
 });
+
+// ─── BridgeDaemon — CredBroker wiring ────────────────────────────────────────
+
+import { defaultCredBrokerFactory } from './index.js';
+import { CredBroker, NoopCredBroker } from './core/cred-broker.js';
+
+/**
+ * Make a config with specific creds overrides on top of the base defaults.
+ * Slack and memory are both disabled to keep tests minimal.
+ */
+function makeCredsConfig(credsOverrides = {}) {
+  return {
+    ...BRIDGE_CONFIG_DEFAULTS,
+    bridge:   { ...BRIDGE_CONFIG_DEFAULTS.bridge },
+    rpc:      { ...BRIDGE_CONFIG_DEFAULTS.rpc },
+    sources:  { slack: { ...BRIDGE_CONFIG_DEFAULTS.sources.slack, enabled: false } },
+    memory:   { ...BRIDGE_CONFIG_DEFAULTS.memory, enabled: false },
+    creds:    { ...BRIDGE_CONFIG_DEFAULTS.creds, ...credsOverrides },
+  };
+}
+
+/** Minimal fake memory gateway so tests that call start() don't fail. */
+function makeFakeGateway() {
+  return { start: vi.fn(async () => {}), stop: vi.fn(async () => {}), enabled: false };
+}
+
+/**
+ * Build a daemon wired for cred-broker tests.
+ * All heavy subsystems (session router, socket, etc.) are faked out.
+ * Pass `credBrokerFactory` to inject a custom factory; omit to use default.
+ */
+function buildCredsDaemon({
+  config,
+  logger,
+  credBrokerFactory,
+  controlSocketFactory,
+} = {}) {
+  const _logger = logger ?? makeLogger();
+  const _config = config ?? makeCredsConfig();
+
+  const fakeRouter = makeFakeRouter();
+  const fakeSocket = makeFakeSocket();
+  const fakeGateway = makeFakeGateway();
+
+  const daemon = new BridgeDaemon({
+    config: _config,
+    logger: _logger,
+    env: {},
+    sessionRouterFactory:  vi.fn(() => fakeRouter),
+    slackAdapterFactory:   vi.fn(() => makeFakeAdapter()),
+    controlSocketFactory:  controlSocketFactory ?? vi.fn(() => fakeSocket),
+    memoryGatewayFactory:  vi.fn(() => fakeGateway),
+    credBrokerFactory,
+  });
+
+  return { daemon, fakeRouter, fakeSocket, fakeGateway, logger: _logger };
+}
+
+// ── defaultCredBrokerFactory — unit tests ─────────────────────────────────────
+
+describe('defaultCredBrokerFactory — unit tests', () => {
+  it('returns NoopCredBroker when creds.enabled = false', () => {
+    const config = makeCredsConfig({ enabled: false });
+    const logger = makeLogger();
+    const broker = defaultCredBrokerFactory(config, logger);
+    expect(broker).toBeInstanceOf(NoopCredBroker);
+  });
+
+  it('returns NoopCredBroker when creds.enabled = true but broker = "noop"', () => {
+    const config = makeCredsConfig({ enabled: true, broker: 'noop' });
+    const logger = makeLogger();
+    const broker = defaultCredBrokerFactory(config, logger);
+    expect(broker).toBeInstanceOf(NoopCredBroker);
+  });
+
+  it('returns CredBroker (not NoopCredBroker) when broker = "infisical"', () => {
+    const config = makeCredsConfig({
+      enabled: true,
+      broker: 'infisical',
+      infisical_url: 'https://infisical.test',
+      infisical_token_file: '/tmp/fake-token',
+    });
+    const logger = makeLogger();
+    const broker = defaultCredBrokerFactory(config, logger);
+    expect(broker).toBeInstanceOf(CredBroker);
+    expect(broker).not.toBeInstanceOf(NoopCredBroker);
+  });
+
+  it('returns NoopCredBroker + emits warn when broker is an unknown value', () => {
+    // Bypass config validation by building the config object directly (not via
+    // normalizeConfig, which would sanitise the unknown broker).
+    const config = {
+      ...makeCredsConfig(),
+      creds: { ...BRIDGE_CONFIG_DEFAULTS.creds, enabled: true, broker: 'vault' },
+    };
+    const logger = makeLogger();
+    const broker = defaultCredBrokerFactory(config, logger);
+    expect(broker).toBeInstanceOf(NoopCredBroker);
+    expect(logger.warn).toHaveBeenCalledOnce();
+    expect(logger.warn.mock.calls[0][0]).toMatch(/vault/);
+    expect(logger.warn.mock.calls[0][0]).toMatch(/NoopCredBroker/);
+  });
+
+  it('NoopCredBroker ping returns { ok: false, broker: "noop" }', async () => {
+    const config = makeCredsConfig({ enabled: false });
+    const broker = defaultCredBrokerFactory(config, makeLogger());
+    await expect(broker.ping()).resolves.toEqual({ ok: false, broker: 'noop' });
+  });
+});
+
+// ── BridgeDaemon — cred broker integration ────────────────────────────────────
+
+describe('BridgeDaemon — cred broker', () => {
+  it('custom credBrokerFactory is called with (config, logger) and its return value stored in _credBroker', async () => {
+    const mockBroker = { ping: vi.fn(), clear: vi.fn() };
+    const factory = vi.fn(() => mockBroker);
+    const logger = makeLogger();
+    const config = makeCredsConfig({ enabled: false });
+
+    const { daemon } = buildCredsDaemon({ config, logger, credBrokerFactory: factory });
+    await daemon.start();
+
+    expect(factory).toHaveBeenCalledOnce();
+    expect(factory).toHaveBeenCalledWith(config, logger);
+    expect(daemon._credBroker).toBe(mockBroker);
+    await daemon.stop();
+  });
+
+  it('start() builds and stores _credBroker (NoopCredBroker by default)', async () => {
+    const { daemon } = buildCredsDaemon();
+    await daemon.start();
+    expect(daemon._credBroker).toBeInstanceOf(NoopCredBroker);
+    await daemon.stop();
+  });
+
+  it('start() logs "cred broker initialized" line', async () => {
+    const logger = makeLogger();
+    const { daemon } = buildCredsDaemon({ logger });
+    await daemon.start();
+    const infoCalls = logger.info.mock.calls.map(([msg]) => msg);
+    expect(infoCalls.some(msg => msg.includes('cred broker initialized'))).toBe(true);
+    await daemon.stop();
+  });
+
+  it('start() "cred broker initialized" log includes enabled and broker fields', async () => {
+    const logger = makeLogger();
+    const config = makeCredsConfig({ enabled: false, broker: 'noop' });
+    const { daemon } = buildCredsDaemon({ logger, config });
+    await daemon.start();
+    const match = logger.info.mock.calls
+      .map(([msg]) => msg)
+      .find(msg => msg.includes('cred broker initialized'));
+    expect(match).toMatch(/enabled=false/);
+    expect(match).toMatch(/broker=noop/);
+    await daemon.stop();
+  });
+
+  it('start() passes credBroker to controlSocketFactory', async () => {
+    const mockBroker = { ping: vi.fn(), clear: vi.fn() };
+    const factory = vi.fn(() => mockBroker);
+    let capturedSocketOpts = null;
+
+    const controlFactory = vi.fn((opts) => {
+      capturedSocketOpts = opts;
+      return makeFakeSocket();
+    });
+
+    const { daemon } = buildCredsDaemon({
+      credBrokerFactory: factory,
+      controlSocketFactory: controlFactory,
+    });
+    await daemon.start();
+
+    expect(capturedSocketOpts).not.toBeNull();
+    expect(capturedSocketOpts.credBroker).toBe(mockBroker);
+    await daemon.stop();
+  });
+
+  it('stop() calls credBroker.clear()', async () => {
+    const clearSpy = vi.fn();
+    const mockBroker = { ping: vi.fn(), clear: clearSpy };
+    const factory = vi.fn(() => mockBroker);
+
+    const { daemon } = buildCredsDaemon({ credBrokerFactory: factory });
+    await daemon.start();
+    await daemon.stop();
+
+    expect(clearSpy).toHaveBeenCalledOnce();
+  });
+
+  it('stop() logs "cred broker shutdown" after clearing', async () => {
+    const logger = makeLogger();
+    const mockBroker = { ping: vi.fn(), clear: vi.fn() };
+    const { daemon } = buildCredsDaemon({
+      logger,
+      credBrokerFactory: vi.fn(() => mockBroker),
+    });
+    await daemon.start();
+    await daemon.stop();
+    const infoCalls = logger.info.mock.calls.map(([msg]) => msg);
+    expect(infoCalls.some(msg => msg.includes('cred broker shutdown'))).toBe(true);
+  });
+
+  it('stop() does NOT throw when credBroker has no .clear() method', async () => {
+    // Simulate a broker without clear() (defensive guard).
+    const mockBroker = { ping: vi.fn() }; // no clear property
+    const { daemon } = buildCredsDaemon({
+      credBrokerFactory: vi.fn(() => mockBroker),
+    });
+    await daemon.start();
+    await expect(daemon.stop()).resolves.toBeUndefined();
+  });
+
+  it('stop() does NOT throw when credBroker is null (never started)', async () => {
+    const { daemon } = buildCredsDaemon();
+    // Call stop without start — _credBroker remains null.
+    await expect(daemon.stop()).resolves.toBeUndefined();
+  });
+
+  it('credBroker is in scpDeps when platform.mode = "scp"', async () => {
+    const mockBroker = { ping: vi.fn(), clear: vi.fn() };
+    const factory = vi.fn(() => mockBroker);
+    let capturedScpDeps = null;
+
+    const routerFactory = vi.fn((config, logger, scpDeps) => {
+      capturedScpDeps = scpDeps;
+      return makeFakeRouter();
+    });
+
+    const fakeMongo = {
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      models: {},
+      model: vi.fn().mockReturnValue({}),
+    };
+
+    const scpConfig = {
+      ...BRIDGE_CONFIG_DEFAULTS,
+      platform: { mode: 'scp' },
+      bridge:   { ...BRIDGE_CONFIG_DEFAULTS.bridge },
+      rpc:      { ...BRIDGE_CONFIG_DEFAULTS.rpc },
+      web:      { ...BRIDGE_CONFIG_DEFAULTS.web, enabled: false },
+      mongodb:  { uri: 'mongodb://localhost/testdb' },
+      workspace: { ...BRIDGE_CONFIG_DEFAULTS.workspace },
+      sources:  { slack: { ...BRIDGE_CONFIG_DEFAULTS.sources.slack, enabled: false } },
+      memory:   { ...BRIDGE_CONFIG_DEFAULTS.memory, enabled: false },
+      creds:    { ...BRIDGE_CONFIG_DEFAULTS.creds, enabled: false },
+    };
+
+    const daemon = new BridgeDaemon({
+      config: scpConfig,
+      logger: makeLogger(),
+      env: {},
+      sessionRouterFactory:    routerFactory,
+      slackAdapterFactory:     vi.fn(() => makeFakeAdapter()),
+      controlSocketFactory:    vi.fn(() => makeFakeSocket()),
+      mongoConnectFactory:     vi.fn().mockResolvedValue(fakeMongo),
+      workspaceManagerFactory: vi.fn().mockReturnValue({ ensure: vi.fn(), exec: vi.fn() }),
+      memoryGatewayFactory:    vi.fn(() => makeFakeGateway()),
+      credBrokerFactory:       factory,
+    });
+
+    await daemon.start();
+
+    expect(capturedScpDeps).not.toBeNull();
+    expect(capturedScpDeps.credBroker).toBe(mockBroker);
+
+    await daemon.stop();
+  });
+
+  it('credBroker wired to controlSocket even in bridge mode (platform.mode = "bridge")', async () => {
+    const mockBroker = { ping: vi.fn(), clear: vi.fn() };
+    let capturedSocketOpts = null;
+
+    const controlFactory = vi.fn((opts) => {
+      capturedSocketOpts = opts;
+      return makeFakeSocket();
+    });
+
+    const { daemon } = buildCredsDaemon({
+      config: makeCredsConfig({ enabled: false }),    // bridge mode (default)
+      credBrokerFactory: vi.fn(() => mockBroker),
+      controlSocketFactory: controlFactory,
+    });
+    await daemon.start();
+
+    expect(capturedSocketOpts.credBroker).toBe(mockBroker);
+    await daemon.stop();
+  });
+
+  it('defaultCredBrokerFactory used when no credBrokerFactory is injected', async () => {
+    // When creds.enabled=false the default factory returns a NoopCredBroker without
+    // touching InfisicalClient — so no token-file read happens.
+    const { daemon } = buildCredsDaemon({
+      config: makeCredsConfig({ enabled: false }),
+      // No credBrokerFactory → falls through to defaultCredBrokerFactory
+    });
+    await daemon.start();
+    expect(daemon._credBroker).toBeInstanceOf(NoopCredBroker);
+    await daemon.stop();
+  });
+});

@@ -28,7 +28,14 @@
  *   scpDeps.memoryGateway.  Teardown happens after mongoose disconnect in
  *   stop() (deepest layer last).
  *
- * Spec reference: PLATFORM.SPEC.md §3.1, §5, §6, §12.5
+ * Cred broker (both modes, Phase 4):
+ *   Built at start() time based on config.creds.enabled.  When disabled (the
+ *   default), a NoopCredBroker is used transparently.  The broker is threaded
+ *   through to ControlSocket and (in SCP mode) to scpDeps so downstream
+ *   consumers can call cred_broker_use without holding the secret.
+ *   Cache is cleared on stop() via credBroker.clear().
+ *
+ * Spec reference: PLATFORM.SPEC.md §3.1, §5, §6, §8, §12.5
  */
 
 import { EventEmitter }          from 'node:events';
@@ -45,6 +52,8 @@ import { VncProxy }              from './core/vnc-proxy.js';
 import { ScpHttpServer }         from './core/scp-http-server.js';
 import { MemoryGateway, NoopMemoryGateway } from './core/memory-gateway.js';
 import { AxelCliClient }         from './core/memory/axel-cli-client.js';
+import { CredBroker, NoopCredBroker } from './core/cred-broker.js';
+import { InfisicalClient }       from './core/cred-broker/infisical-client.js';
 import { NoOpIdentityRouter }    from './core/identity-router.js';
 import Docker                    from 'dockerode';
 
@@ -87,6 +96,48 @@ export function defaultMemoryGatewayFactory(config, logger) {
     recallK:        config.memory.recall_k,
     recallMinScore: config.memory.recall_min_score,
     recallMaxChars: config.memory.recall_max_chars,
+    logger,
+  });
+}
+
+/**
+ * Build the appropriate CredBroker based on config.
+ *
+ * - `config.creds.enabled = false` → NoopCredBroker
+ * - `config.creds.broker = 'noop'` → NoopCredBroker
+ * - `config.creds.broker = 'infisical'` → InfisicalClient + CredBroker
+ * - Otherwise → warn + NoopCredBroker
+ *
+ * Exported so tests can exercise the factory branches directly.
+ *
+ * @param {import('./config.js').NormalizedConfig} config
+ * @param {{info,warn,error,debug}} logger
+ * @returns {CredBroker|NoopCredBroker}
+ */
+export function defaultCredBrokerFactory(config, logger) {
+  if (!config.creds?.enabled) {
+    return new NoopCredBroker();
+  }
+  if (config.creds.broker === 'noop') {
+    return new NoopCredBroker();
+  }
+  if (config.creds.broker !== 'infisical') {
+    logger.warn(
+      `BridgeDaemon: cred broker "${config.creds.broker}" is not supported in v0 — only "infisical" is implemented; falling back to NoopCredBroker`,
+    );
+    return new NoopCredBroker();
+  }
+
+  const infisicalClient = new InfisicalClient({
+    baseUrl:             config.creds.infisical_url,
+    tokenFile:           config.creds.infisical_token_file,
+    auditAttributeUser:  config.creds.audit_attribute_user,
+    logger,
+  });
+
+  return new CredBroker({
+    infisicalClient,
+    cacheTtlSecs: config.creds.cache_ttl_secs,
     logger,
   });
 }
@@ -222,6 +273,7 @@ export class BridgeDaemon extends EventEmitter {
    * @param {Function} [opts.scpHttpServerFactory]     - (opts) => ScpHttpServer — injectable for tests.
    * @param {Function} [opts.memoryGatewayFactory]     - (config, logger) => MemoryGateway|NoopMemoryGateway — injectable for tests.
    * @param {Function} [opts.identityRouterFactory]    - ({ config, logger }) => Promise<IdentityRouter|NoOpIdentityRouter> — injectable for tests.
+   * @param {Function} [opts.credBrokerFactory]        - (config, logger) => CredBroker|NoopCredBroker — injectable for tests.
    */
   constructor({
     config,
@@ -236,6 +288,7 @@ export class BridgeDaemon extends EventEmitter {
     scpHttpServerFactory = null,
     memoryGatewayFactory = null,
     identityRouterFactory = null,
+    credBrokerFactory = null,
   } = {}) {
     super();
 
@@ -258,6 +311,9 @@ export class BridgeDaemon extends EventEmitter {
     // Identity router factory (test-injectable).
     this._identityRouterFactory = identityRouterFactory ?? defaultIdentityRouterFactory;
 
+    // Cred broker factory (test-injectable).
+    this._credBrokerFactory = credBrokerFactory ?? defaultCredBrokerFactory;
+
     /** @type {SessionRouter|null} */
     this._sessionRouter = null;
     /** @type {SlackAdapter|null} */
@@ -276,6 +332,10 @@ export class BridgeDaemon extends EventEmitter {
     // Memory gateway (built in start(), available in both bridge and SCP mode).
     /** @type {MemoryGateway|NoopMemoryGateway|null} */
     this._memoryGateway = null;
+
+    // Cred broker (built in start(), available in both bridge and SCP mode).
+    /** @type {CredBroker|NoopCredBroker|null} */
+    this._credBroker = null;
 
     // Identity router (built in start()).
     /** @type {import('./core/identity-router.js').IdentityRouter|import('./core/identity-router.js').NoOpIdentityRouter|null} */
@@ -304,6 +364,12 @@ export class BridgeDaemon extends EventEmitter {
 
     // 0b. Identity router (always built; NoOp when disabled).
     this._identityRouter = await this._identityRouterFactory({ config: this._config, logger: this.logger });
+
+    // 0c. Cred broker (always built; Noop when disabled).
+    this._credBroker = this._credBrokerFactory(this._config, this.logger);
+    this.logger.info?.(
+      `BridgeDaemon: cred broker initialized (enabled=${this._config.creds?.enabled ?? false}, broker=${this._config.creds?.broker ?? 'noop'})`,
+    );
 
     // ── SCP mode bootstrap ────────────────────────────────────────────────
     if (isScp) {
@@ -344,6 +410,7 @@ export class BridgeDaemon extends EventEmitter {
         workspaceManager: this._workspaceManager,
         synapsUserIdResolver,
         memoryGateway: this._memoryGateway,
+        credBroker: this._credBroker,
       };
 
       // 4. Optional HTTP server + VNC proxy.
@@ -381,6 +448,7 @@ export class BridgeDaemon extends EventEmitter {
     this._controlSocket = this._controlSocketFactory({
       sessionRouter: this._sessionRouter,
       identityRouter: this._identityRouter,
+      credBroker: this._credBroker,
       logger: this.logger,
       version: '0.1.0',
     });
@@ -461,6 +529,12 @@ export class BridgeDaemon extends EventEmitter {
       } catch (err) {
         this.logger.warn?.(`BridgeDaemon: memory gateway stop error: ${err.message}`);
       }
+    }
+
+    // Cred broker — clear cache after memory gateway.
+    if (this._credBroker && typeof this._credBroker.clear === 'function') {
+      this._credBroker.clear();
+      this.logger.info?.('BridgeDaemon: cred broker shutdown');
     }
 
     this.emit('stopped');
