@@ -760,3 +760,121 @@ describe('ScpHttpServer — POST /mcp/v1 with fake mcpServer', () => {
     }
   });
 });
+
+// ─── Wave B2 — rate-limit 429 sets Retry-After ─────────────────────────────────
+
+describe('ScpHttpServer — rate-limit Retry-After header (Wave B2)', () => {
+  it('mcpServer.handle returning statusCode=429 + retryAfterMs=2000 → sets Retry-After: 2', async () => {
+    const fakeHandle = vi.fn().mockResolvedValue({
+      statusCode:   429,
+      retryAfterMs: 2000,
+      body: {
+        jsonrpc: '2.0', id: null,
+        error: { code: -32029, message: 'Too many requests', data: { scope: 'token' } },
+      },
+    });
+    const { port, srv } = await startMcpServer({ mcpServer: { handle: fakeHandle } });
+    try {
+      const { statusCode, headers } = await httpPost(port, '/mcp/v1', '{"jsonrpc":"2.0","id":1,"method":"ping"}');
+      expect(statusCode).toBe(429);
+      expect(headers['retry-after']).toBe('2');
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('mcpServer.handle returning statusCode=429 + retryAfterMs=1 → Retry-After: 1 (ceiling)', async () => {
+    const fakeHandle = vi.fn().mockResolvedValue({
+      statusCode:   429,
+      retryAfterMs: 1,
+      body: { jsonrpc: '2.0', id: null, error: { code: -32029, message: 'Too many requests' } },
+    });
+    const { port, srv } = await startMcpServer({ mcpServer: { handle: fakeHandle } });
+    try {
+      const { statusCode, headers } = await httpPost(port, '/mcp/v1', '{"jsonrpc":"2.0","id":1,"method":"ping"}');
+      expect(statusCode).toBe(429);
+      expect(headers['retry-after']).toBe('1');
+    } finally {
+      await srv.stop();
+    }
+  });
+});
+
+// ─── Wave B2 — DCR endpoint ─────────────────────────────────────────────────────
+
+async function startDcrServer({ dcrHandler = null } = {}) {
+  const srv = new ScpHttpServer({
+    config:     makeConfig({ mode: 'scp' }),
+    vncProxy:   makeMockVncProxy(),
+    logger:     makeLogger(),
+    dcrHandler,
+  });
+  const { port } = await srv.start();
+  return { port, srv };
+}
+
+describe('ScpHttpServer — POST /mcp/v1/register DCR (Wave B2)', () => {
+  it('dcrHandler null → 404 not_found', async () => {
+    const { port, srv } = await startDcrServer({ dcrHandler: null });
+    try {
+      const { statusCode, body } = await httpPost(port, '/mcp/v1/register', '{}');
+      expect(statusCode).toBe(404);
+      expect(JSON.parse(body).error).toBe('not_found');
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('dcrHandler.enabled = false → 404 not_found', async () => {
+    const { port, srv } = await startDcrServer({ dcrHandler: { enabled: false, register: async () => ({ statusCode: 404, body: { error: 'not_found' } }) } });
+    try {
+      const { statusCode, body } = await httpPost(port, '/mcp/v1/register', '{}');
+      expect(statusCode).toBe(404);
+      expect(JSON.parse(body).error).toBe('not_found');
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('dcrHandler.enabled=true + register() returns 201 → 201 response body forwarded', async () => {
+    const regResponse = {
+      client_id:                'abc123',
+      client_secret:            'raw-token-xyz',
+      client_secret_expires_at: 9999999999,
+    };
+    const dcrHandler = {
+      enabled:  true,
+      register: vi.fn().mockResolvedValue({ statusCode: 201, body: regResponse }),
+    };
+    const { port, srv } = await startDcrServer({ dcrHandler });
+    try {
+      const { statusCode, body } = await httpPost(port, '/mcp/v1/register',
+        JSON.stringify({ client_name: 'TestClient', registration_secret: 's3cr3t', synaps_user_id: 'u1' }),
+      );
+      expect(statusCode).toBe(201);
+      const parsed = JSON.parse(body);
+      expect(parsed.client_id).toBe('abc123');
+      expect(parsed.client_secret).toBe('raw-token-xyz');
+      expect(dcrHandler.register).toHaveBeenCalledTimes(1);
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('dcrHandler.enabled=true + register() returns 401 (wrong secret) → 401', async () => {
+    const dcrHandler = {
+      enabled:  true,
+      register: vi.fn().mockResolvedValue({ statusCode: 401, body: { error: 'invalid_client' } }),
+    };
+    const { port, srv } = await startDcrServer({ dcrHandler });
+    try {
+      const { statusCode, body } = await httpPost(port, '/mcp/v1/register',
+        JSON.stringify({ registration_secret: 'wrong', synaps_user_id: 'u1' }),
+      );
+      expect(statusCode).toBe(401);
+      expect(JSON.parse(body).error).toBe('invalid_client');
+    } finally {
+      await srv.stop();
+    }
+  });
+});

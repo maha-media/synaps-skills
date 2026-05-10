@@ -86,9 +86,18 @@ function ts() {
 }
 
 function makeLogger() {
-  const write = (level, msg) => {
+  const fmt = (parts) =>
+    parts
+      .map((p) => {
+        if (p instanceof Error) return p.stack || p.message;
+        if (typeof p === 'string') return p;
+        try { return JSON.stringify(p); } catch { return String(p); }
+      })
+      .join(' ');
+
+  const write = (level, ...parts) => {
     if ((LEVEL_ORDER[level] ?? 0) < levelThreshold) return;
-    const line = `[${ts()}] [${level}] ${msg}`;
+    const line = `[${ts()}] [${level}] ${fmt(parts)}`;
     if (level === 'error' || level === 'warn') {
       process.stderr.write(line + '\n');
     } else {
@@ -97,10 +106,10 @@ function makeLogger() {
   };
 
   return {
-    debug: (msg) => write('debug', msg),
-    info:  (msg) => write('info',  msg),
-    warn:  (msg) => write('warn',  msg),
-    error: (msg) => write('error', msg),
+    debug: (...a) => write('debug', ...a),
+    info:  (...a) => write('info',  ...a),
+    warn:  (...a) => write('warn',  ...a),
+    error: (...a) => write('error', ...a),
   };
 }
 

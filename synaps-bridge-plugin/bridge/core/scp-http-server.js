@@ -17,6 +17,8 @@
  */
 
 import http from 'node:http';
+import { McpSseTransport } from './mcp/mcp-sse-transport.js';
+import { hashToken }       from './mcp/mcp-token-resolver.js';
 
 // ─── sentinels ────────────────────────────────────────────────────────────────
 const BODY_TOO_LARGE = Symbol('body_too_large');
@@ -34,6 +36,12 @@ const BAD_JSON       = Symbol('bad_json');
  * @property {number}   [bridgeCriticalMs=60_000] - Age threshold (ms) above which the
  *                                          bridge heartbeat is considered critical-stale
  *                                          → 503 down.
+ * @property {object}   [rateLimiter]     - McpRateLimiter instance; when present, passed
+ *                                          tokenHash + ip on every /mcp/v1 POST.
+ * @property {boolean}  [sseEnabled=false]- When true, SSE upgrade is performed on
+ *                                          tools/call responses that carry sse:true.
+ * @property {object}   [dcrHandler]      - McpDcrHandler instance; when present,
+ *                                          POST /mcp/v1/register is handled.
  */
 
 /**
@@ -57,6 +65,9 @@ export class ScpHttpServer {
     bridgeCriticalMs = 60_000,
     mcpServer      = null,
     maxBodyBytes   = 262_144,
+    rateLimiter    = null,
+    sseEnabled     = false,
+    dcrHandler     = null,
   }) {
     if (!config)   throw new TypeError('ScpHttpServer: opts.config is required');
     if (!vncProxy) throw new TypeError('ScpHttpServer: opts.vncProxy is required');
@@ -68,6 +79,9 @@ export class ScpHttpServer {
     this._bridgeCriticalMs = bridgeCriticalMs;
     this._mcpServer        = mcpServer;
     this._maxBodyBytes     = maxBodyBytes;
+    this._rateLimiter      = rateLimiter;
+    this._sseEnabled       = Boolean(sseEnabled);
+    this._dcrHandler       = dcrHandler;
 
     /** @type {import('node:http').Server | null} */
     this._server = null;
@@ -107,6 +121,9 @@ export class ScpHttpServer {
     const logger           = this._logger;
     const mcpServer        = this._mcpServer;
     const maxBodyBytes     = this._maxBodyBytes;
+    const rateLimiter      = this._rateLimiter;
+    const sseEnabled       = this._sseEnabled;
+    const dcrHandler       = this._dcrHandler;
     const self             = this;
 
     // ── request handler ───────────────────────────────────────────────────────
@@ -181,6 +198,27 @@ export class ScpHttpServer {
           return;
         }
 
+        // ── /mcp/v1/register → DCR ───────────────────────────────────────────
+        if (url === '/mcp/v1/register') {
+          if (req.method !== 'POST') {
+            res.writeHead(405, { Allow: 'POST', 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'method_not_allowed' }));
+            return;
+          }
+          if (!dcrHandler || !dcrHandler.enabled) {
+            return _sendJson(res, 404, { error: 'not_found' });
+          }
+          const dcrBody = await self._readJsonBody(req, maxBodyBytes);
+          if (dcrBody === BODY_TOO_LARGE) {
+            return _sendJson(res, 413, { error: 'request_entity_too_large' });
+          }
+          if (dcrBody === BAD_JSON) {
+            return _sendJson(res, 400, { error: 'invalid_request', error_description: 'Malformed JSON' });
+          }
+          const dcrOut = await dcrHandler.register(dcrBody);
+          return _sendJson(res, dcrOut.statusCode, dcrOut.body);
+        }
+
         // ── /mcp/v1 → MCP JSON-RPC dispatcher ────────────────────────────────
         if (url === '/mcp/v1') {
           if (req.method === 'GET') {
@@ -206,7 +244,43 @@ export class ScpHttpServer {
               });
             }
             const token = req.headers['mcp-token'] || null;
-            const out = await mcpServer.handle({ token, body });
+
+            // Compute tokenHash for rate-limiting (SHA-256 of raw bearer).
+            const tokenHash = token ? hashToken(token) : null;
+
+            // Normalise IPv6-mapped IPv4 (::ffff:1.2.3.4 → 1.2.3.4).
+            const rawIp  = req.socket?.remoteAddress ?? null;
+            const ip     = rawIp ? rawIp.replace(/^::ffff:/, '') : null;
+
+            // Accept header for SSE detection.
+            const accept = req.headers['accept'] ?? null;
+
+            const out = await mcpServer.handle({ token, body, tokenHash, ip, accept });
+
+            // ── SSE streaming path ────────────────────────────────────────────
+            if (out.sse === true && sseEnabled && typeof out.sseDispatcher === 'function') {
+              const transport = new McpSseTransport({ res, logger });
+              transport.start();
+              try {
+                await out.sseDispatcher(transport);
+              } catch (sseErr) {
+                logger.error('[ScpHttpServer] SSE dispatcher error', sseErr);
+                const errId = body?.id ?? null;
+                transport.error(errId, { code: -32603, message: 'Internal error' });
+              } finally {
+                transport.close();
+              }
+              return;
+            }
+
+            // ── Rate-limited — set Retry-After header ─────────────────────────
+            if (out.statusCode === 429 && out.retryAfterMs != null) {
+              const retrySecs = Math.ceil(out.retryAfterMs / 1000);
+              if (!res.headersSent) {
+                res.setHeader('Retry-After', String(retrySecs));
+              }
+            }
+
             if (out.body === null) {
               res.writeHead(out.statusCode);
               return res.end();

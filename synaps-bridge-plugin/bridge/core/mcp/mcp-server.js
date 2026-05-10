@@ -35,6 +35,7 @@ export const MCP_ERROR_CODES = Object.freeze({
   AUTH_REQUIRED:     -32001,
   TOOL_TIMEOUT:      -32002,
   APPROVAL_REQUIRED: -32003,
+  RATE_LIMITED:      -32029,
 });
 
 const DEFAULT_INSTRUCTIONS =
@@ -77,6 +78,10 @@ export class McpServer {
    * @param {object}   opts.toolRegistry    — { listTools(ctx), callTool({...args}) }
    * @param {object}   opts.approvalGate    — { filterTools(tools, ctx), isToolAllowed(name, ctx) }
    * @param {object}   [opts.audit]         — { record(entry) } — defaults to no-op
+   * @param {object}   [opts.rateLimiter]   — { check({tokenHash, ip}) → {allowed, retryAfterMs?, scope?} }
+   *                                          When omitted, rate-limiting is skipped.
+   * @param {boolean}  [opts.sseEnabled=false] — When true, tools/call with Accept: text/event-stream
+   *                                             returns {sse:true, sseDispatcher} instead of a JSON body.
    * @param {object}   [opts.logger=console]
    * @param {string}   [opts.serverName='synaps-control-plane']
    * @param {string}   [opts.serverVersion='0.1.0']
@@ -88,6 +93,8 @@ export class McpServer {
     toolRegistry,
     approvalGate,
     audit         = NO_OP_AUDIT,
+    rateLimiter   = null,
+    sseEnabled    = false,
     logger        = console,
     serverName    = 'synaps-control-plane',
     serverVersion = '0.1.0',
@@ -102,6 +109,8 @@ export class McpServer {
     this._toolRegistry  = toolRegistry;
     this._approvalGate  = approvalGate;
     this._audit         = audit;
+    this._rateLimiter   = rateLimiter;
+    this._sseEnabled    = Boolean(sseEnabled);
     this._logger        = logger;
     this._serverName    = serverName;
     this._serverVersion = serverVersion;
@@ -115,12 +124,40 @@ export class McpServer {
    * Handle a single JSON-RPC request body.
    *
    * @param {object}           req
-   * @param {string|undefined} req.token  — raw bearer token from MCP-Token header
-   * @param {object|null}      req.body   — already-parsed JSON body (or null for empty)
-   * @returns {Promise<{statusCode: number, body: object|null}>}
+   * @param {string|undefined} req.token      — raw bearer token from MCP-Token header
+   * @param {object|null}      req.body       — already-parsed JSON body (or null for empty)
+   * @param {string|undefined} [req.tokenHash] — SHA-256 hex hash of bearer token (for rate-limiting)
+   * @param {string|undefined} [req.ip]        — remote IP address (for rate-limiting)
+   * @param {string|undefined} [req.accept]    — value of Accept header (for SSE detection)
+   * @returns {Promise<{statusCode: number, body: object|null}
+   *                  |{statusCode: 200, sse: true, sseDispatcher: Function}>}
    */
-  async handle({ token, body }) {
+  async handle({ token, body, tokenHash, ip, accept }) {
     const startTs = this._now();
+
+    // ── 0. Rate-limit check ───────────────────────────────────────────────────
+    //  Runs BEFORE body validation so even malformed requests are counted.
+    //  Only applied when a rateLimiter is injected.
+
+    if (this._rateLimiter) {
+      const rl = this._rateLimiter.check({ tokenHash: tokenHash ?? null, ip: ip ?? null });
+      if (!rl.allowed) {
+        return {
+          statusCode: 429,
+          body: errResponse(
+            null,
+            MCP_ERROR_CODES.RATE_LIMITED,
+            'Too many requests',
+            {
+              retry_after_ms: rl.retryAfterMs ?? 1000,
+              scope:          rl.scope ?? 'unknown',
+            },
+          ),
+          // Callers can read retryAfterMs from body.error.data to set Retry-After header.
+          retryAfterMs: rl.retryAfterMs ?? 1000,
+        };
+      }
+    }
 
     // ── 1. Parse-time validation ──────────────────────────────────────────────
 
@@ -317,12 +354,55 @@ export class McpServer {
 
           // Dispatch to tool registry
           try {
+            // ── SSE streaming branch ────────────────────────────────────────
+            // When the client sends Accept: text/event-stream AND sse is enabled,
+            // signal to the HTTP layer that it should stream the response.
+            // The sseDispatcher fn receives a McpSseTransport instance and is
+            // responsible for calling transport.notify() / transport.result().
+            const wantsSSE =
+              this._sseEnabled &&
+              typeof accept === 'string' &&
+              accept.includes('text/event-stream');
+
             const result = await this._toolRegistry.callTool({
               name:            callName,
               arguments:       callArgs,
               synaps_user_id,
               institution_id,
             });
+
+            if (wantsSSE) {
+              // Record audit before returning the streaming marker so
+              // the dispatcher result is captured asynchronously.
+              await this._recordAudit({
+                ts:              startTs,
+                synaps_user_id,
+                institution_id,
+                method,
+                tool_name,
+                outcome:         'ok',
+                duration_ms:     this._now() - startTs,
+                error_code:      null,
+                client_info,
+              });
+
+              // sseDispatcher is called by ScpHttpServer with a McpSseTransport
+              // instance after it has set up the SSE response.
+              const capturedResult = result;
+              const capturedId     = id;
+              return {
+                statusCode:    200,
+                sse:           true,
+                sseDispatcher: async (transport) => {
+                  // Emit a single notification then the final result frame.
+                  // (Chunk-by-chunk streaming from synaps_chat is a future TODO —
+                  //  Phase 8 exercises the SSE framing path end-to-end.)
+                  transport.notify('synaps/result', capturedResult);
+                  transport.result(capturedId, capturedResult);
+                },
+              };
+            }
+
             // result is the MCP {content, isError} shape — wrap in JSON-RPC result
             responseBody = okResponse(id, result);
           } catch (err) {
@@ -337,7 +417,7 @@ export class McpServer {
               error_code   = MCP_ERROR_CODES.TOOL_TIMEOUT;
               responseBody = errResponse(id, MCP_ERROR_CODES.TOOL_TIMEOUT, err.message);
             } else {
-              this._logger.error('[McpServer] toolRegistry.callTool threw:', err.message);
+              this._logger.error('[McpServer] toolRegistry.callTool threw:', err);
               error_code   = MCP_ERROR_CODES.INTERNAL_ERROR;
               responseBody = errResponse(id, MCP_ERROR_CODES.INTERNAL_ERROR, 'Internal error');
             }
