@@ -668,3 +668,139 @@ cross-channel memory recall, and rollback instructions.
    in the DB after linking. A Phase 5 cleanup job will reap them.
 3. **Web task-tree styling:** `task_update` data arrives in SSE frames but the
    React UI renders it as raw JSON only. Full styling deferred to Phase 5.
+
+---
+
+## Phase 4 — Credentials
+
+**Status:** Credentials broker — landed (Wave A + Wave B + Wave C).
+
+Result-proxy credential broker backed by [Infisical](https://infisical.com).
+The broker fetches a secret token server-side and signs outbound API requests
+on behalf of the agent — **the token never crosses the agent boundary.**
+The agent receives only the HTTP response; it cannot extract, log, or forward
+the credential.
+
+**Disabled by default** — the Slack bridge is unaffected. Set
+`[creds] enabled = true` to opt in.
+
+**Quick links:**
+- Smoke playbook: [`docs/smoke/phase-4-credentials.md`](docs/smoke/phase-4-credentials.md)
+- CredBroker: [`bridge/core/cred-broker.js`](bridge/core/cred-broker.js)
+- InfisicalClient: [`bridge/core/cred-broker/infisical-client.js`](bridge/core/cred-broker/infisical-client.js)
+- ControlSocket op: `cred_broker_use` in [`bridge/control-socket.js`](bridge/control-socket.js)
+
+### How CredBroker works (result-proxy pattern)
+
+```
+Agent / SCP consumer
+       │
+       │  { op:"cred_broker_use", synaps_user_id, institution_id, key, request }
+       ▼
+  ControlSocket (UDS)
+       │
+       ▼
+  CredBroker.use()
+       │
+       ├─ 1. Validate request shape
+       │
+       ├─ 2. Resolve token (cache → Infisical → graceful-degradation stale cache)
+       │       └─ InfisicalClient.getSecret({ institutionId, synapsUserId, key })
+       │              GET <infisical_url>/api/v3/secrets/raw?workspaceId=…&secretPath=…&secretName=…
+       │
+       ├─ 3. Inject Authorization: Bearer <token>  (strips any caller-supplied header)
+       │
+       ├─ 4. Forward request to upstream API  (real fetch, server-side)
+       │
+       └─ 5. Return { status, headers, body, cached, fetchedAt }
+               Token is NOT present anywhere in this object
+```
+
+### New config: `[creds]`
+
+```toml
+[creds]
+enabled               = false          # opt-in — set true to activate
+broker                = "infisical"    # only "infisical" is implemented in v0
+infisical_url         = "https://infisical.example.com"
+infisical_token_file  = "~/.config/synaps/infisical-token"
+cache_ttl_secs        = 300            # last-known-good cache window (seconds)
+audit_attribute_user  = true           # include synapsUserId in User-Agent for audit trail
+```
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `false` | Opt-in gate — set `true` to activate |
+| `broker` | `"infisical"` | Backend: `"infisical"` or `"noop"` |
+| `infisical_url` | `""` | Infisical API base URL |
+| `infisical_token_file` | `""` | Path to file containing the Infisical service token (mode `0600`) |
+| `cache_ttl_secs` | `300` | Last-known-good token cache TTL; graceful degradation serves stale within 2× TTL on Infisical outage |
+| `audit_attribute_user` | `true` | Adds `User-Agent: synaps-cred-broker/<synapsUserId>` to Infisical requests for per-user audit attribution |
+
+### New ControlSocket op (Phase 4)
+
+| Op | Request fields | Response (success) | Response (error) |
+|---|---|---|---|
+| `cred_broker_use` | `synaps_user_id`, `institution_id`, `key`, `request.{method,url,headers?,body?}` | `{ ok:true, status, headers, body, cached, fetched_at }` | `{ ok:false, code, error }` |
+
+**Error codes:**
+
+| Code | Cause |
+|---|---|
+| `creds_disabled` | `[creds] enabled = false` or broker not injected |
+| `invalid_request` | Missing or malformed required fields |
+| `creds_unavailable` | Token could not be fetched and no usable cache |
+| `secret_not_found` | Infisical returned 404 for the requested key |
+| `broker_auth_failed` | Infisical rejected the service token (401/403) |
+| `broker_upstream` | Infisical returned 5xx or had a network failure |
+
+### Default-off posture
+
+When `enabled = false` (the default), a `NoopCredBroker` is wired in transparently:
+
+- Every `use()` call throws `CredBrokerDisabledError` (code `creds_disabled`).
+- The Slack bridge, session router, memory gateway, and identity router are completely unaffected.
+- No Infisical client is instantiated; no network calls are made.
+- The control socket returns `{ ok: false, code: "creds_disabled" }` for any
+  `cred_broker_use` op.
+
+### Infisical secret path convention
+
+Secrets are stored at:
+
+```
+/<projectId>/
+  /users/<synapsUserId>/
+    <key>          ← e.g. "github.token"
+```
+
+`institutionId` maps 1:1 to the Infisical `workspaceId` (project ID).
+`synapsUserId` maps to the folder `/users/<synapsUserId>`.
+`key` is the secret name within that folder.
+
+### What Phase 4 ships
+
+- `bridge/core/cred-broker.js` — `CredBroker` + `NoopCredBroker` + error classes
+- `bridge/core/cred-broker/infisical-client.js` — `InfisicalClient` (HTTP wrapper)
+- `defaultCredBrokerFactory` in `bridge/index.js`
+- `cred_broker_use` op in `bridge/control-socket.js`
+- `[creds]` config section in `bridge/config.js`
+
+### Acceptance tests
+
+| File | Tests |
+|------|-------|
+| `tests/scp-phase-4/00-cred-broker-result-proxy.test.mjs` | 7 |
+| `tests/scp-phase-4/01-cred-broker-cache-and-fallback.test.mjs` | 8 |
+| `tests/scp-phase-4/02-cred-broker-control-socket.test.mjs` | 16 |
+| `tests/scp-phase-4/03-cred-broker-disabled-noop.test.mjs` | 6 |
+| **Total new** | **37** |
+
+### Operator playbook
+
+See [`docs/smoke/phase-4-credentials.md`](docs/smoke/phase-4-credentials.md)
+for the full 9-step smoke verification procedure including: Infisical project
+setup, token file configuration, daemon startup log verification, UDS
+round-trip confirmation, audit log inspection, cache behaviour under Infisical
+outage, graceful-degradation window testing, `creds_unavailable` boundary
+check, and a token-leak audit against daemon logs.
