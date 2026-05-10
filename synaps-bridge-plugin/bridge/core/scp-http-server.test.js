@@ -978,3 +978,117 @@ describe('ScpHttpServer — /metrics endpoint (Phase 9 C3 Track 6)', () => {
     }
   });
 });
+
+// ─── oauthServer wiring (Phase 9 Wave C) ─────────────────────────────────────
+
+describe('ScpHttpServer — oauthServer wiring (Phase 9 Wave C)', () => {
+  it('with oauthServer = null, OAuth path returns 404 (Phase 8 baseline unchanged)', async () => {
+    const srv = new ScpHttpServer({
+      config:   makeConfig(),
+      vncProxy: makeMockVncProxy(),
+      logger:   makeLogger(),
+      // oauthServer intentionally omitted / null
+    });
+    await srv.start();
+    const { port } = await srv.start().catch(() => ({ port: srv._server.address().port }));
+    const addr = srv._server.address().port;
+    try {
+      const { statusCode } = await httpGet(addr, '/.well-known/oauth-authorization-server');
+      expect(statusCode).toBe(404);
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('with mock oauthServer whose .handle returns true, request is handled', async () => {
+    const mockOauthServer = {
+      handle: vi.fn(async (_req, res, _pathname, _query) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ stub: 'oauth' }));
+        return true;
+      }),
+    };
+
+    const srv = new ScpHttpServer({
+      config:      makeConfig(),
+      vncProxy:    makeMockVncProxy(),
+      logger:      makeLogger(),
+      oauthServer: mockOauthServer,
+    });
+    await srv.start();
+    const addr = srv._server.address().port;
+    try {
+      const { statusCode, body } = await httpGet(addr, '/.well-known/oauth-authorization-server');
+      expect(statusCode).toBe(200);
+      expect(JSON.parse(body)).toMatchObject({ stub: 'oauth' });
+      expect(mockOauthServer.handle).toHaveBeenCalled();
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('metadata path works alongside existing /health route', async () => {
+    const mockOauthServer = {
+      handle: vi.fn(async (_req, res, pathname, _query) => {
+        if (pathname === '/.well-known/oauth-authorization-server') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ issuer: 'http://localhost:18080' }));
+          return true;
+        }
+        return false;
+      }),
+    };
+
+    const srv = new ScpHttpServer({
+      config:      makeConfig(),
+      vncProxy:    makeMockVncProxy(),
+      logger:      makeLogger(),
+      oauthServer: mockOauthServer,
+    });
+    await srv.start();
+    const addr = srv._server.address().port;
+    try {
+      const healthRes = await httpGet(addr, '/health');
+      expect(healthRes.statusCode).toBe(200);
+
+      const oauthRes = await httpGet(addr, '/.well-known/oauth-authorization-server');
+      expect(oauthRes.statusCode).toBe(200);
+      expect(JSON.parse(oauthRes.body).issuer).toBe('http://localhost:18080');
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('POST /mcp/v1/token with valid body passes through to oauthServer', async () => {
+    const mockOauthServer = {
+      handle: vi.fn(async (req, res, pathname) => {
+        if (pathname === '/mcp/v1/token' && req.method === 'POST') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ access_token: 'test-token', token_type: 'bearer', expires_in: 3600, scope: '' }));
+          return true;
+        }
+        return false;
+      }),
+    };
+
+    const srv = new ScpHttpServer({
+      config:      makeConfig(),
+      vncProxy:    makeMockVncProxy(),
+      logger:      makeLogger(),
+      oauthServer: mockOauthServer,
+    });
+    await srv.start();
+    const addr = srv._server.address().port;
+    try {
+      const body = 'grant_type=authorization_code&code=abc&code_verifier=v&client_id=c&redirect_uri=https%3A%2F%2Fx.com';
+      const { statusCode, body: respBody } = await httpPost(addr, '/mcp/v1/token', body, {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(statusCode).toBe(200);
+      expect(JSON.parse(respBody)).toMatchObject({ token_type: 'bearer' });
+      expect(mockOauthServer.handle).toHaveBeenCalled();
+    } finally {
+      await srv.stop();
+    }
+  });
+});
