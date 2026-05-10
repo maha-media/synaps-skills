@@ -592,3 +592,349 @@ describe('bootSlackAdapter', () => {
     ).rejects.toThrow(/SLACK_BOT_TOKEN/);
   });
 });
+
+// ─── Memory gateway hooks ─────────────────────────────────────────────────────
+
+import { NoopMemoryGateway } from '../../core/memory-gateway.js';
+
+/**
+ * Helper: flush all pending microtasks + one macrotask tick so that
+ * fire-and-forget store() promises settle before we assert on them.
+ */
+async function flushAsync() {
+  await new Promise((r) => setTimeout(r, 0));
+}
+
+/**
+ * Build a memory-enabled adapter and helpers for driving a full message flow.
+ *
+ * The router's rpc.prompt mock emits 'agent_end' from the rpc EventEmitter
+ * before resolving, which drives the StreamingProxy's internal handler and
+ * ultimately fires proxy.emit('agent_end', { final_text }).
+ *
+ * @param {object} memoryGateway
+ * @param {object} [extraOverrides]
+ */
+function buildMemoryAdapter(memoryGateway, extraOverrides = {}) {
+  const app = mockBoltApp();
+  const router = mockSessionRouter();
+  const boltFactory = vi.fn().mockReturnValue(app);
+
+  // Make rpc.prompt emit agent_end from the rpc emitter before resolving.
+  // The StreamingProxy listens on rpc.on('agent_end', ...) and forwards it
+  // to proxy.emit('agent_end', { final_text: <accumulated> }) after draining.
+  router.rpc.prompt = vi.fn().mockImplementation(async () => {
+    // Emit agent_end from rpc so the proxy picks it up via its listener.
+    router.rpc.emit('agent_end', { usage: null });
+    return { ok: true };
+  });
+
+  const adapter = new SlackAdapter({
+    boltAppFactory: boltFactory,
+    sessionRouter: router,
+    auth: { botToken: 'xoxb-test-token', appToken: 'xapp-test-token' },
+    logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
+    memoryGateway,
+    ...extraOverrides,
+  });
+
+  return { adapter, app, router, boltFactory };
+}
+
+/**
+ * Invoke the app_mention handler through a started adapter.
+ */
+async function invokeWithMemory(adapter, app, eventOverrides = {}) {
+  await adapter.start();
+  const handler = app.handlers.events.get('app_mention');
+  const event = {
+    channel: 'C123',
+    ts: '1620000000.000100',
+    thread_ts: null,
+    text: '<@U0BOTID> hello',
+    user: 'U123',
+    files: [],
+    ...eventOverrides,
+  };
+  const client = mockClient();
+  await handler({ event, client, ack: vi.fn() });
+  return { event, client };
+}
+
+describe('SlackAdapter — memory gateway: optional (null)', () => {
+  it('adapter works exactly as before when memoryGateway not provided', async () => {
+    // Use the standard buildAdapter (no memoryGateway)
+    const { adapter, app, router } = buildAdapter();
+    await adapter.start();
+    const handler = app.handlers.events.get('app_mention');
+    const client = mockClient();
+    await handler({
+      event: {
+        channel: 'C123',
+        ts: '100.000',
+        thread_ts: null,
+        text: '<@BOT> hello world',
+        user: 'U001',
+        files: [],
+      },
+      client,
+      ack: vi.fn(),
+    });
+    // Original body is unchanged; no memory calls
+    expect(router.rpc.prompt).toHaveBeenCalledWith('hello world', []);
+  });
+
+  it('memoryGateway null: recall and store are never invoked', async () => {
+    const recall = vi.fn();
+    const store = vi.fn();
+    // Build WITHOUT memoryGateway (null by default)
+    const { adapter, app, router } = buildAdapter();
+    await adapter.start();
+    const handler = app.handlers.events.get('app_mention');
+    const client = mockClient();
+    await handler({
+      event: {
+        channel: 'C123',
+        ts: '100.100',
+        thread_ts: null,
+        text: '<@BOT> hello',
+        user: 'U001',
+        files: [],
+      },
+      client,
+      ack: vi.fn(),
+    });
+    expect(recall).not.toHaveBeenCalled();
+    expect(store).not.toHaveBeenCalled();
+    expect(router.rpc.prompt).toHaveBeenCalledWith('hello', []);
+  });
+});
+
+describe('SlackAdapter — memory gateway: recall', () => {
+  it('recall is called with the resolved synapsUserId and message body', async () => {
+    const memoryGateway = {
+      recall: vi.fn().mockResolvedValue(null),
+      store: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    const { adapter, app } = buildMemoryAdapter(memoryGateway);
+    await invokeWithMemory(adapter, app, {
+      text: '<@U0BOTID> hello',
+      user: 'U123',
+    });
+    // Phase 2 v0: synapsUserId === slackUserId
+    expect(memoryGateway.recall).toHaveBeenCalledWith('U123', 'hello');
+  });
+
+  it('recall result is prepended to the prompt body', async () => {
+    const memoryGateway = {
+      recall: vi.fn().mockResolvedValue('- you said X yesterday\n- you like Y'),
+      store: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    const { adapter, app, router } = buildMemoryAdapter(memoryGateway);
+    await invokeWithMemory(adapter, app, {
+      text: '<@U0BOTID> hello',
+      user: 'U123',
+    });
+    const [calledBody] = router.rpc.prompt.mock.calls[0];
+    expect(calledBody).toMatch(/^\[memory_recall\]\n.*\n\[\/memory_recall\]\n\nhello$/s);
+    expect(calledBody).toContain('- you said X yesterday');
+    expect(calledBody).toContain('- you like Y');
+  });
+
+  it('recall returns null → no augmentation, prompt called with original body', async () => {
+    const memoryGateway = {
+      recall: vi.fn().mockResolvedValue(null),
+      store: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    const { adapter, app, router } = buildMemoryAdapter(memoryGateway);
+    await invokeWithMemory(adapter, app, {
+      text: '<@U0BOTID> hello',
+      user: 'U123',
+    });
+    expect(router.rpc.prompt).toHaveBeenCalledWith('hello', []);
+  });
+
+  it('recall returns empty string → no augmentation, prompt called with original body', async () => {
+    const memoryGateway = {
+      recall: vi.fn().mockResolvedValue(''),
+      store: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    const { adapter, app, router } = buildMemoryAdapter(memoryGateway);
+    await invokeWithMemory(adapter, app, {
+      text: '<@U0BOTID> hello',
+      user: 'U123',
+    });
+    expect(router.rpc.prompt).toHaveBeenCalledWith('hello', []);
+  });
+
+  it('recall throws → defensive guard, prompt called with unmodified body', async () => {
+    const warnSpy = vi.fn();
+    const memoryGateway = {
+      recall: vi.fn().mockRejectedValue(new Error('boom')),
+      store: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    const { adapter, app, router } = buildMemoryAdapter(memoryGateway, {
+      logger: { warn: warnSpy, info: vi.fn(), error: vi.fn() },
+    });
+    // Should not throw
+    await expect(invokeWithMemory(adapter, app, {
+      text: '<@U0BOTID> hello',
+      user: 'U123',
+    })).resolves.not.toThrow();
+    // Prompt still called with original body
+    expect(router.rpc.prompt).toHaveBeenCalledWith('hello', []);
+    // Guard warning was logged
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/memory recall guard hit/),
+    );
+  });
+});
+
+describe('SlackAdapter — memory gateway: store on agent_end', () => {
+  it('store is called on agent_end with final_text and metadata', async () => {
+    const memoryGateway = {
+      recall: vi.fn().mockResolvedValue(null),
+      store: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    const { adapter, app, router } = buildMemoryAdapter(memoryGateway);
+
+    // Emit text_delta from rpc before agent_end so final_text is non-empty.
+    const originalPrompt = router.rpc.prompt;
+    router.rpc.prompt = vi.fn().mockImplementation(async () => {
+      router.rpc.emit('message_update', { type: 'text_delta', delta: 'goodbye' });
+      router.rpc.emit('agent_end', { usage: null });
+      return { ok: true };
+    });
+
+    await invokeWithMemory(adapter, app, {
+      channel: 'C999',
+      ts: '200.000',
+      thread_ts: '200.000',
+      text: '<@U0BOTID> hi',
+      user: 'U123',
+    });
+    await flushAsync();
+
+    expect(memoryGateway.store).toHaveBeenCalledWith(
+      'U123',
+      'goodbye',
+      expect.objectContaining({
+        source: 'slack',
+        category: 'conversation',
+      }),
+    );
+  });
+
+  it('store NOT called when agent_end has empty final_text', async () => {
+    const memoryGateway = {
+      recall: vi.fn().mockResolvedValue(null),
+      store: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    const { adapter, app } = buildMemoryAdapter(memoryGateway);
+    // No text_delta emitted → accumulated text is '' → final_text is ''
+    await invokeWithMemory(adapter, app, {
+      text: '<@U0BOTID> hello',
+      user: 'U123',
+    });
+    await flushAsync();
+    expect(memoryGateway.store).not.toHaveBeenCalled();
+  });
+
+  it('store error is swallowed — no unhandled rejection', async () => {
+    const memoryGateway = {
+      recall: vi.fn().mockResolvedValue(null),
+      store: vi.fn().mockRejectedValue(new Error('store boom')),
+    };
+    const { adapter, app, router } = buildMemoryAdapter(memoryGateway);
+
+    router.rpc.prompt = vi.fn().mockImplementation(async () => {
+      router.rpc.emit('message_update', { type: 'text_delta', delta: 'response' });
+      router.rpc.emit('agent_end', { usage: null });
+      return { ok: true };
+    });
+
+    // Should not throw or produce an unhandled rejection
+    await expect(invokeWithMemory(adapter, app, {
+      text: '<@U0BOTID> hi',
+      user: 'U123',
+    })).resolves.not.toThrow();
+
+    await flushAsync();
+    // store was called (and rejected — swallowed)
+    expect(memoryGateway.store).toHaveBeenCalled();
+  });
+
+  it('store receives conversation and thread from the message context', async () => {
+    const memoryGateway = {
+      recall: vi.fn().mockResolvedValue(null),
+      store: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    const { adapter, app, router } = buildMemoryAdapter(memoryGateway);
+
+    router.rpc.prompt = vi.fn().mockImplementation(async () => {
+      router.rpc.emit('message_update', { type: 'text_delta', delta: 'ack' });
+      router.rpc.emit('agent_end', { usage: null });
+      return { ok: true };
+    });
+
+    await invokeWithMemory(adapter, app, {
+      channel: 'C_STORE_TEST',
+      ts: '300.000',
+      thread_ts: '300.000',
+      text: '<@U0BOTID> test store meta',
+      user: 'U123',
+    });
+    await flushAsync();
+
+    expect(memoryGateway.store).toHaveBeenCalledWith(
+      'U123',
+      'ack',
+      {
+        source: 'slack',
+        conversation: 'C_STORE_TEST',
+        thread: '300.000',
+        category: 'conversation',
+      },
+    );
+  });
+});
+
+describe('SlackAdapter — NoopMemoryGateway integration', () => {
+  it('NoopMemoryGateway: recall returns null → no augmentation', async () => {
+    const noop = new NoopMemoryGateway();
+    const { adapter, app, router } = buildMemoryAdapter(noop);
+    await invokeWithMemory(adapter, app, {
+      text: '<@U0BOTID> hello',
+      user: 'U123',
+    });
+    // recall returns null → body unchanged
+    expect(router.rpc.prompt).toHaveBeenCalledWith('hello', []);
+  });
+
+  it('NoopMemoryGateway: store is a no-op — no errors thrown', async () => {
+    const noop = new NoopMemoryGateway();
+    const { adapter, app, router } = buildMemoryAdapter(noop);
+
+    router.rpc.prompt = vi.fn().mockImplementation(async () => {
+      router.rpc.emit('message_update', { type: 'text_delta', delta: 'noop response' });
+      router.rpc.emit('agent_end', { usage: null });
+      return { ok: true };
+    });
+
+    await expect(invokeWithMemory(adapter, app, {
+      text: '<@U0BOTID> hello',
+      user: 'U123',
+    })).resolves.not.toThrow();
+
+    await flushAsync();
+    // No error — noop silently returns { ok: true, noop: true }
+  });
+});
+
+describe('SlackAdapter — _resolveSynapsUserId', () => {
+  it('returns the Slack user ID directly (Phase 2 v0 — no IdentityRouter)', () => {
+    const { adapter } = buildAdapter();
+    expect(adapter._resolveSynapsUserId('U123')).toBe('U123');
+    expect(adapter._resolveSynapsUserId('UABC456')).toBe('UABC456');
+  });
+});
