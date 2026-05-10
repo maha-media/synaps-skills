@@ -1226,3 +1226,122 @@ ScpHttpServer integration, acceptance criteria, out-of-scope items, and risks.
 | **Total new (C2)** | **51** |
 | **ControlSocket MCP token unit tests (C1)** | **20** |
 | **Phase 7 total** | **71** |
+
+---
+
+## Phase 8 — Production Hardening
+
+**Status:** Production hardening — merged (PR #40, stacked on #39).
+
+Four independently-gated production hardening tracks layered on top of the MCP
+surface shipped in Phase 7. Every new behaviour is **off by default** and requires
+explicit opt-in via `bridge.toml`. All 19 Phase 7 smoke items carried forward;
+18/19 full PASS; 1 partial (#19 — concurrent same-token serialisation) targeted by Phase 9.
+
+| Track | Feature | Config gate |
+|---|---|---|
+| 1 | Per-token + per-IP token-bucket rate limiting | `[mcp.rate_limit] enabled` |
+| 2 | Per-user rpc workspace tool surfacing | `[mcp] surface_rpc_tools` |
+| 3 | SSE upgrade for `tools/call` | `[mcp.sse] enabled` |
+| 4 | OAuth2 Dynamic Client Registration (RFC 7591) | `[mcp.dcr] enabled` + `registration_secret` |
+
+**Quick links:**
+- Spec addendum: [`docs/plans/PHASE_8_SPEC_ADDENDUM.md`](docs/plans/PHASE_8_SPEC_ADDENDUM.md)
+- Live smoke report: [`docs/smoke/phase-8-live-smoke-report.md`](docs/smoke/phase-8-live-smoke-report.md)
+
+### New config sections (Phase 8)
+
+```toml
+[mcp.rate_limit]
+enabled             = false
+per_token_capacity  = 60
+per_token_refill    = 1
+per_ip_capacity     = 120
+per_ip_refill       = 2
+
+[mcp.sse]
+enabled             = false
+
+[mcp.dcr]
+enabled             = false
+registration_secret = ""
+token_ttl_ms        = 31536000000
+```
+
+### New modules (Phase 8)
+
+| Module | Description |
+|---|---|
+| `bridge/core/mcp/mcp-rate-limiter.js` | Pure token-bucket rate limiter |
+| `bridge/core/mcp/mcp-sse-transport.js` | SSE framing helper |
+| `bridge/core/mcp/mcp-dcr.js` | OAuth2 DCR handler |
+| `bridge/core/synaps-rpc-session-router.js` | Per-user rpc workspace tool router |
+
+
+---
+
+## Phase 9 — MCP Concurrency, Streaming, OAuth 2.1, and ACL
+
+**Status:** In progress (`feat/scp-phase-9-polish`).
+
+Phase 9 builds on the MCP surface hardened in Phase 8, adding four capability
+tracks: a bug-fix for per-session concurrent serialisation (Track 1), SSE
+per-delta token streaming so clients see model output token-by-token (Track 2),
+a full OAuth 2.1 Authorization Code flow with PKCE for user-facing MCP clients
+such as browser extensions and VS Code plugins (Track 3), and a per-tool ACL
+resolver with deny-wins semantics, ControlSocket management ops, and audit
+integration (Track 4). Tracks 5 and 6 (rpc-probe tool surfacing and a
+Prometheus `/metrics` endpoint) are authored by the C3 subagent and are
+gated by the same Phase 8 config keys.
+
+All Phase 8 client behaviour is preserved. No wire-format break when Phase 9
+features are off (which is the default for all new flags).
+
+**Quick links:**
+- Full spec: [`docs/plans/PHASE_9_SPEC_ADDENDUM.md`](docs/plans/PHASE_9_SPEC_ADDENDUM.md)
+- Smoke report skeleton: [`docs/smoke/phase-9-live-smoke-report.md`](docs/smoke/phase-9-live-smoke-report.md)
+- Smoke playbook: `/tmp/smoke/phase-9-playbook.sh`
+
+### New config keys (Phase 9)
+
+```toml
+[mcp.sse]
+stream_deltas       = false   # Track 2: emit synaps/delta frames per token
+
+[mcp.oauth]
+enabled             = false   # Track 3: OAuth 2.1 Authorization Code + PKCE
+code_ttl_ms         = 600000
+csrf_ttl_ms         = 900000
+redirect_uri_allow_list = []
+allow_test_auth     = false   # dev only — never true in production
+issuer              = ""
+
+[mcp.acl]
+enabled             = false   # Track 4: per-tool ACL resolver
+cache_ttl_ms        = 5000
+```
+
+### New ControlSocket ops (Phase 9)
+
+| Method | Track | Description |
+|---|---|---|
+| `mcp_acl_list` | 4 | List all ACL rows for a user. |
+| `mcp_acl_set` | 4 | Upsert an ACL row (allow/deny, optional TTL). |
+| `mcp_acl_delete` | 4 | Delete a specific ACL row. |
+
+### New MongoDB collections (Phase 9)
+
+| Collection | Track | Description |
+|---|---|---|
+| `synaps_oauth_codes` | 3 | Short-lived authorization codes (auto-TTL). |
+| `synaps_mcp_tool_acls` | 4 | Per-user per-tool ACL rules. |
+
+### New modules (Phase 9)
+
+| Module | Track | Description |
+|---|---|---|
+| `bridge/core/mcp/mcp-oauth.js` | 3 | OAuth 2.1 authorize + token endpoint handlers. |
+| `bridge/core/mcp/mcp-oauth-codes.js` | 3 | Mongoose model + repo for `synaps_oauth_codes`. |
+| `bridge/core/mcp/mcp-acl.js` | 4 | ACL resolver with deny-wins semantics + cache. |
+| `bridge/core/mcp/mcp-acl-repo.js` | 4 | Mongoose model + CRUD for `synaps_mcp_tool_acls`. |
+
