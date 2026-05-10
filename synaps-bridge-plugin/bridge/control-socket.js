@@ -31,6 +31,16 @@ import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {
+  CredsValidationError,
+  CredsUnavailableError,
+  CredBrokerDisabledError,
+} from './core/cred-broker.js';
+import {
+  InfisicalNotFoundError,
+  InfisicalAuthError,
+  InfisicalUpstreamError,
+} from './core/cred-broker/infisical-client.js';
 
 /** Default socket path. */
 export const DEFAULT_SOCKET_PATH = path.join(
@@ -48,6 +58,8 @@ export class ControlSocket extends EventEmitter {
    * @param {string}   [opts.socketPath]         - UDS path (default: DEFAULT_SOCKET_PATH).
    * @param {import('./core/session-router.js').SessionRouter} opts.sessionRouter
    * @param {object}   [opts.identityRouter]     - IdentityRouter / NoOpIdentityRouter (optional).
+   * @param {object}   [opts.credBroker]         - CredBroker / NoopCredBroker (optional). Required for
+   *                                               the `cred_broker_use` op. Injected by BridgeDaemon.
    * @param {object}   [opts.logger]             - Logger (default: console).
    * @param {string}   [opts.version]            - Daemon version string (default: "0.1.0").
    * @param {Function} [opts.nowMs]              - Returns current epoch ms (injectable for tests).
@@ -58,6 +70,7 @@ export class ControlSocket extends EventEmitter {
     socketPath = DEFAULT_SOCKET_PATH,
     sessionRouter,
     identityRouter = null,
+    credBroker = null,
     logger = console,
     version = '0.1.0',
     nowMs = () => Date.now(),
@@ -69,6 +82,7 @@ export class ControlSocket extends EventEmitter {
     this._socketPath      = socketPath;
     this._router          = sessionRouter;
     this._identityRouter  = identityRouter;
+    this._credBroker      = credBroker;
     this.logger           = logger;
     this._version         = version;
     this._nowMs           = nowMs;
@@ -246,6 +260,7 @@ export class ControlSocket extends EventEmitter {
       case 'link_code_issue':     return this._opLinkCodeIssue(req);
       case 'link_code_redeem':    return this._opLinkCodeRedeem(req);
       case 'identity_resolve_web': return this._opIdentityResolveWeb(req);
+      case 'cred_broker_use':     return this._opCredBrokerUse(req);
       default:
         return { ok: false, error: `unknown op: ${req.op}` };
     }
@@ -431,6 +446,139 @@ export class ControlSocket extends EventEmitter {
       };
     } catch (err) {
       return { ok: false, error: err.message };
+    }
+  }
+
+  // ── cred broker op ────────────────────────────────────────────────────────
+
+  /**
+   * Result-proxy credential broker op.
+   *
+   * The agent supplies a request shape; the broker fetches the token, signs
+   * the request server-side, and returns only the HTTP response.  The token
+   * never crosses the wire boundary.
+   *
+   * Request:
+   *   {
+   *     op:             'cred_broker_use',
+   *     synaps_user_id: string,
+   *     institution_id: string,
+   *     key:            string,
+   *     request: {
+   *       method:   string,
+   *       url:      string,
+   *       headers?: object,
+   *       body?:    string | null,
+   *     }
+   *   }
+   *
+   * Response (success):
+   *   { ok:true, status, headers, body, cached, fetched_at }
+   *
+   * Response (error):
+   *   { ok:false, code, error }
+   *
+   * @param {object} req
+   * @returns {Promise<object>}
+   */
+  async _opCredBrokerUse(req) {
+    // ── Defensive: no broker injected ──────────────────────────────────────
+    if (!this._credBroker) {
+      this.logger.warn('ControlSocket: cred_broker_use called but credBroker is not configured');
+      return { ok: false, code: 'creds_disabled', error: 'cred broker not configured' };
+    }
+
+    // ── Input validation (wire-level, before calling broker) ───────────────
+    const { synaps_user_id, institution_id, key, request } = req;
+
+    if (typeof synaps_user_id !== 'string' || synaps_user_id.length === 0) {
+      return { ok: false, code: 'invalid_request', error: 'synaps_user_id must be a non-empty string' };
+    }
+    if (typeof institution_id !== 'string' || institution_id.length === 0) {
+      return { ok: false, code: 'invalid_request', error: 'institution_id must be a non-empty string' };
+    }
+    if (typeof key !== 'string' || key.length === 0) {
+      return { ok: false, code: 'invalid_request', error: 'key must be a non-empty string' };
+    }
+    if (!request || typeof request !== 'object' || Array.isArray(request)) {
+      return { ok: false, code: 'invalid_request', error: 'request must be an object' };
+    }
+
+    // ── Translate snake_case → camelCase for broker call ───────────────────
+    const synapsUserId  = synaps_user_id;
+    const institutionId = institution_id;
+
+    // ── Sanitise headers for logging (strip Authorization case-insensitively) ─
+    const logHeaders = {};
+    for (const [hk, hv] of Object.entries(request.headers ?? {})) {
+      if (hk.toLowerCase() !== 'authorization') {
+        logHeaders[hk] = hv;
+      }
+    }
+
+    this.logger.info?.('ControlSocket: cred_broker_use', {
+      synapsUserId,
+      institutionId,
+      key,
+      method: request.method,
+      url:    request.url,
+      // headers: logHeaders is intentionally omitted to keep logs minimal;
+      // authorization is already stripped if present.
+    });
+
+    // ── Translate body: null → undefined (broker expects optional body) ─────
+    const brokerRequest = {
+      method:  request.method,
+      url:     request.url,
+      headers: request.headers,
+      body:    request.body === null ? undefined : request.body,
+    };
+
+    // ── Delegate to broker ──────────────────────────────────────────────────
+    try {
+      const result = await this._credBroker.use({
+        synapsUserId,
+        institutionId,
+        key,
+        request: brokerRequest,
+      });
+
+      this.logger.info?.('ControlSocket: cred_broker_use success', {
+        synapsUserId,
+        key,
+        status:  result.status,
+        cached:  result.cached,
+      });
+
+      return {
+        ok:         true,
+        status:     result.status,
+        headers:    result.headers,
+        body:       result.body,
+        cached:     result.cached,
+        fetched_at: result.fetchedAt,
+      };
+    } catch (err) {
+      // Error code mapping — token NEVER appears in logs or response.
+      let code;
+      if (err instanceof CredsValidationError)    code = 'invalid_request';
+      else if (err instanceof CredBrokerDisabledError) code = 'creds_disabled';
+      else if (err instanceof CredsUnavailableError)   code = 'creds_unavailable';
+      else if (err instanceof InfisicalNotFoundError)  code = 'secret_not_found';
+      else if (err instanceof InfisicalAuthError)      code = 'broker_auth_failed';
+      else if (err instanceof InfisicalUpstreamError)  code = 'broker_upstream';
+      else                                             code = 'internal_error';
+
+      this.logger.warn?.('ControlSocket: cred_broker_use error', {
+        code,
+        errorClass: err.constructor.name,
+        synapsUserId,
+        key,
+        // message is safe — Wave A audited it contains no token
+        message: err.message,
+      });
+
+      return { ok: false, code, error: err.message };
     }
   }
 
