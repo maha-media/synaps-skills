@@ -27,6 +27,7 @@ export const BRIDGE_CONFIG_DEFAULTS = Object.freeze({
     default_model: 'claude-sonnet-4-6',
     default_profile: '',
     host_mode: false,
+    strict: false,
   }),
   sources: Object.freeze({
     slack: Object.freeze({
@@ -292,6 +293,7 @@ function _buildConfig(parsed, logger) {
     ? String(rawRpc.default_profile)
     : D.rpc.default_profile;
   const hostMode = rawRpc.host_mode !== undefined ? Boolean(rawRpc.host_mode) : D.rpc.host_mode;
+  const rpcStrict = rawRpc.strict !== undefined ? Boolean(rawRpc.strict) : D.rpc.strict;
 
   // ── [sources.slack] ───────────────────────────────────────────────────────
   const rawSources = (parsed.sources && typeof parsed.sources === 'object') ? parsed.sources : {};
@@ -808,6 +810,7 @@ function _buildConfig(parsed, logger) {
       default_model: defaultModel,
       default_profile: defaultProfile,
       host_mode: hostMode,
+      strict: rpcStrict,
     }),
     sources: Object.freeze({ slack }),
     platform: Object.freeze({ mode: platformMode }),

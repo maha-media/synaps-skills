@@ -268,6 +268,27 @@ describe('loadBridgeConfig — partial config merges with defaults', () => {
   });
 });
 
+// ─── [rpc] strict flag (Phase 9 Wave C) ──────────────────────────────────────
+
+describe('loadBridgeConfig — [rpc] strict flag (Phase 9 C3)', () => {
+  it('BRIDGE_CONFIG_DEFAULTS.rpc.strict defaults to false', () => {
+    expect(BRIDGE_CONFIG_DEFAULTS.rpc.strict).toBe(false);
+  });
+
+  it('rpc.strict defaults to false when not set in config', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(config.rpc.strict).toBe(false);
+  });
+
+  it('rpc.strict = true parses correctly', async () => {
+    const toml = `[rpc]\nstrict = true\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.rpc.strict).toBe(true);
+  });
+});
+
 // ─── platform section ─────────────────────────────────────────────────────────
 
 describe('loadBridgeConfig — platform section defaults', () => {
