@@ -42,6 +42,7 @@ import {
   InfisicalUpstreamError,
 } from './core/cred-broker/infisical-client.js';
 import { SchedulerDisabledError } from './core/scheduler.js';
+import { generateRawToken, hashToken } from './core/mcp/mcp-token-resolver.js';
 
 /** Default socket path. */
 export const DEFAULT_SOCKET_PATH = path.join(
@@ -68,6 +69,7 @@ export class ControlSocket extends EventEmitter {
    *                                               scheduled_task_remove for ownership check.
    * @param {object}   [opts.heartbeatRepo]      - HeartbeatRepo (optional, Phase 6). Required for heartbeat_emit.
    * @param {object}   [opts.workspaceRepo]      - WorkspaceRepo (optional, Phase 6). Used for ownership check on heartbeat_emit.
+   * @param {object}   [opts.mcpTokenRepo]       - McpTokenRepo (optional, Phase 7). When null, all mcp_token_* ops return mcp_disabled.
    * @param {object}   [opts.logger]             - Logger (default: console).
    * @param {string}   [opts.version]            - Daemon version string (default: "0.1.0").
    * @param {Function} [opts.nowMs]              - Returns current epoch ms (injectable for tests).
@@ -85,6 +87,7 @@ export class ControlSocket extends EventEmitter {
     scheduledTaskRepo = null,
     heartbeatRepo = null,
     workspaceRepo = null,
+    mcpTokenRepo = null,
     logger = console,
     version = '0.1.0',
     nowMs = () => Date.now(),
@@ -103,6 +106,7 @@ export class ControlSocket extends EventEmitter {
     this._scheduledTaskRepo  = scheduledTaskRepo;
     this._heartbeatRepo      = heartbeatRepo;
     this._workspaceRepo      = workspaceRepo;
+    this._mcpTokenRepo       = mcpTokenRepo;
     this.logger              = logger;
     this._version            = version;
     this._nowMs              = nowMs;
@@ -289,6 +293,10 @@ export class ControlSocket extends EventEmitter {
       case 'hook_create':             return this._opHookCreate(req);
       case 'hook_list':               return this._opHookList(req);
       case 'hook_remove':             return this._opHookRemove(req);
+      // Phase 7 ops
+      case 'mcp_token_issue':         return this._opMcpTokenIssue(req);
+      case 'mcp_token_list':          return this._opMcpTokenList(req);
+      case 'mcp_token_revoke':        return this._opMcpTokenRevoke(req);
       default:
         return { ok: false, error: `unknown op: ${req.op}` };
     }
@@ -1106,6 +1114,114 @@ export class ControlSocket extends EventEmitter {
   _writeStreamLine(socket, payload) {
     if (!socket.destroyed) {
       socket.write(JSON.stringify(payload) + '\n');
+    }
+  }
+
+  // ── Phase 7: MCP token ops ────────────────────────────────────────────────
+
+  /**
+   * mcp_token_issue — Generate and store a new MCP bearer token.
+   *
+   * Request:  { op:'mcp_token_issue', synaps_user_id, institution_id, name, expires_at? }
+   * Response: { ok:true, token, _id, name, expires_at, created_at }
+   *         | { ok:false, error:'mcp_disabled' }
+   *         | { ok:false, error:'missing_fields' }
+   *
+   * @param {object} req
+   * @returns {Promise<object>}
+   */
+  async _opMcpTokenIssue(req) {
+    if (!this._mcpTokenRepo) return { ok: false, error: 'mcp_disabled' };
+
+    const { synaps_user_id, institution_id, name, expires_at } = req;
+    if (!synaps_user_id || !institution_id || !name) {
+      return { ok: false, error: 'missing_fields' };
+    }
+
+    const raw  = generateRawToken();
+    const hash = hashToken(raw);
+
+    try {
+      const row = await this._mcpTokenRepo.create({
+        token_hash:     hash,
+        synaps_user_id,
+        institution_id,
+        name,
+        expires_at: expires_at ? new Date(expires_at) : null,
+      });
+      return {
+        ok:         true,
+        token:      raw,          // returned ONCE — caller must save
+        _id:        String(row._id),
+        name:       row.name,
+        expires_at: row.expires_at,
+        created_at: row.created_at,
+      };
+    } catch (err) {
+      this.logger.warn?.('ControlSocket: mcp_token_issue error', { err: err.message });
+      return { ok: false, error: err.message };
+    }
+  }
+
+  /**
+   * mcp_token_list — List MCP tokens for a user / institution.
+   *
+   * Request:  { op:'mcp_token_list', synaps_user_id?, institution_id? }
+   * Response: { ok:true, tokens: [...] } (token_hash never returned)
+   *         | { ok:false, error:'mcp_disabled' }
+   *
+   * @param {object} req
+   * @returns {Promise<object>}
+   */
+  async _opMcpTokenList(req) {
+    if (!this._mcpTokenRepo) return { ok: false, error: 'mcp_disabled' };
+
+    const { synaps_user_id, institution_id } = req;
+
+    try {
+      const rows = await this._mcpTokenRepo.list({
+        ...(synaps_user_id != null && { synaps_user_id }),
+        ...(institution_id != null && { institution_id }),
+      });
+      // Coerce ObjectIds to strings; never return token_hash.
+      const tokens = rows.map((r) => ({
+        _id:          String(r._id),
+        name:         r.name,
+        last_used_at: r.last_used_at,
+        expires_at:   r.expires_at,
+        revoked_at:   r.revoked_at,
+        created_at:   r.created_at,
+      }));
+      return { ok: true, tokens };
+    } catch (err) {
+      this.logger.warn?.('ControlSocket: mcp_token_list error', { err: err.message });
+      return { ok: false, error: err.message };
+    }
+  }
+
+  /**
+   * mcp_token_revoke — Revoke an MCP token by id.
+   *
+   * Request:  { op:'mcp_token_revoke', token_id }
+   * Response: { ok:true }  | { ok:false }
+   *         | { ok:false, error:'mcp_disabled' }
+   *         | { ok:false, error:'missing_fields' }
+   *
+   * @param {object} req
+   * @returns {Promise<object>}
+   */
+  async _opMcpTokenRevoke(req) {
+    if (!this._mcpTokenRepo) return { ok: false, error: 'mcp_disabled' };
+
+    const { token_id } = req;
+    if (!token_id) return { ok: false, error: 'missing_fields' };
+
+    try {
+      const result = await this._mcpTokenRepo.revoke(token_id);
+      return { ok: result.ok };
+    } catch (err) {
+      this.logger.warn?.('ControlSocket: mcp_token_revoke error', { err: err.message });
+      return { ok: false, error: err.message };
     }
   }
 }

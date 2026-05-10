@@ -82,6 +82,37 @@ function httpGet(port, path, opts = {}) {
   });
 }
 
+/**
+ * POST a JSON body to the server and collect the response.
+ *
+ * @param {number} port
+ * @param {string} path
+ * @param {string|Buffer} rawBody
+ * @param {object} [extraHeaders]
+ * @returns {Promise<{ statusCode: number, headers: object, body: string }>}
+ */
+function httpPost(port, path, rawBody, extraHeaders = {}) {
+  return new Promise((resolve, reject) => {
+    const bodyBuf = typeof rawBody === 'string' ? Buffer.from(rawBody, 'utf8') : rawBody;
+    const headers = {
+      'Content-Type': 'application/json',
+      'Content-Length': bodyBuf.length,
+      ...extraHeaders,
+    };
+    const req = http.request(
+      { hostname: '127.0.0.1', port, path, method: 'POST', headers },
+      (res) => {
+        let body = '';
+        res.on('data', (c) => (body += c));
+        res.on('end',  () => resolve({ statusCode: res.statusCode, headers: res.headers, body }));
+      },
+    );
+    req.on('error', reject);
+    req.write(bodyBuf);
+    req.end();
+  });
+}
+
 // ─── lifecycle ────────────────────────────────────────────────────────────────
 
 describe('ScpHttpServer — lifecycle', () => {
@@ -562,5 +593,170 @@ describe('ScpHttpServer — /health with heartbeatRepo (Wave B2)', () => {
 
     expect(statusCode).toBe(200);
     expect(json.status).toBe('ok');
+  });
+});
+
+// ─── /mcp/v1 route ────────────────────────────────────────────────────────────
+
+/**
+ * Spin up a server with an optional mcpServer mock and optional maxBodyBytes.
+ * Returns { port, srv }.
+ */
+async function startMcpServer({ mcpServer = null, maxBodyBytes } = {}) {
+  const opts = {
+    config:   makeConfig({ mode: 'scp' }),
+    vncProxy: makeMockVncProxy(),
+    logger:   makeLogger(),
+    mcpServer,
+  };
+  if (maxBodyBytes !== undefined) opts.maxBodyBytes = maxBodyBytes;
+  const srv = new ScpHttpServer(opts);
+  const { port } = await srv.start();
+  return { port, srv };
+}
+
+describe('ScpHttpServer — POST /mcp/v1 with mcpServer = null', () => {
+  it('POST /mcp/v1 → 404 when mcpServer is null', async () => {
+    const { port, srv } = await startMcpServer({ mcpServer: null });
+    try {
+      const { statusCode, body } = await httpPost(port, '/mcp/v1', '{"method":"ping"}');
+      expect(statusCode).toBe(404);
+      expect(JSON.parse(body).error).toBe('not_found');
+    } finally {
+      await srv.stop();
+    }
+  });
+});
+
+describe('ScpHttpServer — POST /mcp/v1 with fake mcpServer', () => {
+  it('valid body → 200 and handle() called with {token, body}', async () => {
+    const fakeHandle = vi.fn().mockResolvedValue({
+      statusCode: 200,
+      body: { jsonrpc: '2.0', id: 1, result: 'pong' },
+    });
+    const { port, srv } = await startMcpServer({ mcpServer: { handle: fakeHandle } });
+    try {
+      const payload = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' });
+      const { statusCode, body } = await httpPost(port, '/mcp/v1', payload, {
+        'mcp-token': 'tok-abc',
+      });
+      expect(statusCode).toBe(200);
+      const json = JSON.parse(body);
+      expect(json.result).toBe('pong');
+      expect(fakeHandle).toHaveBeenCalledOnce();
+      const callArg = fakeHandle.mock.calls[0][0];
+      expect(callArg.token).toBe('tok-abc');
+      expect(callArg.body).toMatchObject({ method: 'ping' });
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('non-JSON body → 400 + parse-error envelope', async () => {
+    const fakeHandle = vi.fn();
+    const { port, srv } = await startMcpServer({ mcpServer: { handle: fakeHandle } });
+    try {
+      const { statusCode, body } = await httpPost(port, '/mcp/v1', 'this is not json');
+      expect(statusCode).toBe(400);
+      const json = JSON.parse(body);
+      expect(json.jsonrpc).toBe('2.0');
+      expect(json.error.code).toBe(-32700);
+      expect(fakeHandle).not.toHaveBeenCalled();
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('body > maxBodyBytes → 413 + code -32600', async () => {
+    const fakeHandle = vi.fn();
+    const { port, srv } = await startMcpServer({
+      mcpServer: { handle: fakeHandle },
+      maxBodyBytes: 10,
+    });
+    try {
+      const { statusCode, body } = await httpPost(port, '/mcp/v1', '{"method":"this-is-long-enough"}');
+      expect(statusCode).toBe(413);
+      const json = JSON.parse(body);
+      expect(json.error.code).toBe(-32600);
+      expect(fakeHandle).not.toHaveBeenCalled();
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('no MCP-Token header → token forwarded as null, handle() still called', async () => {
+    const fakeHandle = vi.fn().mockResolvedValue({
+      statusCode: 200,
+      body: { ok: true },
+    });
+    const { port, srv } = await startMcpServer({ mcpServer: { handle: fakeHandle } });
+    try {
+      await httpPost(port, '/mcp/v1', '{"method":"ping"}');
+      expect(fakeHandle).toHaveBeenCalledOnce();
+      expect(fakeHandle.mock.calls[0][0].token).toBeNull();
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('MCP-Token header present → that string is forwarded', async () => {
+    const fakeHandle = vi.fn().mockResolvedValue({ statusCode: 200, body: {} });
+    const { port, srv } = await startMcpServer({ mcpServer: { handle: fakeHandle } });
+    try {
+      await httpPost(port, '/mcp/v1', '{"method":"ping"}', { 'mcp-token': 'my-token-xyz' });
+      expect(fakeHandle.mock.calls[0][0].token).toBe('my-token-xyz');
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('GET /mcp/v1 when mcpServer present → 405 with Allow: POST header', async () => {
+    const { port, srv } = await startMcpServer({
+      mcpServer: { handle: vi.fn() },
+    });
+    try {
+      const { statusCode, headers } = await httpGet(port, '/mcp/v1');
+      expect(statusCode).toBe(405);
+      expect(headers['allow']).toBe('POST');
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('handle() returns 401 + body envelope → response is 401 with that body', async () => {
+    const errBody = { jsonrpc: '2.0', id: null, error: { code: -32001, message: 'Unauthorized' } };
+    const fakeHandle = vi.fn().mockResolvedValue({ statusCode: 401, body: errBody });
+    const { port, srv } = await startMcpServer({ mcpServer: { handle: fakeHandle } });
+    try {
+      const { statusCode, body } = await httpPost(port, '/mcp/v1', '{"method":"ping"}');
+      expect(statusCode).toBe(401);
+      expect(JSON.parse(body)).toMatchObject(errBody);
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('handle() returns {statusCode:202, body:null} → 202 empty response', async () => {
+    const fakeHandle = vi.fn().mockResolvedValue({ statusCode: 202, body: null });
+    const { port, srv } = await startMcpServer({ mcpServer: { handle: fakeHandle } });
+    try {
+      const { statusCode, body } = await httpPost(port, '/mcp/v1', '{"method":"ping"}');
+      expect(statusCode).toBe(202);
+      expect(body).toBe('');
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('handle() throws → 500 via existing error handler', async () => {
+    const fakeHandle = vi.fn().mockRejectedValue(new Error('mcp exploded'));
+    const { port, srv } = await startMcpServer({ mcpServer: { handle: fakeHandle } });
+    try {
+      const { statusCode, body } = await httpPost(port, '/mcp/v1', '{"method":"ping"}');
+      expect(statusCode).toBe(500);
+      expect(JSON.parse(body).error).toBe('internal');
+    } finally {
+      await srv.stop();
+    }
   });
 });

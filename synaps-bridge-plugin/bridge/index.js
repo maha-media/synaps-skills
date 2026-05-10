@@ -449,8 +449,8 @@ function defaultSlackAdapterFactory({ auth, sessionRouter, memoryGateway, identi
  * @param {{ sessionRouter: SessionRouter, identityRouter: object, logger: object, version: string }} opts
  * @returns {ControlSocket}
  */
-function defaultControlSocketFactory({ sessionRouter, identityRouter, logger, version }) { // eslint-disable-line no-unused-vars
-  return new ControlSocket({ sessionRouter, logger, version });
+function defaultControlSocketFactory({ sessionRouter, identityRouter, credBroker, hookBus, mcpTokenRepo, logger, version }) { // eslint-disable-line no-unused-vars
+  return new ControlSocket({ sessionRouter, identityRouter, credBroker, hookBus, mcpTokenRepo, logger, version });
 }
 
 // ─── BridgeDaemon ─────────────────────────────────────────────────────────────
@@ -476,6 +476,7 @@ export class BridgeDaemon extends EventEmitter {
    * @param {Function} [opts.hookBusFactory]           - async (config, logger, getMongoose) => HookBus|NoopHookBus — injectable for tests.
    * @param {Function} [opts.inboxNotifierFactory]     - (config, logger, getInboxDirFor) => InboxNotifier|NoopInboxNotifier — injectable for tests.
    * @param {Function} [opts.inboxDirFor]              - (workspaceId) => string — injected inbox dir resolver; null in most deployments.
+   * @param {Function} [opts.mcpServerFactory]         - async (config, logger, db) => McpServer|null — injectable for tests.
    */
   constructor({
     config,
@@ -496,6 +497,7 @@ export class BridgeDaemon extends EventEmitter {
     hookBusFactory = null,
     inboxNotifierFactory = null,
     inboxDirFor = null,
+    mcpServerFactory = null,
   } = {}) {
     super();
 
@@ -529,6 +531,9 @@ export class BridgeDaemon extends EventEmitter {
     this._hookBusFactory       = hookBusFactory       ?? defaultHookBusFactory;
     this._inboxNotifierFactory = inboxNotifierFactory ?? defaultInboxNotifierFactory;
     this._inboxDirFor          = inboxDirFor          ?? null;
+
+    // MCP server factory (test-injectable).
+    this._mcpServerFactory = mcpServerFactory ?? null;  // null → build inline when mcp.enabled
 
     /** @type {SessionRouter|null} */
     this._sessionRouter = null;
@@ -565,6 +570,13 @@ export class BridgeDaemon extends EventEmitter {
     this._hookBus = null;
     /** @type {InboxNotifier|NoopInboxNotifier|object|null} */
     this._inboxNotifier = null;
+
+    // Phase 7 MCP server.
+    /** @type {object|null} McpServer or null when disabled */
+    this._mcpServer = null;
+
+    /** @type {object|null} McpTokenRepo instance — reused by ControlSocket */
+    this._mcpTokenRepo = null;
 
     // Identity router (built in start()).
     /** @type {import('./core/identity-router.js').IdentityRouter|import('./core/identity-router.js').NoOpIdentityRouter|null} */
@@ -668,6 +680,65 @@ export class BridgeDaemon extends EventEmitter {
       this.logger.info?.('supervisor started');
     }
 
+    // ─── MCP ──────────────────────────────────────────────────────────────────
+    // Built after supervisor so _mongoose is available; before HTTP server so
+    // mcpServer can be passed to ScpHttpServer.
+    if (isScp && this._config.mcp?.enabled) {
+      let builtMcpServer = null;
+      try {
+        if (this._mcpServerFactory) {
+          // Test-injectable factory.
+          builtMcpServer = await this._mcpServerFactory(this._config, this.logger, this._mongoose);
+        } else {
+          if (!this._mongoose) {
+            throw new Error('mongoose unavailable');
+          }
+          // Defer import so disabled mode never loads MCP code.
+          const { McpServer }      = await import('./core/mcp/mcp-server.js');
+          const { McpTokenResolver } = await import('./core/mcp/mcp-token-resolver.js');
+          const { McpToolRegistry }  = await import('./core/mcp/mcp-tool-registry.js');
+          const { McpApprovalGate }  = await import('./core/mcp/mcp-approval-gate.js');
+          const { McpTokenRepo }     = await import('./core/db/repositories/mcp-token-repo.js');
+          const { McpServerRepo }    = await import('./core/db/repositories/mcp-server-repo.js');
+          const { McpAuditRepo }     = await import('./core/db/repositories/mcp-audit-repo.js');
+
+          const db            = this._mongoose;
+          const tokenRepo     = new McpTokenRepo({ db });
+          const mcpServerRepo = new McpServerRepo({ db });
+          const tokenResolver = new McpTokenResolver({ tokenRepo, logger: this.logger });
+          const toolRegistry  = new McpToolRegistry({
+            sessionRouter:   this._sessionRouter,   // may be null at this point; set later
+            chatTimeoutMs:   this._config.mcp.chat_timeout_ms,
+            logger:          this.logger,
+          });
+          const approvalGate  = new McpApprovalGate({
+            mcpServerRepo,
+            policyName: this._config.mcp.policy_name,
+            logger:     this.logger,
+          });
+          const audit = this._config.mcp.audit
+            ? { record: (entry) => new McpAuditRepo({ db }).record(entry) }
+            : { record: async () => {} };
+
+          // Store tokenRepo so ControlSocket can use it for mcp_token_* ops.
+          this._mcpTokenRepo = tokenRepo;
+
+          builtMcpServer = new McpServer({
+            tokenResolver,
+            toolRegistry,
+            approvalGate,
+            audit,
+            logger: this.logger,
+          });
+        }
+        this.logger.info?.('[mcp] enabled');
+      } catch (err) {
+        this.logger.warn?.(`[mcp] failed to initialise — running without MCP: ${err.message}`);
+        builtMcpServer = null;
+      }
+      this._mcpServer = builtMcpServer;
+    }
+
     // 4b. Optional HTTP server + VNC proxy (SCP mode only).
     //     heartbeatRepo is now available from the supervisor built above.
     if (isScp && this._config.web.enabled) {
@@ -687,6 +758,7 @@ export class BridgeDaemon extends EventEmitter {
           vncProxy,
           heartbeatRepo,
           bridgeCriticalMs: this._config.supervisor?.bridge_critical_ms,
+          mcpServer: this._mcpServer,
           logger: this.logger,
         });
       }
@@ -721,6 +793,7 @@ export class BridgeDaemon extends EventEmitter {
       identityRouter: this._identityRouter,
       credBroker: this._credBroker,
       hookBus: this._hookBus,
+      mcpTokenRepo: this._mcpTokenRepo,
       logger: this.logger,
       version: '0.1.0',
     });

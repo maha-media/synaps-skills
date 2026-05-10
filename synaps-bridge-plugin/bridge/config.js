@@ -107,6 +107,13 @@ export const BRIDGE_CONFIG_DEFAULTS = Object.freeze({
     enabled:      false,
     dir_template: '',
   }),
+  mcp: Object.freeze({
+    enabled:         false,
+    audit:           false,
+    chat_timeout_ms: 120_000,
+    max_body_bytes:  262_144,
+    policy_name:     'synaps-control-plane',
+  }),
 });
 
 /** Default config file path. */
@@ -152,6 +159,15 @@ export function expandHome(p) {
  * @property {{ enabled: boolean, transport: string, cli_path: string, brain_dir: string, recall_k: number, recall_min_score: number, recall_max_chars: number, axel_socket: string, consolidation_cron: string }} memory
  * @property {{ enabled: boolean, link_code_ttl_secs: number, default_institution_id: string }} identity
  * @property {{ enabled: boolean, broker: string, infisical_url: string, infisical_token_file: string, cache_ttl_secs: number, audit_attribute_user: boolean }} creds
+ */
+
+/**
+ * @typedef {object} MCPConfig
+ * @property {boolean} enabled
+ * @property {boolean} audit
+ * @property {number}  chat_timeout_ms
+ * @property {number}  max_body_bytes
+ * @property {string}  policy_name
  */
 
 /**
@@ -210,7 +226,7 @@ function _buildConfig(parsed, logger) {
   const D = BRIDGE_CONFIG_DEFAULTS;
 
   // ── warn on unknown top-level keys ────────────────────────────────────────
-  const knownTopLevel = new Set(['bridge', 'rpc', 'sources', 'platform', 'workspace', 'web', 'mongodb', 'memory', 'identity', 'creds', 'supervisor', 'scheduler', 'hooks', 'inbox']);
+  const knownTopLevel = new Set(['bridge', 'rpc', 'sources', 'platform', 'workspace', 'web', 'mongodb', 'memory', 'identity', 'creds', 'supervisor', 'scheduler', 'hooks', 'inbox', 'mcp']);
   for (const k of Object.keys(parsed)) {
     if (!knownTopLevel.has(k)) {
       logger.warn(`bridge/config: unknown top-level key "${k}" — ignoring`);
@@ -595,6 +611,40 @@ function _buildConfig(parsed, logger) {
     }
   }
 
+  // ── [mcp] ─────────────────────────────────────────────────────────────────
+  const rawMcp = (parsed.mcp && typeof parsed.mcp === 'object') ? parsed.mcp : {};
+  const DMCP = D.mcp;
+
+  const mcpEnabled = rawMcp.enabled !== undefined ? Boolean(rawMcp.enabled) : DMCP.enabled;
+  const mcpAudit   = rawMcp.audit   !== undefined ? Boolean(rawMcp.audit)   : DMCP.audit;
+
+  let mcpChatTimeoutMs = rawMcp.chat_timeout_ms !== undefined ? rawMcp.chat_timeout_ms : DMCP.chat_timeout_ms;
+  if (!Number.isInteger(mcpChatTimeoutMs) || mcpChatTimeoutMs < 1000 || mcpChatTimeoutMs > 600_000) {
+    throw new Error(
+      `bridge/config: invalid mcp.chat_timeout_ms "${mcpChatTimeoutMs}" — must be integer between 1000 and 600000`,
+    );
+  }
+
+  let mcpMaxBodyBytes = rawMcp.max_body_bytes !== undefined ? rawMcp.max_body_bytes : DMCP.max_body_bytes;
+  if (!Number.isInteger(mcpMaxBodyBytes) || mcpMaxBodyBytes < 1024 || mcpMaxBodyBytes > 4_194_304) {
+    throw new Error(
+      `bridge/config: invalid mcp.max_body_bytes "${mcpMaxBodyBytes}" — must be integer between 1024 and 4194304`,
+    );
+  }
+
+  let mcpPolicyName = rawMcp.policy_name !== undefined ? String(rawMcp.policy_name) : DMCP.policy_name;
+  if (typeof mcpPolicyName !== 'string' || mcpPolicyName.length === 0) {
+    throw new Error('bridge/config: invalid mcp.policy_name — must be a non-empty string');
+  }
+
+  // Warn on unknown keys inside [mcp].
+  const knownMcpKeys = new Set(['enabled', 'audit', 'chat_timeout_ms', 'max_body_bytes', 'policy_name']);
+  for (const k of Object.keys(rawMcp)) {
+    if (!knownMcpKeys.has(k)) {
+      logger.warn(`bridge/config: unknown mcp key "${k}" — ignoring`);
+    }
+  }
+
   return Object.freeze({
     bridge: Object.freeze({
       log_level: logLevel,
@@ -671,6 +721,13 @@ function _buildConfig(parsed, logger) {
     inbox: Object.freeze({
       enabled:      inboxEnabled,
       dir_template: inboxDirTemplate,
+    }),
+    mcp: Object.freeze({
+      enabled:         mcpEnabled,
+      audit:           mcpAudit,
+      chat_timeout_ms: mcpChatTimeoutMs,
+      max_body_bytes:  mcpMaxBodyBytes,
+      policy_name:     mcpPolicyName,
     }),
   });
 }

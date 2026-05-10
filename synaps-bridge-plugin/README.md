@@ -1124,3 +1124,105 @@ See [`docs/smoke/phase-6-scheduler.md`](docs/smoke/phase-6-scheduler.md) for
 the complete manual verification procedure including: create/list/remove
 scheduled tasks, hook CRUD with secret-redaction verification, heartbeat_emit
 with ownership checks, and InboxNotifier event-file validation.
+
+
+---
+
+## Phase 7 — MCP Wire-Compat (`/mcp/v1`)
+
+### What Phase 7 adds
+
+Phase 7 makes the SCP bridge act as a **remote MCP server**. Any MCP-aware client
+(Claude Desktop, Cursor, Continue.dev, custom agents) can connect to
+`http://scp.example.com/mcp/v1` with a per-user bearer token and:
+
+1. **`initialize`** an MCP session (protocol handshake, capability exchange).
+2. **`tools/list`** — discover the Synaps tools available to that user's institution,
+   filtered through the existing pria `mcpservers` approval policy.
+3. **`tools/call`** — invoke a tool against the user's live workspace via the existing
+   `SessionRouter` / `SynapsRpc` chain.
+
+Version 0 exposes one meta-tool: **`synaps_chat`**, which forwards the prompt to the
+user's `synaps rpc` session and returns the final assistant text. Per-tool surfacing of
+the full RPC tool registry is a Phase 7+ stretch goal.
+
+Token management (issue, list, revoke) is available via three new ControlSocket ops so
+pria-ui-v22 admin tooling can manage tokens without direct DB access.
+
+### Configuration
+
+```toml
+[mcp]
+enabled            = false           # Off by default — set true to enable
+audit              = false           # Write audit docs to synaps_mcp_audit
+chat_timeout_ms    = 120000          # tools/call wait limit (ms)
+max_body_bytes     = 262144          # 256 KiB request body cap
+policy_name        = "synaps-control-plane"  # mcpservers row name
+```
+
+> **Default is off.** All Phase 5/6 behaviour is preserved when `enabled = false`.
+> No MCP code is loaded or instantiated in disabled mode.
+
+### New ControlSocket ops (Phase 7)
+
+| Op | Request | Response |
+|----|---------|----------|
+| `mcp_token_issue` | `{ synaps_user_id, institution_id, name, expires_at? }` | `{ ok, token (64-hex, once), _id, name, expires_at, created_at }` |
+| `mcp_token_list` | `{ synaps_user_id?, institution_id? }` | `{ ok, tokens: [{_id, name, last_used_at, expires_at, revoked_at, created_at}] }` |
+| `mcp_token_revoke` | `{ token_id }` | `{ ok: true\|false }` |
+
+When `[mcp] enabled = false`, all three ops return `{ ok: false, error: 'mcp_disabled' }`.
+
+### `/mcp/v1` HTTP endpoint
+
+- **Method:** `POST` only (`GET` → 405 with `Allow: POST`).
+- **Auth:** `MCP-Token: <raw-64-hex-token>` header required for all methods except
+  `initialize` and `notifications/initialized`.
+- **Protocol:** JSON-RPC 2.0. Errors are returned with HTTP 200 (code in envelope),
+  except auth (401), parse (400), and size (413) failures.
+- **Disabled:** When `[mcp] enabled = false`, `POST /mcp/v1` → 404.
+
+### Operator playbook
+
+See [`docs/smoke/phase-7-mcp.md`](docs/smoke/phase-7-mcp.md) for the complete
+manual verification procedure including: token issue, initialize, tools/list,
+tools/call, Claude Desktop config, revoke + 401 confirmation, and cleanup.
+
+### Spec addendum
+
+See [`docs/plans/PHASE_7_SPEC_ADDENDUM.md`](docs/plans/PHASE_7_SPEC_ADDENDUM.md)
+for the full locked-in design: wire protocol tables, authentication model, tool
+registry, approval gating, audit, configuration, ControlSocket op table,
+ScpHttpServer integration, acceptance criteria, out-of-scope items, and risks.
+
+### What Phase 7 ships
+
+| File | Description |
+|------|-------------|
+| `bridge/core/mcp/mcp-server.js` | JSON-RPC 2.0 dispatcher |
+| `bridge/core/mcp/mcp-token-resolver.js` | `McpTokenResolver` + `generateRawToken` + `hashToken` |
+| `bridge/core/mcp/mcp-tool-registry.js` | `McpToolRegistry` + `synaps_chat` tool |
+| `bridge/core/mcp/mcp-approval-gate.js` | `McpApprovalGate` (reads pria `mcpservers`) |
+| `bridge/core/mcp/mcp-tool-descriptors.js` | `SYNAPS_CHAT_TOOL_DESCRIPTOR` constant |
+| `bridge/core/db/models/synaps-mcp-token.js` | Mongoose model factory |
+| `bridge/core/db/models/synaps-mcp-audit.js` | Audit model factory |
+| `bridge/core/db/repositories/mcp-token-repo.js` | `McpTokenRepo` |
+| `bridge/core/db/repositories/mcp-audit-repo.js` | `McpAuditRepo` |
+| `bridge/core/db/repositories/mcp-server-repo.js` | Read-only adapter for pria `mcpservers` |
+| `bridge/control-socket.js` | 3 new ops (Wave C1) |
+| `bridge/index.js` | MCP factory wiring, `mcpTokenRepo` → ControlSocket |
+| `bridge/core/scp-http-server.js` | `/mcp/v1` route |
+| `bridge/config.js` | `[mcp]` section schema + defaults |
+
+### Acceptance tests
+
+| File | Tests |
+|------|-------|
+| `tests/scp-phase-7/00-mcp-initialize-handshake.test.mjs` | 8 |
+| `tests/scp-phase-7/01-mcp-token-resolver-mongo.test.mjs` | 10 |
+| `tests/scp-phase-7/02-mcp-approval-gate-filtering.test.mjs` | 11 |
+| `tests/scp-phase-7/03-mcp-control-socket-tokens.test.mjs` | 10 |
+| `tests/scp-phase-7/04-mcp-disabled.test.mjs` | 12 |
+| **Total new (C2)** | **51** |
+| **ControlSocket MCP token unit tests (C1)** | **20** |
+| **Phase 7 total** | **71** |

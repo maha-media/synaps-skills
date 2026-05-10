@@ -2185,3 +2185,133 @@ describe('BridgeDaemon — inbox.enabled=true but no inboxDirFor → NoopInboxNo
     await daemon.stop();
   });
 });
+
+// ─── Phase 7 Wave B3 — MCP wiring ────────────────────────────────────────────
+
+describe('BridgeDaemon — Phase 7 MCP wiring', () => {
+  // Shared fake mongo that returns an empty model stub.
+  const fakeMongo = {
+    disconnect: vi.fn().mockResolvedValue(undefined),
+    models: {},
+    model: vi.fn().mockReturnValue({
+      find: vi.fn().mockResolvedValue([]),
+      findById: vi.fn().mockResolvedValue(null),
+    }),
+  };
+
+  /** Build config with mode=scp and optional mcp override. */
+  function makeScpConfigWithMcp(mcpOverrides = {}) {
+    return {
+      ...BRIDGE_CONFIG_DEFAULTS,
+      platform:  { mode: 'scp' },
+      bridge:    { ...BRIDGE_CONFIG_DEFAULTS.bridge },
+      rpc:       { ...BRIDGE_CONFIG_DEFAULTS.rpc },
+      web:       { ...BRIDGE_CONFIG_DEFAULTS.web, enabled: false },
+      mongodb:   { uri: 'mongodb://localhost/testdb' },
+      workspace: { ...BRIDGE_CONFIG_DEFAULTS.workspace },
+      sources:   { slack: { ...BRIDGE_CONFIG_DEFAULTS.sources.slack, enabled: false } },
+      mcp: {
+        enabled:         false,
+        audit:           false,
+        chat_timeout_ms: 120_000,
+        max_body_bytes:  262_144,
+        policy_name:     'synaps-control-plane',
+        ...mcpOverrides,
+      },
+    };
+  }
+
+  /** Build a minimal SCP BridgeDaemon with all heavy deps injected. */
+  function buildMcpDaemon({
+    config,
+    mcpServerFactory = null,
+    scpHttpServerFactory = null,
+    mongoConnectFactory = null,
+  } = {}) {
+    const _config = config ?? makeScpConfigWithMcp();
+    const _mongoConnect = mongoConnectFactory ?? vi.fn().mockResolvedValue(fakeMongo);
+    const daemon = new BridgeDaemon({
+      config: _config,
+      logger: makeLogger(),
+      env: {},
+      sessionRouterFactory:    vi.fn(() => makeFakeRouter()),
+      slackAdapterFactory:     vi.fn(() => makeFakeAdapter()),
+      controlSocketFactory:    vi.fn(() => makeFakeSocket()),
+      memoryGatewayFactory:    vi.fn(() => ({ start: vi.fn(async () => {}), stop: vi.fn(async () => {}), enabled: false })),
+      mongoConnectFactory:     _mongoConnect,
+      workspaceManagerFactory: vi.fn().mockReturnValue({}),
+      scpHttpServerFactory:    scpHttpServerFactory ?? null,
+      mcpServerFactory,
+    });
+    return { daemon };
+  }
+
+  it('mcp.enabled=false → daemon._mcpServer is null after start()', async () => {
+    const { daemon } = buildMcpDaemon({
+      config: makeScpConfigWithMcp({ enabled: false }),
+    });
+    await daemon.start();
+    expect(daemon._mcpServer).toBeNull();
+    await daemon.stop();
+  });
+
+  it('mcp.enabled=true + injected mcpServerFactory → _mcpServer set to factory return value', async () => {
+    const fakeMcpServer = { handle: vi.fn() };
+    const mcpServerFactory = vi.fn().mockResolvedValue(fakeMcpServer);
+
+    const { daemon } = buildMcpDaemon({
+      config:           makeScpConfigWithMcp({ enabled: true }),
+      mcpServerFactory,
+    });
+    await daemon.start();
+    expect(mcpServerFactory).toHaveBeenCalledOnce();
+    expect(daemon._mcpServer).toBe(fakeMcpServer);
+    await daemon.stop();
+  });
+
+  it('mcp.enabled=true + mcpServerFactory returns null → _mcpServer is null (graceful)', async () => {
+    const mcpServerFactory = vi.fn().mockResolvedValue(null);
+    const { daemon } = buildMcpDaemon({
+      config:           makeScpConfigWithMcp({ enabled: true }),
+      mcpServerFactory,
+    });
+    await daemon.start();
+    expect(daemon._mcpServer).toBeNull();
+    await daemon.stop();
+  });
+
+  it('mcp.enabled=true + mcpServerFactory throws → _mcpServer null + warn logged', async () => {
+    const logger = makeLogger();
+    const mcpServerFactory = vi.fn().mockRejectedValue(new Error('mcp-init-fail'));
+    const daemon = new BridgeDaemon({
+      config: makeScpConfigWithMcp({ enabled: true }),
+      logger,
+      env: {},
+      sessionRouterFactory:    vi.fn(() => makeFakeRouter()),
+      slackAdapterFactory:     vi.fn(() => makeFakeAdapter()),
+      controlSocketFactory:    vi.fn(() => makeFakeSocket()),
+      memoryGatewayFactory:    vi.fn(() => ({ start: vi.fn(async () => {}), stop: vi.fn(async () => {}), enabled: false })),
+      mongoConnectFactory:     vi.fn().mockResolvedValue(fakeMongo),
+      workspaceManagerFactory: vi.fn().mockReturnValue({}),
+      mcpServerFactory,
+    });
+    await daemon.start();
+    expect(daemon._mcpServer).toBeNull();
+    const warnMsgs = logger.warn.mock.calls.map(([m]) => String(m));
+    expect(warnMsgs.some(m => m.includes('mcp-init-fail') || m.includes('MCP') || m.includes('[mcp]'))).toBe(true);
+    await daemon.stop();
+  });
+
+  it('mcp.enabled=true → _mcpServer stored on daemon (inline path with no web server)', async () => {
+    const fakeMcpServer = { handle: vi.fn() };
+    const mcpServerFactory = vi.fn().mockResolvedValue(fakeMcpServer);
+
+    const { daemon } = buildMcpDaemon({
+      config: makeScpConfigWithMcp({ enabled: true }),
+      mcpServerFactory,
+    });
+    await daemon.start();
+    expect(daemon._mcpServer).toBe(fakeMcpServer);
+    await daemon.stop();
+  });
+});

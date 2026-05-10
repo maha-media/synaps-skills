@@ -1949,3 +1949,348 @@ describe('ControlSocket — op: hook_remove', () => {
     await cs2.stop();
   });
 });
+
+// ─── op: mcp_token_issue / mcp_token_list / mcp_token_revoke ─────────────────
+
+import { createHash } from 'node:crypto';
+import { hashToken }  from './core/mcp/mcp-token-resolver.js';
+
+/**
+ * Build a simple in-memory fake McpTokenRepo.
+ *
+ * Uses a plain Map so tests can inspect stored rows without needing Mongo.
+ * Mirrors the real McpTokenRepo API.
+ */
+function makeFakeMcpTokenRepo() {
+  const store = new Map(); // _id (string) → row
+  let idCounter = 0;
+
+  function nextId() { return `tok-id-${++idCounter}`; }
+
+  return {
+    _store: store,
+
+    async create({ token_hash, synaps_user_id, institution_id, name, expires_at = null, scopes }) {
+      const _id        = nextId();
+      const created_at = new Date();
+      const row = {
+        _id, token_hash, synaps_user_id, institution_id, name,
+        expires_at, scopes: scopes ?? ['*'],
+        last_used_at: null, revoked_at: null, created_at,
+      };
+      store.set(_id, row);
+      return { _id, name, expires_at, created_at };
+    },
+
+    async findActive(token_hash) {
+      const now = Date.now();
+      for (const row of store.values()) {
+        if (row.token_hash !== token_hash) continue;
+        if (row.revoked_at) continue;
+        if (row.expires_at && row.expires_at.getTime() < now) continue;
+        return { _id: row._id, synaps_user_id: row.synaps_user_id, institution_id: row.institution_id, name: row.name, scopes: row.scopes };
+      }
+      return null;
+    },
+
+    async list(q) {
+      let rows = Array.from(store.values());
+      if (q.synaps_user_id != null) rows = rows.filter((r) => r.synaps_user_id === q.synaps_user_id);
+      if (q.institution_id != null) rows = rows.filter((r) => r.institution_id === q.institution_id);
+      // Return without token_hash, sorted newest first
+      return rows.map((r) => ({
+        _id:          r._id,
+        name:         r.name,
+        last_used_at: r.last_used_at,
+        expires_at:   r.expires_at,
+        revoked_at:   r.revoked_at,
+        created_at:   r.created_at,
+      })).sort((a, b) => b.created_at - a.created_at);
+    },
+
+    async revoke(token_id) {
+      const row = store.get(String(token_id));
+      if (!row) return { ok: false };
+      if (row.revoked_at) return { ok: true }; // idempotent
+      row.revoked_at = new Date();
+      return { ok: true };
+    },
+
+    async touch(token_id) {
+      const row = store.get(String(token_id));
+      if (row) row.last_used_at = new Date();
+    },
+  };
+}
+
+// ── MCP token ops ─────────────────────────────────────────────────────────────
+
+describe('ControlSocket — MCP token ops — mcp_disabled (no repo)', () => {
+  let socketPath, cs;
+
+  beforeEach(async () => {
+    socketPath = tmpSocketPath();
+    cs = new ControlSocket({
+      socketPath,
+      sessionRouter: makeFakeRouter(),
+      // mcpTokenRepo intentionally omitted → null
+      logger: makeLogger(),
+    });
+    await cs.start();
+  });
+
+  afterEach(async () => { await cs.stop(); });
+
+  it('mcp_token_issue → ok:false error:mcp_disabled', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_token_issue', synaps_user_id: 'u1', institution_id: 'i1', name: 'smoke',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.error).toBe('mcp_disabled');
+  });
+
+  it('mcp_token_list → ok:false error:mcp_disabled', async () => {
+    const resp = await sendRequest(socketPath, { op: 'mcp_token_list' });
+    expect(resp.ok).toBe(false);
+    expect(resp.error).toBe('mcp_disabled');
+  });
+
+  it('mcp_token_revoke → ok:false error:mcp_disabled', async () => {
+    const resp = await sendRequest(socketPath, { op: 'mcp_token_revoke', token_id: 'abc' });
+    expect(resp.ok).toBe(false);
+    expect(resp.error).toBe('mcp_disabled');
+  });
+});
+
+describe('ControlSocket — op: mcp_token_issue', () => {
+  let socketPath, cs, mcpTokenRepo;
+
+  beforeEach(async () => {
+    socketPath   = tmpSocketPath();
+    mcpTokenRepo = makeFakeMcpTokenRepo();
+    cs = new ControlSocket({
+      socketPath,
+      sessionRouter: makeFakeRouter(),
+      mcpTokenRepo,
+      logger: makeLogger(),
+    });
+    await cs.start();
+  });
+
+  afterEach(async () => { await cs.stop(); });
+
+  it('missing synaps_user_id → ok:false error:missing_fields', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_token_issue', institution_id: 'i1', name: 'smoke',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.error).toBe('missing_fields');
+  });
+
+  it('missing institution_id → ok:false error:missing_fields', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_token_issue', synaps_user_id: 'u1', name: 'smoke',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.error).toBe('missing_fields');
+  });
+
+  it('missing name → ok:false error:missing_fields', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_token_issue', synaps_user_id: 'u1', institution_id: 'i1',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.error).toBe('missing_fields');
+  });
+
+  it('valid input → ok:true, token, _id, name, expires_at, created_at', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_token_issue', synaps_user_id: 'u1', institution_id: 'i1', name: 'desktop',
+    });
+    expect(resp.ok).toBe(true);
+    expect(typeof resp.token).toBe('string');
+    expect(typeof resp._id).toBe('string');
+    expect(resp.name).toBe('desktop');
+    expect(resp.expires_at).toBeNull();
+    expect(typeof resp.created_at).toBe('string'); // JSON serialised to ISO string
+  });
+
+  it('token is a 64-char hex string', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_token_issue', synaps_user_id: 'u1', institution_id: 'i1', name: 'hex-check',
+    });
+    expect(resp.ok).toBe(true);
+    expect(resp.token).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('two calls with same input produce different tokens', async () => {
+    const r1 = await sendRequest(socketPath, {
+      op: 'mcp_token_issue', synaps_user_id: 'u1', institution_id: 'i1', name: 'same',
+    });
+    const r2 = await sendRequest(socketPath, {
+      op: 'mcp_token_issue', synaps_user_id: 'u1', institution_id: 'i1', name: 'same',
+    });
+    expect(r1.token).not.toBe(r2.token);
+  });
+
+  it('stored row hash matches sha256(token)', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_token_issue', synaps_user_id: 'u1', institution_id: 'i1', name: 'hash-check',
+    });
+    expect(resp.ok).toBe(true);
+    const expectedHash = createHash('sha256').update(resp.token).digest('hex');
+    // Also verify via hashToken helper
+    expect(hashToken(resp.token)).toBe(expectedHash);
+    // Verify repo can find the token with the expected hash
+    const found = await mcpTokenRepo.findActive(expectedHash);
+    expect(found).not.toBeNull();
+    expect(String(found._id)).toBe(resp._id);
+  });
+
+  it('accepts expires_at ISO string and stores as Date', async () => {
+    const expiresAt = new Date(Date.now() + 86400_000).toISOString();
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_token_issue', synaps_user_id: 'u1', institution_id: 'i1', name: 'expiry-test',
+      expires_at: expiresAt,
+    });
+    expect(resp.ok).toBe(true);
+    // expires_at is returned in response (serialised as ISO string or null)
+    expect(resp.expires_at).not.toBeNull();
+    // Check the stored row in repo
+    const row = Array.from(mcpTokenRepo._store.values()).find((r) => r.name === 'expiry-test');
+    expect(row.expires_at).toBeInstanceOf(Date);
+    expect(row.expires_at.toISOString()).toBe(expiresAt);
+  });
+});
+
+describe('ControlSocket — op: mcp_token_list', () => {
+  let socketPath, cs, mcpTokenRepo;
+
+  beforeEach(async () => {
+    socketPath   = tmpSocketPath();
+    mcpTokenRepo = makeFakeMcpTokenRepo();
+    cs = new ControlSocket({
+      socketPath,
+      sessionRouter: makeFakeRouter(),
+      mcpTokenRepo,
+      logger: makeLogger(),
+    });
+    await cs.start();
+  });
+
+  afterEach(async () => { await cs.stop(); });
+
+  it('returns ok:true, tokens:[] when none exist', async () => {
+    const resp = await sendRequest(socketPath, { op: 'mcp_token_list' });
+    expect(resp.ok).toBe(true);
+    expect(resp.tokens).toEqual([]);
+  });
+
+  it('with synaps_user_id filter — returns only that user\'s tokens', async () => {
+    // Issue tokens for two different users
+    await sendRequest(socketPath, {
+      op: 'mcp_token_issue', synaps_user_id: 'user-A', institution_id: 'inst-1', name: 'a-tok',
+    });
+    await sendRequest(socketPath, {
+      op: 'mcp_token_issue', synaps_user_id: 'user-B', institution_id: 'inst-1', name: 'b-tok',
+    });
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_token_list', synaps_user_id: 'user-A',
+    });
+    expect(resp.ok).toBe(true);
+    expect(resp.tokens).toHaveLength(1);
+    expect(resp.tokens[0].name).toBe('a-tok');
+  });
+
+  it('with institution_id filter — returns only that institution\'s tokens', async () => {
+    await sendRequest(socketPath, {
+      op: 'mcp_token_issue', synaps_user_id: 'user-A', institution_id: 'inst-X', name: 'x-tok',
+    });
+    await sendRequest(socketPath, {
+      op: 'mcp_token_issue', synaps_user_id: 'user-A', institution_id: 'inst-Y', name: 'y-tok',
+    });
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_token_list', institution_id: 'inst-X',
+    });
+    expect(resp.ok).toBe(true);
+    expect(resp.tokens).toHaveLength(1);
+    expect(resp.tokens[0].name).toBe('x-tok');
+  });
+
+  it('response rows do NOT include token_hash', async () => {
+    await sendRequest(socketPath, {
+      op: 'mcp_token_issue', synaps_user_id: 'u1', institution_id: 'i1', name: 'no-hash',
+    });
+    const resp = await sendRequest(socketPath, { op: 'mcp_token_list' });
+    expect(resp.ok).toBe(true);
+    expect(resp.tokens).toHaveLength(1);
+    expect(resp.tokens[0]).not.toHaveProperty('token_hash');
+  });
+
+  it('_id in response is a string (not ObjectId)', async () => {
+    await sendRequest(socketPath, {
+      op: 'mcp_token_issue', synaps_user_id: 'u1', institution_id: 'i1', name: 'str-id',
+    });
+    const resp = await sendRequest(socketPath, { op: 'mcp_token_list' });
+    expect(resp.ok).toBe(true);
+    expect(typeof resp.tokens[0]._id).toBe('string');
+  });
+});
+
+describe('ControlSocket — op: mcp_token_revoke', () => {
+  let socketPath, cs, mcpTokenRepo;
+
+  beforeEach(async () => {
+    socketPath   = tmpSocketPath();
+    mcpTokenRepo = makeFakeMcpTokenRepo();
+    cs = new ControlSocket({
+      socketPath,
+      sessionRouter: makeFakeRouter(),
+      mcpTokenRepo,
+      logger: makeLogger(),
+    });
+    await cs.start();
+  });
+
+  afterEach(async () => { await cs.stop(); });
+
+  it('missing token_id → ok:false error:missing_fields', async () => {
+    const resp = await sendRequest(socketPath, { op: 'mcp_token_revoke' });
+    expect(resp.ok).toBe(false);
+    expect(resp.error).toBe('missing_fields');
+  });
+
+  it('valid token_id → ok:true', async () => {
+    const issued = await sendRequest(socketPath, {
+      op: 'mcp_token_issue', synaps_user_id: 'u1', institution_id: 'i1', name: 'to-revoke',
+    });
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_token_revoke', token_id: issued._id,
+    });
+    expect(resp.ok).toBe(true);
+  });
+
+  it('unknown token_id → ok:false', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'mcp_token_revoke', token_id: 'nonexistent-id',
+    });
+    expect(resp.ok).toBe(false);
+  });
+
+  it('after revoke, findActive returns null for that token', async () => {
+    const issued = await sendRequest(socketPath, {
+      op: 'mcp_token_issue', synaps_user_id: 'u1', institution_id: 'i1', name: 'rev-check',
+    });
+    // Compute hash of the raw token
+    const expectedHash = createHash('sha256').update(issued.token).digest('hex');
+    // Confirm it's findable before revoke
+    const beforeRevoke = await mcpTokenRepo.findActive(expectedHash);
+    expect(beforeRevoke).not.toBeNull();
+
+    await sendRequest(socketPath, { op: 'mcp_token_revoke', token_id: issued._id });
+
+    // After revoke it should be null
+    const afterRevoke = await mcpTokenRepo.findActive(expectedHash);
+    expect(afterRevoke).toBeNull();
+  });
+});
