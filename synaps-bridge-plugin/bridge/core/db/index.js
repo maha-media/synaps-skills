@@ -15,9 +15,9 @@
  *   makeHeartbeatModel       – model factory for synaps_heartbeat
  *   HeartbeatRepo            – repository class for synaps_heartbeat
  *   makeHeartbeatRepo        – convenience factory: makeHeartbeatRepo(mongoose, opts?)
- *   makeHookModel            – model factory for synaps_hook      (Phase 6 Wave A2)
- *   HookRepo                 – repository class for synaps_hook   (Phase 6 Wave A2)
- *   makeHookRepo             – convenience factory: makeHookRepo(mongoose)
+ *   makeScheduledTaskModel   – model factory for synaps_scheduled_task (Phase 6)
+ *   ScheduledTaskRepo        – repository class for synaps_scheduled_task (Phase 6)
+ *   makeScheduledTaskRepo    – convenience factory: makeScheduledTaskRepo(mongoose, opts?)
  */
 
 export { getMongoose, disconnect, isConnected } from './connect.js';
@@ -26,18 +26,18 @@ export { getSynapsUserModel }                   from './models/synaps-user.js';
 export { getSynapsChannelIdentityModel }        from './models/synaps-channel-identity.js';
 export { getSynapsLinkCodeModel }               from './models/synaps-link-code.js';
 export { makeHeartbeatModel }                   from './models/synaps-heartbeat.js';
-export { makeHookModel }                        from './models/synaps-hook.js';
+export { makeScheduledTaskModel }               from './models/synaps-scheduled-task.js';
 export { WorkspaceRepo }                        from './repositories/workspace-repo.js';
 export { UserRepo }                             from './repositories/user-repo.js';
 export { ChannelIdentityRepo }                  from './repositories/channel-identity-repo.js';
 export { LinkCodeRepo }                         from './repositories/link-code-repo.js';
 export { HeartbeatRepo }                        from './repositories/heartbeat-repo.js';
-export { HookRepo }                             from './repositories/hook-repo.js';
+export { ScheduledTaskRepo }                    from './repositories/scheduled-task-repo.js';
 
 import { makeHeartbeatModel as _makeHeartbeatModel } from './models/synaps-heartbeat.js';
 import { HeartbeatRepo as _HeartbeatRepo }           from './repositories/heartbeat-repo.js';
-import { makeHookModel as _makeHookModel }           from './models/synaps-hook.js';
-import { HookRepo as _HookRepo }                     from './repositories/hook-repo.js';
+import { makeScheduledTaskModel as _makeScheduledTaskModel } from './models/synaps-scheduled-task.js';
+import { ScheduledTaskRepo as _ScheduledTaskRepo }           from './repositories/scheduled-task-repo.js';
 
 /**
  * Convenience factory — builds a HeartbeatRepo wired to the Heartbeat model
@@ -54,13 +54,15 @@ export function makeHeartbeatRepo(mongooseInstance, opts = {}) {
 }
 
 /**
- * Convenience factory — builds a HookRepo wired to the Hook model
- * for the given mongoose instance.
+ * Convenience factory — builds a ScheduledTaskRepo wired to the ScheduledTask
+ * model for the given mongoose instance.
  *
  * @param {import('mongoose').Mongoose} mongooseInstance
- * @returns {HookRepo}
+ * @param {object}     [opts]       - Options forwarded to ScheduledTaskRepo.
+ * @param {() => Date} [opts.now]   - Injectable clock (useful in tests).
+ * @returns {ScheduledTaskRepo}
  */
-export function makeHookRepo(mongooseInstance) {
-  const Hook = _makeHookModel(mongooseInstance);
-  return new _HookRepo({ Hook });
+export function makeScheduledTaskRepo(mongooseInstance, opts = {}) {
+  const ScheduledTask = _makeScheduledTaskModel(mongooseInstance);
+  return new _ScheduledTaskRepo({ ScheduledTask, ...opts });
 }
