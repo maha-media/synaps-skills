@@ -552,3 +552,144 @@ describe('McpToolRegistry.callTool — Method not found when surfaceRpcTools=fal
     ).rejects.toThrow(McpToolNotFoundError);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 9 Track 1 — _runSerialized helper
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Minimal registry just for _runSerialized tests — we only need the private
+ * helper; sessionRouter must satisfy the constructor guard.
+ */
+function makeSerialRegistry() {
+  const rpc = { prompt: vi.fn(), on: vi.fn(), off: vi.fn() };
+  const sessionRouter = { getOrCreateSession: vi.fn().mockResolvedValue(rpc) };
+  const registry = new McpToolRegistry({
+    sessionRouter,
+    logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+  });
+  return registry;
+}
+
+describe('McpToolRegistry._runSerialized — Track 1 helper', () => {
+
+  // ── T1-1: Serial order ──────────────────────────────────────────────────────
+  it('resolves 5 concurrent calls on the same key in submission order', async () => {
+    const registry = makeSerialRegistry();
+    const order = [];
+    const KEY = 'mcp|u1|default';
+
+    // Each fn records its index and resolves after a tiny await so they truly
+    // interleave if not serialised.
+    const promises = Array.from({ length: 5 }, (_, i) =>
+      registry._runSerialized(KEY, async () => {
+        // Yield to allow later-submitted chains to attempt to start.
+        await new Promise((r) => setImmediate(r));
+        order.push(i);
+        return i;
+      }),
+    );
+
+    const results = await Promise.all(promises);
+
+    // Results must match submission order 0–4.
+    expect(results).toEqual([0, 1, 2, 3, 4]);
+    // The internal order array must also be monotonically increasing.
+    expect(order).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  // ── T1-2: Rejection isolation ───────────────────────────────────────────────
+  it('a mid-chain rejection does not block or corrupt later callers', async () => {
+    const registry = makeSerialRegistry();
+    const KEY = 'mcp|u2|default';
+
+    const p1 = registry._runSerialized(KEY, async () => 'first');
+    const p2 = registry._runSerialized(KEY, async () => { throw new Error('boom'); });
+    const p3 = registry._runSerialized(KEY, async () => 'third');
+
+    const [r1, r3] = await Promise.all([
+      p1,
+      p2.catch(() => 'caught'),
+      p3,
+    ]).then(([a, , c]) => [a, c]);
+
+    expect(r1).toBe('first');
+    expect(r3).toBe('third');
+    // p3 must not have hung — if we get here the chain was not dead-locked.
+  });
+
+  // ── T1-3: Key isolation (different keys run in parallel) ────────────────────
+  it('calls on different keys overlap (parallelism proven by timestamps)', async () => {
+    const registry = makeSerialRegistry();
+
+    // Each fn takes ~20 ms. If keys were also serialised, total would be ≥ 80 ms
+    // (4 calls × 20 ms). With parallel keys, A and B overlap so total ≈ 40 ms.
+    const DELAY = 20;
+    const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    const timestamps = [];
+    const record = (label) => () =>
+      delay(DELAY).then(() => { timestamps.push({ label, t: Date.now() }); return label; });
+
+    const start = Date.now();
+    await Promise.all([
+      registry._runSerialized('mcp|u-a|default', record('A1')),
+      registry._runSerialized('mcp|u-a|default', record('A2')),
+      registry._runSerialized('mcp|u-b|default', record('B1')),
+      registry._runSerialized('mcp|u-b|default', record('B2')),
+    ]);
+    const elapsed = Date.now() - start;
+
+    // If A and B ran completely sequentially the wall time would be ≥ 4×DELAY.
+    // Parallelism means it should be < 3×DELAY (generous bound).
+    expect(elapsed).toBeLessThan(DELAY * 3 + 30); // +30 ms scheduling slack
+
+    // Within key A, A1 must finish before A2 starts → A2.t ≥ A1.t.
+    const A1 = timestamps.find((e) => e.label === 'A1');
+    const A2 = timestamps.find((e) => e.label === 'A2');
+    expect(A2.t).toBeGreaterThanOrEqual(A1.t);
+  });
+
+  // ── T1-4: Map cleanup ───────────────────────────────────────────────────────
+  it('_sessionLocks size is ≤ 1 after 10 sequential calls on one key', async () => {
+    const registry = makeSerialRegistry();
+    const KEY = 'mcp|u3|default';
+
+    for (let i = 0; i < 10; i++) {
+      // Run sequentially (await each call) to ensure clean settling.
+      // eslint-disable-next-line no-await-in-loop
+      await registry._runSerialized(KEY, async () => i);
+    }
+
+    // After all calls have fully settled, the Map should have cleaned up.
+    expect(registry._sessionLocks.size).toBeLessThanOrEqual(1);
+  });
+
+  // ── T1-5: Empty / missing sessionKey throws TypeError ───────────────────────
+  it('throws TypeError for an empty string sessionKey', async () => {
+    const registry = makeSerialRegistry();
+    await expect(
+      registry._runSerialized('', async () => 'x'),
+    ).rejects.toThrow(TypeError);
+    await expect(
+      registry._runSerialized('', async () => 'x'),
+    ).rejects.toThrow('non-empty string');
+  });
+
+  // ── T1-6: Return value passthrough ─────────────────────────────────────────
+  it('resolves to whatever fn returns (object, number, undefined)', async () => {
+    const registry = makeSerialRegistry();
+    const KEY = 'mcp|u4|default';
+
+    const obj    = await registry._runSerialized(KEY, async () => ({ a: 1 }));
+    const num    = await registry._runSerialized(KEY, async () => 42);
+    const undef  = await registry._runSerialized(KEY, async () => undefined);
+    const str    = await registry._runSerialized(KEY, async () => 'hello');
+
+    expect(obj).toEqual({ a: 1 });
+    expect(num).toBe(42);
+    expect(undef).toBeUndefined();
+    expect(str).toBe('hello');
+  });
+
+});

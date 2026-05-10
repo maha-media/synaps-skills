@@ -101,6 +101,8 @@ export class McpToolRegistry {
     this._chatTimeoutMs = chatTimeoutMs;
     this._logger = logger;
     this._now = now;
+    /** @type {Map<string, Promise<void>>} Per-session promise chains (Track 1). */
+    this._sessionLocks = new Map();
   }
 
   /**
@@ -111,6 +113,52 @@ export class McpToolRegistry {
     if (this._sessionRouter) return this._sessionRouter;
     if (this._getSessionRouter) return this._getSessionRouter();
     return null;
+  }
+
+  /**
+   * Run `fn` serially relative to all other calls sharing the same
+   * `sessionKey`.  Different keys execute in parallel.
+   *
+   * Concurrency contract:
+   *   - Calls on the same key are chained so each waits for the prior one
+   *     to settle (resolve OR reject) before starting.
+   *   - A rejection in one call does NOT block later callers on the same
+   *     key — `prev.catch(() => {})` absorbs it before chaining the next fn.
+   *   - The `_sessionLocks` Map entry is pruned (best-effort) once the
+   *     chain settles, preventing unbounded Map growth after idle periods.
+   *
+   * Wave A only: helper added here; wiring into `_invokeChat` is Wave B (B4).
+   *
+   * @param {string}   sessionKey  — opaque key, e.g. `mcp|<synaps_user_id>|default`
+   * @param {Function} fn          — async () => T; called when it is this call's turn
+   * @returns {Promise<T>}         — resolves/rejects with whatever `fn` returns
+   * @throws {TypeError} if `sessionKey` is not a non-empty string
+   */
+  async _runSerialized(sessionKey, fn) {
+    if (typeof sessionKey !== 'string' || sessionKey.length === 0) {
+      throw new TypeError('_runSerialized: sessionKey must be a non-empty string');
+    }
+
+    const prev = this._sessionLocks.get(sessionKey) ?? Promise.resolve();
+
+    // Chain this call after prev; absorb prev's rejection so it never
+    // propagates into fn's execution or our own await below.
+    const next = prev.catch(() => {}).then(fn);
+
+    // Store a rejection-safe handle so the *next* waiter can chain onto us
+    // without seeing our own failure.
+    const stored = next.catch(() => {});
+    this._sessionLocks.set(sessionKey, stored);
+
+    try {
+      return await next;
+    } finally {
+      // Prune the Map entry when nothing else has overwritten it, i.e.
+      // we are the last link in the chain for this key right now.
+      if (this._sessionLocks.get(sessionKey) === stored) {
+        this._sessionLocks.delete(sessionKey);
+      }
+    }
   }
 
   // ── Public API ────────────────────────────────────────────────────────────
