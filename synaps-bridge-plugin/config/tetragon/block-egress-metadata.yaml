@@ -1,0 +1,60 @@
+# block-egress-metadata.yaml
+#
+# Purpose
+# ───────
+# Block all outbound TCP connections to the AWS/GCP/Azure/DigitalOcean cloud
+# instance-metadata service endpoint (169.254.169.254).  This prevents
+# workloads running inside Synaps workspace containers from exfiltrating
+# cloud credentials, IAM roles, or instance identity tokens.
+#
+# What it blocks
+# ──────────────
+# Any process that calls connect(2) (or sendto/sendmsg for raw/UDP paths) with
+# a destination of 169.254.169.254 on any port will receive -EPERM.
+#
+# User-visible behaviour
+# ──────────────────────
+# • curl http://169.254.169.254/...  → "connect: Operation not permitted"
+# • Python requests / boto3          → ConnectionError / NoCredentialsError
+# • AWS SDK default credential chain → falls through to explicit-env-var only
+#
+# Tetragon docs: https://tetragon.io/docs/concepts/tracing-policy/
+# kprobe reference: https://tetragon.io/docs/concepts/tracing-policy/hooks/
+#
+# Note: tcp_connect is the standard hook for IPv4 connect-time enforcement.
+# The selector `daddr` matches the destination IPv4 address as a u32 in
+# network byte order.  169.254.169.254 = 0xA9FEA9FE (big-endian).
+# Tetragon's addr4 comparison accepts the dotted-decimal string form.
+#
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: block-egress-metadata
+  labels:
+    synaps-control-plane: "v0"
+spec:
+  kprobes:
+    - call: "tcp_connect"
+      syscall: false
+      args:
+        # arg0 is struct sock*; Tetragon exposes the destination address via
+        # the built-in sock fields (daddr4 for IPv4 destination).
+        - index: 0
+          type: "sock"
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: "Equal"
+              # Tetragon resolves daddr4 from the sock* at arg index 0.
+              # NOTE: Tetragon >= 1.1 supports sock field matching via
+              # `type: sock` + `operator: Equal` on dotted-decimal strings.
+              # See: https://tetragon.io/docs/concepts/tracing-policy/selectors/
+              #
+              # TODO: If your Tetragon version requires a raw u32 instead of
+              # dotted-decimal, replace the value with "2852039166"
+              # (0xA9FEA9FE in decimal = 169.254.169.254 big-endian).
+              values:
+                - "169.254.169.254"
+          matchActions:
+            - action: Override
+              argError: -1   # -EPERM

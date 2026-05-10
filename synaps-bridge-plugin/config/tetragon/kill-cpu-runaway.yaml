@@ -1,0 +1,110 @@
+# kill-cpu-runaway.yaml
+#
+# Purpose
+# ───────
+# Terminate processes that sustain > 90% CPU utilisation for more than 60
+# consecutive seconds inside workspace containers, preventing a single
+# runaway task from starving neighbouring workspaces or the host.
+#
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  ⚠  IMPLEMENTATION LIMITATION — READ BEFORE APPLYING                   ║
+# ║                                                                         ║
+# ║  Tetragon does NOT expose a stable, first-class "CPU percentage"        ║
+# ║  primitive in its kprobe/tracepoint selector language as of v1.2.       ║
+# ║                                                                         ║
+# ║  What Tetragon CAN do:                                                  ║
+# ║   • Hook scheduler tracepoints (sched_switch, sched_wakeup)             ║
+# ║   • Hook perf_event_overflow for hardware PMU counters (complex,        ║
+# ║     requires a custom BPF helper loaded alongside the policy)           ║
+# ║   • Count clock ticks accumulated via account_process_tick (not a       ║
+# ║     stable export in all kernel versions)                               ║
+# ║                                                                         ║
+# ║  None of these give a clean "CPU% over N seconds" in the YAML DSL       ║
+# ║  without a custom BPF program.                                          ║
+# ║                                                                         ║
+# ║  Recommended alternatives:                                              ║
+# ║   1. JS-side Reaper (PREFERRED for this project):                       ║
+# ║      The Reaper class (bridge/core/reaper.js) already polls             ║
+# ║      /proc/<pid>/stat or Docker stats via WorkspaceManager and can      ║
+# ║      call workspaceManager.stopWorkspace(id) when CPU exceeds the       ║
+# ║      threshold.  Add a `cpuPollIntervalMs` option and a                 ║
+# ║      `cpuThresholdPct` threshold to the existing Reaper constructor.    ║
+# ║                                                                         ║
+# ║   2. cgroups v2 cpu.max:                                                ║
+# ║      Set cpu.max on the workspace cgroup at container-create time       ║
+# ║      (e.g., --cpus=1.0 in Docker run args).  The kernel enforces the   ║
+# ║      quota at the cgroup level without requiring BPF.                   ║
+# ║      Reference: https://www.kernel.org/doc/html/latest/admin-guide/    ║
+# ║                  cgroup-v2.html#cpu-interface-files                     ║
+# ║                                                                         ║
+# ║   3. Custom BPF program (advanced):                                     ║
+# ║      Write a BPF_PROG_TYPE_PERF_EVENT program that accumulates          ║
+# ║      per-cgroup CPU time and emits a signal via bpf_send_signal()       ║
+# ║      when the sustained threshold is crossed.  Load it via              ║
+# ║      Tetragon's RuntimeHook API or as a standalone bpftool-loaded       ║
+# ║      program.                                                           ║
+# ║      Reference: https://tetragon.io/docs/concepts/runtime-hooks/        ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+#
+# This file is a DOCUMENTED STUB.  It ships as a placeholder so operators
+# know the intended policy exists and why it is not yet eBPF-implemented.
+# The JS-side Reaper is the primary enforcement mechanism for this project.
+#
+# Tetragon tracing policy docs: https://tetragon.io/docs/concepts/tracing-policy/
+# sched_switch tracepoint reference: https://www.kernel.org/doc/html/latest/trace/events.html
+#
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: kill-cpu-runaway
+  labels:
+    synaps-control-plane: "v0"
+    # Mark as stub so apply scripts can skip it automatically.
+    synaps-policy-status: "stub-requires-custom-bpf"
+spec:
+  # ── STUB — NOT enforced by this YAML ────────────────────────────────────────
+  #
+  # Intended implementation (requires custom BPF helper or kernel ≥ 6.x
+  # with cgroup CPU accounting tracepoints stable in the Tetragon DSL):
+  #
+  # tracepoints:
+  #   - subsystem: "sched"
+  #     event: "sched_switch"
+  #     args:
+  #       - index: 0
+  #         type: "sched_switch_args"   # struct sched_switch_args*
+  #     selectors:
+  #       - matchArgs:
+  #           # Filter: prev_state == TASK_RUNNING (0) means the task was
+  #           # preempted, not voluntarily descheduled → contributing to
+  #           # CPU pressure.
+  #           - index: 0
+  #             operator: "Equal"
+  #             values: ["0"]   # TASK_RUNNING
+  #         matchRateLimit:
+  #           # TODO: Tetragon does not natively compute "% of wall time
+  #           # on CPU" in the selector DSL.  A custom BPF map accumulating
+  #           # per-PID runnable ticks vs total ticks is required.
+  #           rate: 54000        # ~90% of 60 000 ticks in 60 s at HZ=100
+  #           interval: "60s"
+  #           perProcess: true
+  #         matchActions:
+  #           - action: Sigkill
+  #
+  # For now, emit no kprobes/tracepoints — this YAML is intentionally inert.
+  # Remove the `tracepoints: []` line and fill in the above block once the
+  # custom BPF helper is implemented.
+  #
+  tracepoints: []
+  #
+  # JS-side fallback
+  # ────────────────
+  # bridge/core/reaper.js is the current enforcement mechanism.
+  # See WorkspaceManager.stopWorkspace() which is called by the Reaper
+  # when CPU/memory thresholds are exceeded at the application layer.
+  # Configure via bridge.toml [supervisor] section:
+  #
+  #   [supervisor]
+  #   enabled            = true
+  #   reaper_interval_ms = 60000      # sweep every 60 s
+  #   workspace_stale_ms = 1800000    # 30 min heartbeat timeout

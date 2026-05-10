@@ -1,0 +1,71 @@
+# block-kernel-modules.yaml
+#
+# Purpose
+# ───────
+# Prevent workspace container processes from loading kernel modules via
+# finit_module(2) / init_module(2).  Even when a container has CAP_SYS_MODULE
+# this policy intercepts the syscall at the kernel level and returns -EPERM,
+# providing a defence-in-depth layer beyond seccomp profiles.
+#
+# What it blocks
+# ──────────────
+# • insmod / modprobe inside any non-init user namespace
+# • Python ctypes / cffi attempts to load .ko files
+# • Any process calling finit_module(2) or init_module(2)
+#
+# User-visible behaviour
+# ──────────────────────
+# • insmod foo.ko      → "insmod: ERROR: could not insert module foo.ko: Operation not permitted"
+# • modprobe <module>  → "modprobe: FATAL: Module <x> not found or Operation not permitted"
+#
+# Scope
+# ─────
+# The `matchNamespaces` selector targets processes running in a non-init
+# user namespace (i.e., container workloads).  The init namespace (the host
+# kernel's own module loader) is excluded so legitimate system maintenance
+# is not blocked.
+#
+# Tetragon docs: https://tetragon.io/docs/concepts/tracing-policy/
+# Namespace selectors: https://tetragon.io/docs/concepts/tracing-policy/selectors/#namespace-selectors
+#
+# Note on syscall naming: Tetragon hooks the architecture-specific syscall
+# entry point.  On x86-64 this is __x64_sys_finit_module and
+# __x64_sys_init_module.  On arm64 use __arm64_sys_finit_module etc.
+# Adjust the `call` field for your target architecture.
+#
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: block-kernel-modules
+  labels:
+    synaps-control-plane: "v0"
+spec:
+  kprobes:
+    # ── finit_module(2) — most common path (insmod / modprobe) ───────────────
+    - call: "__x64_sys_finit_module"
+      syscall: true
+      selectors:
+        - matchNamespaces:
+            # Only intercept processes running inside a user namespace
+            # (container workloads).  Processes in the host init namespace
+            # (nstype: User, operator: NotIn, values: ["host"]) are excluded.
+            - namespace: User
+              operator: "NotIn"
+              values:
+                - "host"
+          matchActions:
+            - action: Override
+              argError: -1   # -EPERM
+
+    # ── init_module(2) — legacy path (older tooling) ─────────────────────────
+    - call: "__x64_sys_init_module"
+      syscall: true
+      selectors:
+        - matchNamespaces:
+            - namespace: User
+              operator: "NotIn"
+              values:
+                - "host"
+          matchActions:
+            - action: Override
+              argError: -1   # -EPERM
