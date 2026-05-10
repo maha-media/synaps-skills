@@ -39,6 +39,7 @@
  */
 
 import { EventEmitter }          from 'node:events';
+import { execFileSync }          from 'node:child_process';
 import { SessionRouter }         from './core/session-router.js';
 import { SessionStore }          from './core/session-store.js';
 import { SynapsRpc }             from './core/synaps-rpc.js';
@@ -396,12 +397,19 @@ export async function defaultIdentityRouterFactory({ config, logger }) {
  * scpDeps.synapsUserIdResolver() which returns a hardcoded default.
  * Proper per-thread resolution (IdentityRouter) lands in Phase 3.
  *
+ * Phase 9 C3 note: when `useDockerWorkspace = true` a one-shot `synaps
+ * tools_list --json` probe is executed synchronously.  On failure the factory
+ * falls back to the host-mode SynapsRpc unless `config.rpc.strict = true`,
+ * in which case an error is thrown and the daemon refuses to start.
+ *
  * @param {import('./config.js').NormalizedConfig} config
  * @param {object} logger
  * @param {{ workspaceManager: WorkspaceManager, synapsUserIdResolver: Function, memoryGateway: MemoryGateway|NoopMemoryGateway }|null} scpDeps
+ * @param {object} [opts]
+ * @param {Function} [opts.execFileImpl]  - Injectable execFileSync replacement for tests.
  * @returns {SessionRouter}
  */
-function defaultSessionRouterFactory(config, logger, scpDeps = null) {
+export function defaultSessionRouterFactory(config, logger, scpDeps = null, { execFileImpl = execFileSync } = {}) {
   const store = new SessionStore({ logger });
   const isScp = config.platform.mode === 'scp';
   // Even in SCP mode, allow opt-out of Docker workspace orchestration via
@@ -409,25 +417,49 @@ function defaultSessionRouterFactory(config, logger, scpDeps = null) {
   // installed synaps/workspace image.  The MCP wire protocol is unaffected.
   const useDockerWorkspace = isScp && !config.rpc.host_mode;
 
-  const rpcFactory = useDockerWorkspace
-    ? ({ sessionId = null, model = null } = {}) =>
-        new DockerExecSynapsRpc({
-          workspaceManager: scpDeps.workspaceManager,
-          synapsUserId: scpDeps.synapsUserIdResolver(),
-          binPath: config.rpc.binary,
-          sessionId,
-          model: model ?? config.rpc.default_model,
-          profile: config.rpc.default_profile || null,
-          logger,
-        })
-    : ({ sessionId = null, model = null } = {}) =>
-        new SynapsRpc({
-          binPath: config.rpc.binary,
-          sessionId,
-          model: model ?? config.rpc.default_model,
-          profile: config.rpc.default_profile || null,
-          logger,
-        });
+  // Build both factories up front so the probe fallback can re-assign.
+  const dockerRpcFactory = ({ sessionId = null, model = null } = {}) =>
+    new DockerExecSynapsRpc({
+      workspaceManager: scpDeps.workspaceManager,
+      synapsUserId: scpDeps.synapsUserIdResolver(),
+      binPath: config.rpc.binary,
+      sessionId,
+      model: model ?? config.rpc.default_model,
+      profile: config.rpc.default_profile || null,
+      logger,
+    });
+
+  const hostRpcFactory = ({ sessionId = null, model = null } = {}) =>
+    new SynapsRpc({
+      binPath: config.rpc.binary,
+      sessionId,
+      model: model ?? config.rpc.default_model,
+      profile: config.rpc.default_profile || null,
+      logger,
+    });
+
+  let rpcFactory = useDockerWorkspace ? dockerRpcFactory : hostRpcFactory;
+
+  // ── Phase 9 C3: one-shot rpcFactory probe ──────────────────────────────────
+  if (useDockerWorkspace) {
+    try {
+      const stdout = execFileImpl(
+        config.rpc.binary || 'synaps',
+        ['tools_list', '--json'],
+        { timeout: 5000, encoding: 'utf8' },
+      );
+      const tools = JSON.parse(typeof stdout === 'string' ? stdout : stdout.toString());
+      if (!Array.isArray(tools)) throw new Error('tools_list did not return JSON array');
+      logger.info?.(`[rpc] tools_list probe ok: ${tools.length} tool(s)`);
+    } catch (err) {
+      const msg = `[rpc] tools_list probe failed: ${err.message}`;
+      if (config.rpc.strict) {
+        throw new Error(`${msg} — refusing to start (rpc.strict = true)`);
+      }
+      logger.warn?.(`${msg} — falling back to host_mode for this run (set rpc.strict = true to make this fatal)`);
+      rpcFactory = hostRpcFactory;
+    }
+  }
 
   return new SessionRouter({
     store,
@@ -502,12 +534,15 @@ export class BridgeDaemon extends EventEmitter {
     inboxNotifierFactory = null,
     inboxDirFor = null,
     mcpServerFactory = null,
+    execFileImpl = null,
   } = {}) {
     super();
 
     this._config = config;
     this.logger = logger;
     this._env = env;
+    // execFileImpl: injectable for tests to override the probe's execFileSync call.
+    this._execFileImpl = execFileImpl ?? execFileSync;
     this._sessionRouterFactory  = sessionRouterFactory  ?? defaultSessionRouterFactory;
     this._slackAdapterFactory   = slackAdapterFactory   ?? defaultSlackAdapterFactory;
     this._controlSocketFactory  = controlSocketFactory  ?? defaultControlSocketFactory;
@@ -891,7 +926,7 @@ export class BridgeDaemon extends EventEmitter {
     this._hookBus = await this._hookBusFactory(this._config, this.logger, _getMongoose);
 
     // 1. Session router.
-    this._sessionRouter = this._sessionRouterFactory(this._config, this.logger, scpDeps);
+    this._sessionRouter = this._sessionRouterFactory(this._config, this.logger, scpDeps, { execFileImpl: this._execFileImpl });
     await this._sessionRouter.start();
 
     // 2. Slack adapter (if enabled).

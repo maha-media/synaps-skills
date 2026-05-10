@@ -2508,3 +2508,92 @@ describe('BridgeDaemon — Phase 9 Metrics wiring', () => {
     await daemon.stop();
   });
 });
+
+// ─── Phase 9 Wave C — rpcFactory probe (Track 5) ─────────────────────────────
+
+import { defaultSessionRouterFactory } from './index.js';
+
+describe('defaultSessionRouterFactory — rpcFactory probe (Phase 9 C3)', () => {
+  // Shared SCP-like config with host_mode=false (triggers Docker path).
+  function makeScpRpcConfig(overrides = {}) {
+    return {
+      ...BRIDGE_CONFIG_DEFAULTS,
+      platform:  { mode: 'scp' },
+      bridge:    { ...BRIDGE_CONFIG_DEFAULTS.bridge },
+      rpc:       { ...BRIDGE_CONFIG_DEFAULTS.rpc, host_mode: false, strict: false, ...overrides },
+      workspace: { ...BRIDGE_CONFIG_DEFAULTS.workspace },
+    };
+  }
+
+  const fakeScpDeps = {
+    workspaceManager:     {},
+    synapsUserIdResolver: () => 'u1',
+    memoryGateway:        null,
+    credBroker:           null,
+  };
+
+  it('probe success: no warn logged; session router is created with DockerExecSynapsRpc factory', () => {
+    const logger = makeLogger();
+    const execFileImpl = vi.fn().mockReturnValue(JSON.stringify([{ name: 'synaps_chat' }]));
+
+    const router = defaultSessionRouterFactory(
+      makeScpRpcConfig(),
+      logger,
+      fakeScpDeps,
+      { execFileImpl },
+    );
+
+    expect(router).toBeDefined();
+    expect(execFileImpl).toHaveBeenCalledOnce();
+    expect(execFileImpl).toHaveBeenCalledWith(
+      expect.any(String),
+      ['tools_list', '--json'],
+      expect.objectContaining({ timeout: 5000 }),
+    );
+    expect(logger.warn.mock.calls.length).toBe(0);
+    // The factory produces DockerExecSynapsRpc instances.
+    const rpc = router._rpcFactory?.({ sessionId: null, model: null })
+      ?? (() => { throw new Error('no _rpcFactory'); })();
+    expect(rpc).toBeInstanceOf(DockerExecSynapsRpc);
+  });
+
+  it('probe failure non-strict: logger.warn called; factory falls back to host SynapsRpc', () => {
+    const logger = makeLogger();
+    const execFileImpl = vi.fn().mockImplementation(() => {
+      throw new Error('binary not found');
+    });
+
+    const router = defaultSessionRouterFactory(
+      makeScpRpcConfig({ strict: false }),
+      logger,
+      fakeScpDeps,
+      { execFileImpl },
+    );
+
+    expect(router).toBeDefined();
+    const warnMsgs = logger.warn.mock.calls.map((args) => String(args[0]));
+    expect(warnMsgs.some((m) => m.includes('probe failed'))).toBe(true);
+    expect(warnMsgs.some((m) => m.includes('falling back'))).toBe(true);
+    // After fallback, the factory should produce a plain SynapsRpc.
+    const rpc = router._rpcFactory?.({ sessionId: null, model: null })
+      ?? (() => { throw new Error('no _rpcFactory'); })();
+    expect(rpc).toBeInstanceOf(SynapsRpc);
+    expect(rpc).not.toBeInstanceOf(DockerExecSynapsRpc);
+  });
+
+  it('probe failure strict=true: factory throws — daemon refuses to start', () => {
+    const logger = makeLogger();
+    const execFileImpl = vi.fn().mockImplementation(() => {
+      throw new Error('timeout');
+    });
+
+    expect(() =>
+      defaultSessionRouterFactory(
+        makeScpRpcConfig({ strict: true }),
+        logger,
+        fakeScpDeps,
+        { execFileImpl },
+      ),
+    ).toThrow(/probe failed.*refusing to start/i);
+  });
+});
