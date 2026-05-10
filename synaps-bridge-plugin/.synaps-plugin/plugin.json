@@ -1,0 +1,43 @@
+{
+  "name": "synaps-bridge",
+  "version": "0.1.0",
+  "description": "Multi-source, multi-thread conversation bridge daemon (Slack/Discord/...).",
+  "author": {
+    "name": "jr",
+    "url": "https://github.com/maha-media"
+  },
+  "repository": "maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "productivity",
+  "commands": [
+    {
+      "kind": "shell",
+      "name": "bridge",
+      "exec": "scripts/bridge-cli.sh",
+      "description": "Manage the synaps-bridge daemon (start|stop|status|threads|model|reap)"
+    }
+  ],
+  "settings": {
+    "categories": [
+      {
+        "id": "bridge",
+        "label": "Bridge",
+        "fields": [
+          {
+            "key": "default_model",
+            "label": "Default model for new threads",
+            "editor": "text",
+            "help": "Model ID passed to synaps rpc when spawning a new bridge session (e.g. claude-sonnet-4-6)."
+          },
+          {
+            "key": "session_idle_timeout_hours",
+            "label": "Idle timeout (hours)",
+            "editor": "text",
+            "default": "24",
+            "help": "Hours of inactivity before a bridge thread session is reaped. Default 24."
+          }
+        ]
+      }
+    ]
+  }
+}
