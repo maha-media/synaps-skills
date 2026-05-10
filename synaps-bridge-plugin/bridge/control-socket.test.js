@@ -977,3 +977,299 @@ describe('ControlSocket — op: chat_stream_start', () => {
     expect(lines[0]).toEqual({ kind: 'done' });
   });
 });
+
+// ─── op: cred_broker_use ──────────────────────────────────────────────────────
+
+import {
+  CredsValidationError,
+  CredsUnavailableError,
+  CredBrokerDisabledError,
+} from './core/cred-broker.js';
+import {
+  InfisicalNotFoundError,
+  InfisicalAuthError,
+  InfisicalUpstreamError,
+} from './core/cred-broker/infisical-client.js';
+
+/**
+ * Build a minimal fake credBroker whose `use()` is a vi.fn().
+ * Caller can pass a resolved value or a rejection.
+ */
+function makeFakeCredBroker(resolvedValue = null) {
+  return {
+    use: vi.fn(async () => {
+      if (resolvedValue instanceof Error) throw resolvedValue;
+      return resolvedValue ?? {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        body: '{"login":"octocat"}',
+        cached: false,
+        fetchedAt: 1735000000000,
+      };
+    }),
+  };
+}
+
+/** Canonical happy-path request payload. */
+const GOOD_REQ = {
+  op:             'cred_broker_use',
+  synaps_user_id: 'syn_abc123',
+  institution_id: 'inst_xyz',
+  key:            'github.token',
+  request: {
+    method:  'GET',
+    url:     'https://api.github.com/user',
+    headers: { Accept: 'application/vnd.github+json' },
+    body:    null,
+  },
+};
+
+describe('ControlSocket — cred_broker_use op', () => {
+  let socketPath, cs, credBroker, logger;
+
+  beforeEach(async () => {
+    socketPath  = tmpSocketPath();
+    logger      = makeLogger();
+    credBroker  = makeFakeCredBroker();
+    cs = new ControlSocket({
+      socketPath,
+      sessionRouter: makeFakeRouter(),
+      credBroker,
+      logger,
+    });
+    await cs.start();
+  });
+
+  afterEach(async () => { await cs.stop(); });
+
+  // ── happy path ─────────────────────────────────────────────────────────────
+
+  it('happy path — routes to credBroker.use() with camelCase args', async () => {
+    const resp = await sendRequest(socketPath, GOOD_REQ);
+    expect(resp.ok).toBe(true);
+    expect(credBroker.use).toHaveBeenCalledOnce();
+
+    const [callArgs] = credBroker.use.mock.calls[0];
+    expect(callArgs.synapsUserId).toBe('syn_abc123');
+    expect(callArgs.institutionId).toBe('inst_xyz');
+    expect(callArgs.key).toBe('github.token');
+    expect(callArgs.request.method).toBe('GET');
+    expect(callArgs.request.url).toBe('https://api.github.com/user');
+  });
+
+  it('happy path — response shape has ok, status, headers, body, cached, fetched_at', async () => {
+    credBroker.use.mockResolvedValueOnce({
+      status:    200,
+      headers:   { 'content-type': 'application/json' },
+      body:      '{"login":"octocat"}',
+      cached:    false,
+      fetchedAt: 1735000000000,
+    });
+
+    const resp = await sendRequest(socketPath, GOOD_REQ);
+    expect(resp.ok).toBe(true);
+    expect(resp.status).toBe(200);
+    expect(resp.headers).toEqual({ 'content-type': 'application/json' });
+    expect(resp.body).toBe('{"login":"octocat"}');
+    expect(resp.cached).toBe(false);
+    expect(resp.fetched_at).toBe(1735000000000);
+  });
+
+  it('synaps_user_id (snake) → synapsUserId (camel) translation to broker', async () => {
+    await sendRequest(socketPath, { ...GOOD_REQ, synaps_user_id: 'syn_translated' });
+    const [args] = credBroker.use.mock.calls[0];
+    expect(args.synapsUserId).toBe('syn_translated');
+    expect(args).not.toHaveProperty('synaps_user_id');
+  });
+
+  it('institution_id (snake) → institutionId (camel) translation to broker', async () => {
+    await sendRequest(socketPath, { ...GOOD_REQ, institution_id: 'inst_translated' });
+    const [args] = credBroker.use.mock.calls[0];
+    expect(args.institutionId).toBe('inst_translated');
+    expect(args).not.toHaveProperty('institution_id');
+  });
+
+  it('request.body: null → undefined passed to broker', async () => {
+    const req = { ...GOOD_REQ, request: { ...GOOD_REQ.request, body: null } };
+    await sendRequest(socketPath, req);
+    const [args] = credBroker.use.mock.calls[0];
+    expect(args.request.body).toBeUndefined();
+  });
+
+  it('cached:true is reflected in wire response', async () => {
+    credBroker.use.mockResolvedValueOnce({
+      status: 200, headers: {}, body: '{}', cached: true, fetchedAt: 1735000000001,
+    });
+    const resp = await sendRequest(socketPath, GOOD_REQ);
+    expect(resp.ok).toBe(true);
+    expect(resp.cached).toBe(true);
+  });
+
+  // ── wire-level validation errors ───────────────────────────────────────────
+
+  it('missing synaps_user_id → code: invalid_request', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'cred_broker_use', institution_id: 'inst_1', key: 'k',
+      request: { method: 'GET', url: 'https://x.example' },
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('invalid_request');
+    expect(resp.error).toMatch(/synaps_user_id/);
+  });
+
+  it('empty synaps_user_id → code: invalid_request', async () => {
+    const resp = await sendRequest(socketPath, { ...GOOD_REQ, synaps_user_id: '' });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('invalid_request');
+  });
+
+  it('missing institution_id → code: invalid_request', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'cred_broker_use', synaps_user_id: 'suid', key: 'k',
+      request: { method: 'GET', url: 'https://x.example' },
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('invalid_request');
+    expect(resp.error).toMatch(/institution_id/);
+  });
+
+  it('missing key → code: invalid_request', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'cred_broker_use', synaps_user_id: 'suid', institution_id: 'inst',
+      request: { method: 'GET', url: 'https://x.example' },
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('invalid_request');
+    expect(resp.error).toMatch(/key/);
+  });
+
+  it('missing request object → code: invalid_request', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'cred_broker_use', synaps_user_id: 'suid', institution_id: 'inst', key: 'k',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('invalid_request');
+    expect(resp.error).toMatch(/request/);
+  });
+
+  // ── broker error code mapping ─────────────────────────────────────────────
+
+  it('CredsValidationError from broker → code: invalid_request', async () => {
+    credBroker.use.mockRejectedValueOnce(new CredsValidationError('bad method'));
+    const resp = await sendRequest(socketPath, GOOD_REQ);
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('invalid_request');
+    expect(resp.error).toBe('bad method');
+  });
+
+  it('CredBrokerDisabledError from broker → code: creds_disabled', async () => {
+    credBroker.use.mockRejectedValueOnce(new CredBrokerDisabledError('creds broker is disabled'));
+    const resp = await sendRequest(socketPath, GOOD_REQ);
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('creds_disabled');
+    expect(resp.error).toBe('creds broker is disabled');
+  });
+
+  it('CredsUnavailableError from broker → code: creds_unavailable', async () => {
+    credBroker.use.mockRejectedValueOnce(new CredsUnavailableError('infisical is down'));
+    const resp = await sendRequest(socketPath, GOOD_REQ);
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('creds_unavailable');
+    expect(resp.error).toBe('infisical is down');
+  });
+
+  it('InfisicalNotFoundError → code: secret_not_found', async () => {
+    credBroker.use.mockRejectedValueOnce(new InfisicalNotFoundError('secret not found: github.token'));
+    const resp = await sendRequest(socketPath, GOOD_REQ);
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('secret_not_found');
+    expect(resp.error).toMatch(/secret not found/);
+  });
+
+  it('InfisicalAuthError → code: broker_auth_failed', async () => {
+    credBroker.use.mockRejectedValueOnce(new InfisicalAuthError('infisical auth failed: 401'));
+    const resp = await sendRequest(socketPath, GOOD_REQ);
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('broker_auth_failed');
+    expect(resp.error).toMatch(/auth failed/);
+  });
+
+  it('InfisicalUpstreamError → code: broker_upstream', async () => {
+    credBroker.use.mockRejectedValueOnce(new InfisicalUpstreamError('network timeout'));
+    const resp = await sendRequest(socketPath, GOOD_REQ);
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('broker_upstream');
+    expect(resp.error).toBe('network timeout');
+  });
+
+  it('generic Error → code: internal_error', async () => {
+    credBroker.use.mockRejectedValueOnce(new Error('unexpected internal failure'));
+    const resp = await sendRequest(socketPath, GOOD_REQ);
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('internal_error');
+    expect(resp.error).toBe('unexpected internal failure');
+  });
+
+  // ── no credBroker injected (defensive) ─────────────────────────────────────
+
+  it('no credBroker injected — code: creds_disabled, "not configured" message (defensive guard)', async () => {
+    const sp = tmpSocketPath();
+    const cs2 = new ControlSocket({
+      socketPath:    sp,
+      sessionRouter: makeFakeRouter(),
+      // credBroker intentionally omitted — should not happen in prod
+      logger:        makeLogger(),
+    });
+    await cs2.start();
+
+    const resp = await sendRequest(sp, GOOD_REQ);
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('creds_disabled');
+    expect(resp.error).toMatch(/not configured/);
+
+    await cs2.stop();
+  });
+
+  // ── token never logged ─────────────────────────────────────────────────────
+
+  it('token never appears in logger calls (log hygiene)', async () => {
+    const SECRET_TOKEN = 'ghp_SUPERSECRET_TOKEN_MUST_NOT_LOG';
+
+    // Simulate the broker returning a response where the token was used
+    // internally.  The response itself must never contain it.
+    credBroker.use.mockResolvedValueOnce({
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+      body:    '{"login":"octocat"}',
+      cached:  false,
+      fetchedAt: 1735000000000,
+    });
+
+    // Send a request with Authorization header containing the fake token.
+    const reqWithAuth = {
+      ...GOOD_REQ,
+      request: {
+        ...GOOD_REQ.request,
+        headers: {
+          ...GOOD_REQ.request.headers,
+          Authorization: `Bearer ${SECRET_TOKEN}`,
+        },
+      },
+    };
+
+    await sendRequest(socketPath, reqWithAuth);
+
+    // Collect all logger call arguments as a single flat string.
+    const allLoggedArgs = [
+      ...logger.info.mock.calls,
+      ...logger.warn.mock.calls,
+      ...logger.error.mock.calls,
+      ...logger.debug.mock.calls,
+    ]
+      .flat(Infinity)
+      .map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a)))
+      .join('\n');
+
+    expect(allLoggedArgs).not.toContain(SECRET_TOKEN);
+  });
+});
