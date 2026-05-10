@@ -18,6 +18,10 @@
 
 import http from 'node:http';
 
+// ─── sentinels ────────────────────────────────────────────────────────────────
+const BODY_TOO_LARGE = Symbol('body_too_large');
+const BAD_JSON       = Symbol('bad_json');
+
 // ─── ScpHttpServer ────────────────────────────────────────────────────────────
 
 /**
@@ -51,6 +55,8 @@ export class ScpHttpServer {
     logger         = console,
     heartbeatRepo  = null,
     bridgeCriticalMs = 60_000,
+    mcpServer      = null,
+    maxBodyBytes   = 262_144,
   }) {
     if (!config)   throw new TypeError('ScpHttpServer: opts.config is required');
     if (!vncProxy) throw new TypeError('ScpHttpServer: opts.vncProxy is required');
@@ -60,6 +66,8 @@ export class ScpHttpServer {
     this._logger           = logger;
     this._heartbeatRepo    = heartbeatRepo;
     this._bridgeCriticalMs = bridgeCriticalMs;
+    this._mcpServer        = mcpServer;
+    this._maxBodyBytes     = maxBodyBytes;
 
     /** @type {import('node:http').Server | null} */
     this._server = null;
@@ -97,6 +105,9 @@ export class ScpHttpServer {
     const heartbeatRepo    = this._heartbeatRepo;
     const bridgeCriticalMs = this._bridgeCriticalMs;
     const logger           = this._logger;
+    const mcpServer        = this._mcpServer;
+    const maxBodyBytes     = this._maxBodyBytes;
+    const self             = this;
 
     // ── request handler ───────────────────────────────────────────────────────
     const server = http.createServer((req, res) => {
@@ -168,6 +179,40 @@ export class ScpHttpServer {
 
           _sendJson(res, httpStatus, { status, mode, ts, components });
           return;
+        }
+
+        // ── /mcp/v1 → MCP JSON-RPC dispatcher ────────────────────────────────
+        if (url === '/mcp/v1') {
+          if (req.method === 'GET') {
+            res.writeHead(405, { Allow: 'POST', 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'method_not_allowed' }));
+            return;
+          }
+          if (req.method === 'POST') {
+            if (!mcpServer) {
+              return _sendJson(res, 404, { error: 'not_found' });
+            }
+            const body = await self._readJsonBody(req, maxBodyBytes);
+            if (body === BODY_TOO_LARGE) {
+              return _sendJson(res, 413, {
+                jsonrpc: '2.0', id: null,
+                error: { code: -32600, message: `Request body exceeds ${maxBodyBytes} bytes` },
+              });
+            }
+            if (body === BAD_JSON) {
+              return _sendJson(res, 400, {
+                jsonrpc: '2.0', id: null,
+                error: { code: -32700, message: 'Parse error' },
+              });
+            }
+            const token = req.headers['mcp-token'] || null;
+            const out = await mcpServer.handle({ token, body });
+            if (out.body === null) {
+              res.writeHead(out.statusCode);
+              return res.end();
+            }
+            return _sendJson(res, out.statusCode, out.body);
+          }
         }
 
         // ── /vnc/* → VncProxy middleware ──────────────────────────────────
@@ -246,6 +291,69 @@ export class ScpHttpServer {
     });
 
     this._logger.info('[ScpHttpServer] stopped');
+  }
+
+  /**
+   * Read and parse the request body, enforcing the byte cap.
+   *
+   * Resolves with:
+   *   - Parsed JSON value (object/array/etc.) on success.
+   *   - `BODY_TOO_LARGE` sentinel if data exceeds `max` bytes.
+   *   - `BAD_JSON` sentinel if the body is not valid JSON.
+   *
+   * Rejects only on stream errors or a 5-second timeout (turned into 500 by
+   * the outer async-IIFE catch).
+   *
+   * @param {import('node:http').IncomingMessage} req
+   * @param {number} max   Maximum allowed bytes.
+   * @returns {Promise<*>}
+   */
+  _readJsonBody(req, max) {
+    return new Promise((resolve, reject) => {
+      const chunks = [];
+      let total = 0;
+      let done = false;
+
+      const timer = setTimeout(() => {
+        if (!done) {
+          done = true;
+          reject(new Error('ScpHttpServer: body read timeout'));
+        }
+      }, 5_000);
+
+      req.on('data', (chunk) => {
+        if (done) return;
+        total += chunk.length;
+        if (total > max) {
+          done = true;
+          clearTimeout(timer);
+          // Drain remaining data so the socket stays clean.
+          req.resume();
+          resolve(BODY_TOO_LARGE);
+          return;
+        }
+        chunks.push(chunk);
+      });
+
+      req.on('end', () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        const raw = Buffer.concat(chunks).toString('utf8');
+        try {
+          resolve(JSON.parse(raw));
+        } catch {
+          resolve(BAD_JSON);
+        }
+      });
+
+      req.on('error', (err) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
   }
 }
 

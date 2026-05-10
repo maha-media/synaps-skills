@@ -1685,3 +1685,133 @@ describe('loadBridgeConfig — scheduler / hooks / inbox are not treated as unkn
     );
   });
 });
+
+// ─── [mcp] section ────────────────────────────────────────────────────────────
+
+describe('loadBridgeConfig — [mcp] BRIDGE_CONFIG_DEFAULTS', () => {
+  it('mcp default sub-object is frozen', () => {
+    expect(Object.isFrozen(BRIDGE_CONFIG_DEFAULTS.mcp)).toBe(true);
+  });
+
+  it('MCP_DEFAULTS: enabled=false, audit=false, chat_timeout_ms=120000, max_body_bytes=262144, policy_name=synaps-control-plane', () => {
+    const D = BRIDGE_CONFIG_DEFAULTS;
+    expect(D.mcp.enabled).toBe(false);
+    expect(D.mcp.audit).toBe(false);
+    expect(D.mcp.chat_timeout_ms).toBe(120_000);
+    expect(D.mcp.max_body_bytes).toBe(262_144);
+    expect(D.mcp.policy_name).toBe('synaps-control-plane');
+  });
+});
+
+describe('loadBridgeConfig — [mcp] section defaults (absent section)', () => {
+  it('returns all mcp defaults when [mcp] is absent', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(config.mcp.enabled).toBe(false);
+    expect(config.mcp.audit).toBe(false);
+    expect(config.mcp.chat_timeout_ms).toBe(120_000);
+    expect(config.mcp.max_body_bytes).toBe(262_144);
+    expect(config.mcp.policy_name).toBe('synaps-control-plane');
+  });
+
+  it('result.mcp is frozen', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(Object.isFrozen(config.mcp)).toBe(true);
+  });
+});
+
+describe('loadBridgeConfig — [mcp] section parsing', () => {
+  it('[mcp] enabled = true parses correctly', async () => {
+    const toml = `[mcp]\nenabled = true\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.mcp.enabled).toBe(true);
+  });
+
+  it('[mcp] audit = true parses correctly', async () => {
+    const toml = `[mcp]\naudit = true\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.mcp.audit).toBe(true);
+  });
+
+  it('[mcp] chat_timeout_ms = 30000 accepted', async () => {
+    const toml = `[mcp]\nchat_timeout_ms = 30000\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.mcp.chat_timeout_ms).toBe(30_000);
+  });
+
+  it('[mcp] policy_name = "custom" parses correctly', async () => {
+    const toml = `[mcp]\npolicy_name = "custom"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.mcp.policy_name).toBe('custom');
+  });
+});
+
+describe('loadBridgeConfig — [mcp] validation errors (throws)', () => {
+  it('chat_timeout_ms = 500 rejected (below min 1000)', async () => {
+    const toml = `[mcp]\nchat_timeout_ms = 500\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    await expect(loadBridgeConfig({ path: '/cfg.toml', fsImpl })).rejects.toThrow(
+      /mcp\.chat_timeout_ms/,
+    );
+  });
+
+  it('chat_timeout_ms = 700000 rejected (above max 600000)', async () => {
+    const toml = `[mcp]\nchat_timeout_ms = 700000\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    await expect(loadBridgeConfig({ path: '/cfg.toml', fsImpl })).rejects.toThrow(
+      /mcp\.chat_timeout_ms/,
+    );
+  });
+
+  it('max_body_bytes = 100 rejected (below min 1024)', async () => {
+    const toml = `[mcp]\nmax_body_bytes = 100\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    await expect(loadBridgeConfig({ path: '/cfg.toml', fsImpl })).rejects.toThrow(
+      /mcp\.max_body_bytes/,
+    );
+  });
+
+  it('max_body_bytes = 5000000 rejected (above max 4194304)', async () => {
+    const toml = `[mcp]\nmax_body_bytes = 5000000\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    await expect(loadBridgeConfig({ path: '/cfg.toml', fsImpl })).rejects.toThrow(
+      /mcp\.max_body_bytes/,
+    );
+  });
+
+  it('policy_name = "" rejected (empty string)', async () => {
+    const toml = `[mcp]\npolicy_name = ""\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    await expect(loadBridgeConfig({ path: '/cfg.toml', fsImpl })).rejects.toThrow(
+      /mcp\.policy_name/,
+    );
+  });
+});
+
+describe('loadBridgeConfig — [mcp] is not treated as unknown top-level', () => {
+  it('does not warn about [mcp] as unknown key', async () => {
+    const toml = `[mcp]\nenabled = false\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('unknown top-level key "mcp"'),
+    );
+  });
+
+  it('warns on unknown key inside [mcp] and drops it', async () => {
+    const toml = `[mcp]\nfuture_opt = "xyz"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('unknown mcp key "future_opt"'),
+    );
+    expect(config.mcp.future_opt).toBeUndefined();
+  });
+});
