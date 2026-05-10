@@ -41,6 +41,7 @@ import {
   InfisicalAuthError,
   InfisicalUpstreamError,
 } from './core/cred-broker/infisical-client.js';
+import { SchedulerDisabledError } from './core/scheduler.js';
 
 /** Default socket path. */
 export const DEFAULT_SOCKET_PATH = path.join(
@@ -60,6 +61,13 @@ export class ControlSocket extends EventEmitter {
    * @param {object}   [opts.identityRouter]     - IdentityRouter / NoOpIdentityRouter (optional).
    * @param {object}   [opts.credBroker]         - CredBroker / NoopCredBroker (optional). Required for
    *                                               the `cred_broker_use` op. Injected by BridgeDaemon.
+   * @param {object}   [opts.scheduler]          - Scheduler / NoopScheduler (optional, Phase 6).
+   * @param {object}   [opts.hookBus]            - HookBus / NoopHookBus (optional, Phase 6).
+   * @param {object}   [opts.hookRepo]           - HookRepo (optional, Phase 6). Used by hook_create/list/remove ops.
+   * @param {object}   [opts.scheduledTaskRepo]  - ScheduledTaskRepo (optional, Phase 6). Used directly by
+   *                                               scheduled_task_remove for ownership check.
+   * @param {object}   [opts.heartbeatRepo]      - HeartbeatRepo (optional, Phase 6). Required for heartbeat_emit.
+   * @param {object}   [opts.workspaceRepo]      - WorkspaceRepo (optional, Phase 6). Used for ownership check on heartbeat_emit.
    * @param {object}   [opts.logger]             - Logger (default: console).
    * @param {string}   [opts.version]            - Daemon version string (default: "0.1.0").
    * @param {Function} [opts.nowMs]              - Returns current epoch ms (injectable for tests).
@@ -71,6 +79,12 @@ export class ControlSocket extends EventEmitter {
     sessionRouter,
     identityRouter = null,
     credBroker = null,
+    scheduler = null,
+    hookBus = null,
+    hookRepo = null,
+    scheduledTaskRepo = null,
+    heartbeatRepo = null,
+    workspaceRepo = null,
     logger = console,
     version = '0.1.0',
     nowMs = () => Date.now(),
@@ -79,15 +93,21 @@ export class ControlSocket extends EventEmitter {
   } = {}) {
     super();
 
-    this._socketPath      = socketPath;
-    this._router          = sessionRouter;
-    this._identityRouter  = identityRouter;
-    this._credBroker      = credBroker;
-    this.logger           = logger;
-    this._version         = version;
-    this._nowMs           = nowMs;
-    this._net             = _net;
-    this._fs              = _fs;
+    this._socketPath         = socketPath;
+    this._router             = sessionRouter;
+    this._identityRouter     = identityRouter;
+    this._credBroker         = credBroker;
+    this._scheduler          = scheduler;
+    this._hookBus            = hookBus;
+    this._hookRepo           = hookRepo;
+    this._scheduledTaskRepo  = scheduledTaskRepo;
+    this._heartbeatRepo      = heartbeatRepo;
+    this._workspaceRepo      = workspaceRepo;
+    this.logger              = logger;
+    this._version            = version;
+    this._nowMs              = nowMs;
+    this._net                = _net;
+    this._fs                 = _fs;
 
     /** @type {net.Server|null} */
     this._server = null;
@@ -261,6 +281,14 @@ export class ControlSocket extends EventEmitter {
       case 'link_code_redeem':    return this._opLinkCodeRedeem(req);
       case 'identity_resolve_web': return this._opIdentityResolveWeb(req);
       case 'cred_broker_use':     return this._opCredBrokerUse(req);
+      // Phase 6 ops
+      case 'heartbeat_emit':          return this._opHeartbeatEmit(req);
+      case 'scheduled_task_create':   return this._opScheduledTaskCreate(req);
+      case 'scheduled_task_list':     return this._opScheduledTaskList(req);
+      case 'scheduled_task_remove':   return this._opScheduledTaskRemove(req);
+      case 'hook_create':             return this._opHookCreate(req);
+      case 'hook_list':               return this._opHookList(req);
+      case 'hook_remove':             return this._opHookRemove(req);
       default:
         return { ok: false, error: `unknown op: ${req.op}` };
     }
@@ -447,6 +475,376 @@ export class ControlSocket extends EventEmitter {
     } catch (err) {
       return { ok: false, error: err.message };
     }
+  }
+
+  // ── Phase 6 ops ───────────────────────────────────────────────────────────────
+
+  /**
+   * heartbeat_emit — Watcher pushes workspace/rpc/agent heartbeats from inside
+   * the container to HeartbeatRepo.
+   *
+   * Request:  { op:'heartbeat_emit', component, id, healthy?, details?, synaps_user_id }
+   * Response: { ok:true, ts } | { ok:true, supervisor:'noop' } | { ok:false, code, error }
+   *
+   * @param {object} req
+   * @returns {Promise<object>}
+   */
+  async _opHeartbeatEmit(req) {
+    const { component, id, healthy = true, details = {}, synaps_user_id } = req;
+
+    // Validate component
+    const validComponents = new Set(['workspace', 'rpc', 'agent']);
+    if (!component || typeof component !== 'string' || !validComponents.has(component)) {
+      return {
+        ok: false,
+        code: 'invalid_request',
+        error: `component must be one of: ${[...validComponents].join(', ')}`,
+      };
+    }
+
+    if (!id || typeof id !== 'string') {
+      return { ok: false, code: 'invalid_request', error: 'id must be a non-empty string' };
+    }
+
+    if (!synaps_user_id || typeof synaps_user_id !== 'string') {
+      return { ok: false, code: 'invalid_request', error: 'synaps_user_id must be a non-empty string' };
+    }
+
+    // When heartbeatRepo is null/absent: respond with silent noop (watcher in mixed deployments).
+    if (!this._heartbeatRepo) {
+      return { ok: true, supervisor: 'noop' };
+    }
+
+    // Ownership check for workspace component.
+    if (component === 'workspace' && this._workspaceRepo) {
+      let workspace;
+      try {
+        // WorkspaceRepo uses byId() method name.
+        const findMethod = this._workspaceRepo.byId?.bind(this._workspaceRepo)
+          ?? this._workspaceRepo.findById?.bind(this._workspaceRepo);
+        workspace = findMethod ? await findMethod(id) : null;
+      } catch (err) {
+        this.logger.warn?.('ControlSocket: heartbeat_emit workspace lookup failed', {
+          id,
+          err: err.message,
+        });
+        return { ok: false, code: 'internal_error', error: err.message };
+      }
+
+      if (workspace) {
+        const ownerId = String(workspace.synaps_user_id ?? '');
+        if (ownerId !== synaps_user_id) {
+          return {
+            ok: false,
+            code: 'unauthorized',
+            error: 'workspace owner mismatch',
+          };
+        }
+      }
+      // If workspace not found, we proceed (trust the UDS caller).
+    }
+
+    // Record the heartbeat.
+    try {
+      await this._heartbeatRepo.record({
+        component,
+        id,
+        healthy: typeof healthy === 'boolean' ? healthy : true,
+        details: details && typeof details === 'object' ? details : {},
+      });
+    } catch (err) {
+      this.logger.warn?.('ControlSocket: heartbeat_emit record failed', { err: err.message });
+      return { ok: false, code: 'internal_error', error: err.message };
+    }
+
+    return { ok: true, ts: new Date().toISOString() };
+  }
+
+  /**
+   * scheduled_task_create — Create a new scheduled task via the Scheduler.
+   *
+   * Request:  { op:'scheduled_task_create', synaps_user_id, institution_id, name, cron, channel, prompt }
+   * Response: { ok:true, id, agenda_job_id, next_run } | { ok:false, code, error }
+   *
+   * @param {object} req
+   * @returns {Promise<object>}
+   */
+  async _opScheduledTaskCreate(req) {
+    const { synaps_user_id, institution_id, name, cron, channel, prompt } = req;
+
+    // Validate required fields.
+    if (!synaps_user_id || typeof synaps_user_id !== 'string') {
+      return { ok: false, code: 'invalid_request', error: 'synaps_user_id is required' };
+    }
+    if (!institution_id || typeof institution_id !== 'string') {
+      return { ok: false, code: 'invalid_request', error: 'institution_id is required' };
+    }
+    if (!name || typeof name !== 'string') {
+      return { ok: false, code: 'invalid_request', error: 'name is required' };
+    }
+    if (!cron || typeof cron !== 'string') {
+      return { ok: false, code: 'invalid_request', error: 'cron is required' };
+    }
+    if (!channel || typeof channel !== 'string') {
+      return { ok: false, code: 'invalid_request', error: 'channel is required' };
+    }
+    if (!prompt || typeof prompt !== 'string') {
+      return { ok: false, code: 'invalid_request', error: 'prompt is required' };
+    }
+
+    // Check if scheduler is disabled (null or NoopScheduler).
+    if (!this._scheduler || this._scheduler.constructor?.name === 'NoopScheduler') {
+      return { ok: false, code: 'scheduler_disabled', error: 'scheduler is not enabled' };
+    }
+
+    try {
+      const result = await this._scheduler.create({
+        synapsUserId: synaps_user_id,
+        institutionId: institution_id,
+        name,
+        cron,
+        channel,
+        prompt,
+      });
+      return { ok: true, id: result.id, agenda_job_id: result.agenda_job_id, next_run: result.next_run };
+    } catch (err) {
+      if (err instanceof SchedulerDisabledError || err.name === 'SchedulerDisabledError') {
+        return { ok: false, code: 'scheduler_disabled', error: err.message };
+      }
+      if (err.name === 'SchedulerValidationError') {
+        return { ok: false, code: 'invalid_request', error: err.message };
+      }
+      this.logger.warn?.('ControlSocket: scheduled_task_create error', { err: err.message });
+      return { ok: false, code: 'internal_error', error: err.message };
+    }
+  }
+
+  /**
+   * scheduled_task_list — List scheduled tasks for a user.
+   *
+   * Request:  { op:'scheduled_task_list', synaps_user_id }
+   * Response: { ok:true, tasks: [...] } | { ok:false, code, error }
+   *
+   * @param {object} req
+   * @returns {Promise<object>}
+   */
+  async _opScheduledTaskList(req) {
+    const { synaps_user_id } = req;
+
+    if (!synaps_user_id || typeof synaps_user_id !== 'string') {
+      return { ok: false, code: 'invalid_request', error: 'synaps_user_id is required' };
+    }
+
+    // Check if scheduler is disabled.
+    if (!this._scheduler || this._scheduler.constructor?.name === 'NoopScheduler') {
+      return { ok: false, code: 'scheduler_disabled', error: 'scheduler is not enabled' };
+    }
+
+    try {
+      const tasks = await this._scheduler.list({ synapsUserId: synaps_user_id });
+      return { ok: true, tasks };
+    } catch (err) {
+      if (err instanceof SchedulerDisabledError || err.name === 'SchedulerDisabledError') {
+        return { ok: false, code: 'scheduler_disabled', error: err.message };
+      }
+      this.logger.warn?.('ControlSocket: scheduled_task_list error', { err: err.message });
+      return { ok: false, code: 'internal_error', error: err.message };
+    }
+  }
+
+  /**
+   * scheduled_task_remove — Remove a scheduled task (with ownership check).
+   *
+   * Request:  { op:'scheduled_task_remove', id, synaps_user_id }
+   * Response: { ok:true } | { ok:false, code, error }
+   *
+   * @param {object} req
+   * @returns {Promise<object>}
+   */
+  async _opScheduledTaskRemove(req) {
+    const { id, synaps_user_id } = req;
+
+    if (!id || typeof id !== 'string') {
+      return { ok: false, code: 'invalid_request', error: 'id is required' };
+    }
+    if (!synaps_user_id || typeof synaps_user_id !== 'string') {
+      return { ok: false, code: 'invalid_request', error: 'synaps_user_id is required' };
+    }
+
+    // Check if scheduler is disabled.
+    if (!this._scheduler || this._scheduler.constructor?.name === 'NoopScheduler') {
+      return { ok: false, code: 'scheduler_disabled', error: 'scheduler is not enabled' };
+    }
+
+    // Look up task to check ownership.
+    const repo = this._scheduledTaskRepo;
+    if (repo) {
+      let task;
+      try {
+        task = await repo.findById(id);
+      } catch (err) {
+        this.logger.warn?.('ControlSocket: scheduled_task_remove findById error', { err: err.message });
+        return { ok: false, code: 'internal_error', error: err.message };
+      }
+
+      if (!task) {
+        return { ok: false, code: 'not_found', error: `scheduled task not found: ${id}` };
+      }
+
+      // Ownership check.
+      const ownerId = String(task.synaps_user_id ?? '');
+      if (ownerId !== synaps_user_id) {
+        return { ok: false, code: 'unauthorized', error: 'you do not own this scheduled task' };
+      }
+    }
+
+    try {
+      await this._scheduler.remove(id);
+      return { ok: true };
+    } catch (err) {
+      if (err instanceof SchedulerDisabledError || err.name === 'SchedulerDisabledError') {
+        return { ok: false, code: 'scheduler_disabled', error: err.message };
+      }
+      this.logger.warn?.('ControlSocket: scheduled_task_remove error', { err: err.message });
+      return { ok: false, code: 'internal_error', error: err.message };
+    }
+  }
+
+  /**
+   * hook_create — Create a new hook in the repo.
+   *
+   * Request:  { op:'hook_create', scope, event, matcher, action, enabled? }
+   * Response: { ok:true, id } | { ok:false, code, error }
+   *
+   * @param {object} req
+   * @returns {Promise<object>}
+   */
+  async _opHookCreate(req) {
+    const { scope, event, matcher = {}, action, enabled = true } = req;
+
+    if (!scope || typeof scope !== 'object' || Array.isArray(scope)) {
+      return { ok: false, code: 'invalid_request', error: 'scope must be an object' };
+    }
+    if (!event || typeof event !== 'string') {
+      return { ok: false, code: 'invalid_request', error: 'event is required' };
+    }
+    if (!action || typeof action !== 'object' || Array.isArray(action)) {
+      return { ok: false, code: 'invalid_request', error: 'action must be an object' };
+    }
+
+    // Check if hookBus is disabled (null or NoopHookBus).
+    if (!this._hookBus || this._hookBus.constructor?.name === 'NoopHookBus') {
+      return { ok: false, code: 'hooks_disabled', error: 'hooks feature is not enabled' };
+    }
+
+    // hookRepo is required for this op.
+    if (!this._hookRepo) {
+      return { ok: false, code: 'hooks_disabled', error: 'hook repository is not available' };
+    }
+
+    try {
+      const doc = await this._hookRepo.create({ scope, event, matcher, action, enabled });
+      return { ok: true, id: String(doc._id) };
+    } catch (err) {
+      this.logger.warn?.('ControlSocket: hook_create error', { err: err.message });
+      return { ok: false, code: 'internal_error', error: err.message };
+    }
+  }
+
+  /**
+   * hook_list — List hooks for a scope.
+   *
+   * SECURITY: action.config.secret is ALWAYS redacted in the response.
+   *
+   * Request:  { op:'hook_list', scope }
+   * Response: { ok:true, hooks: [...] } | { ok:false, code, error }
+   *
+   * @param {object} req
+   * @returns {Promise<object>}
+   */
+  async _opHookList(req) {
+    // Check if hookBus is disabled.
+    if (!this._hookBus || this._hookBus.constructor?.name === 'NoopHookBus') {
+      return { ok: false, code: 'hooks_disabled', error: 'hooks feature is not enabled' };
+    }
+
+    if (!this._hookRepo) {
+      return { ok: false, code: 'hooks_disabled', error: 'hook repository is not available' };
+    }
+
+    try {
+      const hooks = await this._hookRepo.listAll({});
+
+      // Sanitize: redact action.config.secret in every hook.
+      const sanitized = hooks.map((hook) => this._sanitizeHook(hook));
+
+      return { ok: true, hooks: sanitized };
+    } catch (err) {
+      this.logger.warn?.('ControlSocket: hook_list error', { err: err.message });
+      return { ok: false, code: 'internal_error', error: err.message };
+    }
+  }
+
+  /**
+   * hook_remove — Remove a hook by its ID.
+   *
+   * Request:  { op:'hook_remove', id }
+   * Response: { ok:true } | { ok:false, code, error }
+   *
+   * @param {object} req
+   * @returns {Promise<object>}
+   */
+  async _opHookRemove(req) {
+    const { id } = req;
+
+    if (!id || typeof id !== 'string') {
+      return { ok: false, code: 'invalid_request', error: 'id is required' };
+    }
+
+    // Check if hookBus is disabled.
+    if (!this._hookBus || this._hookBus.constructor?.name === 'NoopHookBus') {
+      return { ok: false, code: 'hooks_disabled', error: 'hooks feature is not enabled' };
+    }
+
+    if (!this._hookRepo) {
+      return { ok: false, code: 'hooks_disabled', error: 'hook repository is not available' };
+    }
+
+    try {
+      // Check if hook exists first.
+      const existing = await this._hookRepo.findById(id);
+      if (!existing) {
+        return { ok: false, code: 'not_found', error: `hook not found: ${id}` };
+      }
+
+      await this._hookRepo.remove(id);
+      return { ok: true };
+    } catch (err) {
+      this.logger.warn?.('ControlSocket: hook_remove error', { err: err.message });
+      return { ok: false, code: 'internal_error', error: err.message };
+    }
+  }
+
+  /**
+   * Sanitize a hook document for wire response: redact action.config.secret.
+   *
+   * @private
+   * @param {object} hook
+   * @returns {object}
+   */
+  _sanitizeHook(hook) {
+    if (!hook) return hook;
+    const out = { ...hook };
+    if (out.action && out.action.config && out.action.config.secret !== undefined) {
+      out.action = {
+        ...out.action,
+        config: {
+          ...out.action.config,
+          secret: '<redacted>',
+        },
+      };
+    }
+    return out;
   }
 
   // ── cred broker op ────────────────────────────────────────────────────────
