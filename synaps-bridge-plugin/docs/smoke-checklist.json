@@ -1,0 +1,72 @@
+[
+  {
+    "step": 1,
+    "name": "Pre-flight checklist",
+    "action": "Verify Node ≥ 20, `synaps rpc --help` returns 0, bridge.toml exists at ~/.synaps-cli/bridge/bridge.toml, SLACK_BOT_TOKEN and SLACK_APP_TOKEN are set, Slack app has required scopes and Socket Mode enabled, no other synaps-bridge process running.",
+    "expected": "All checklist items pass without error.",
+    "rollback": "Fix the failing item (install correct Node version, copy bridge.toml.example, export tokens, add Slack scopes, kill stray process) and re-verify."
+  },
+  {
+    "step": 2,
+    "name": "Start daemon in foreground",
+    "action": "Run: node bin/synaps-bridge.js --log-level info",
+    "expected": "Log lines include 'synaps-bridge 0.1.0 starting', 'config loaded', 'slack adapter: connecting', 'control socket listening', and finally 'synaps-bridge ready'.",
+    "rollback": "Check SLACK_BOT_TOKEN/SLACK_APP_TOKEN are exported. Verify synaps binary is on PATH. Confirm Socket Mode is enabled in Slack app settings and the app-level token has connections:write scope."
+  },
+  {
+    "step": 3,
+    "name": "AI-app mode: basic prompt",
+    "action": "Open a new AI-app thread in the Synaps Slack app DM, send 'hello'.",
+    "expected": "Typing indicator appears via assistant.threads.setStatus. Streaming text reply arrives debounced (~80 chars / 250 ms). Reply completes, suggested prompts appear, thread title is set in sidebar.",
+    "rollback": "If no typing indicator: verify assistant:write scope and Agents & AI Apps feature. If no reply: run --log-level debug and check for bot-gate blocked or synaps-rpc error."
+  },
+  {
+    "step": 4,
+    "name": "Tool call rendering",
+    "action": "In the same AI-app thread, send 'list my recent files'.",
+    "expected": "A task_update card with status in_progress appears inside the stream (not as a separate message). Card updates to complete when the tool result arrives. No separate Block Kit bot messages.",
+    "rollback": "If separate message: thread is in legacy mode — verify assistant_view is enabled. If card never completes: check synaps rpc stderr with --log-level debug."
+  },
+  {
+    "step": 5,
+    "name": "Subagent lifecycle rendering",
+    "action": "In the same AI-app thread, send 'spawn a research subagent to summarize today's news'.",
+    "expected": "A task_update card cycles through pending → in_progress → complete with subagent name, task preview, and result preview. All inside the active stream; no separate bot messages.",
+    "rollback": "If three separate messages instead of task cards: AI-app mode is off — re-enable Agents & AI Apps feature in Slack app settings. If card stays at pending: look for subagent_done in daemon debug logs."
+  },
+  {
+    "step": 6,
+    "name": "Multi-thread isolation",
+    "action": "Open a second AI-app thread. Send 'What was my first message to you?' in both Thread A and Thread B. Run: node scripts/control-cli.mjs threads",
+    "expected": "control-cli shows two distinct rows with different thread keys. Thread A recalls 'hello'; Thread B has no memory of Thread A.",
+    "rollback": "If only one row: both threads share a key — verify that thread_ts values differ between the two AI-app conversations. If cross-contamination: file a bug with both session keys."
+  },
+  {
+    "step": 7,
+    "name": "Inline model switch",
+    "action": "In Thread A, send a message whose first line is exactly 'set-model: claude-opus-4-7'. Then run: node scripts/control-cli.mjs threads",
+    "expected": "Daemon logs show 'inline directive set-model=claude-opus-4-7' and 'response set_model ok=true'. The model column in control-cli output for Thread A shows claude-opus-4-7.",
+    "rollback": "If model column unchanged: check that the directive is on the exact first line with no leading spaces. Enable --log-level debug and look for 'inline directive' log lines. If ok=false: verify the model ID string is valid for the installed synaps build."
+  },
+  {
+    "step": 8,
+    "name": "Crash + restart resilience",
+    "action": "Find the rpc child PID for Thread A (via control-cli threads --format=json or pgrep). Run: kill -9 <rpc_pid>. Then send a message in Thread A.",
+    "expected": "Daemon logs warn about child exit (code 137), then log 'respawning with --continue <session_id>'. Reply arrives after brief delay. Model is still claude-opus-4-7.",
+    "rollback": "If no respawn: session-router hit its retry limit; check for 'giving up' in logs. Delete the corrupt session file from ~/.synaps-cli/sessions/ and retry. If wrong model after respawn: known v0 limitation."
+  },
+  {
+    "step": 9,
+    "name": "Legacy fallback (app_mention)",
+    "action": "Temporarily disable Agents & AI Apps in the Slack app settings. Wait ~2 min. @-mention the bot in a public channel: '@Synaps hello from legacy mode'.",
+    "expected": "Daemon logs show 'app_mention'. Bot replies in a thread on that message. Streaming is via chat.update edits (text accumulates). No typing indicator. Subagent events appear as separate Block Kit messages. Re-enable Agents & AI Apps after.",
+    "rollback": "If bot does not reply: verify respond_to_mentions = true in bridge.toml and app_mentions:read scope is granted. If still seeing AI-app behaviour: wait longer for the workspace-level change to propagate."
+  },
+  {
+    "step": 10,
+    "name": "Graceful shutdown and session persistence",
+    "action": "Press Ctrl+C in the daemon terminal. Then check: cat ~/.synaps-cli/bridge/sessions.json",
+    "expected": "Daemon logs 'Received SIGINT', stops all adapters, sends shutdown to rpc children, writes sessions.json, exits cleanly. sessions.json contains entries for both Thread A and Thread B.",
+    "rollback": "If sessions.json is missing or empty: re-run with --log-level debug and look for session-store flush errors. If rpc children linger: kill them with pkill -f 'synaps rpc' and file a bug."
+  }
+]
