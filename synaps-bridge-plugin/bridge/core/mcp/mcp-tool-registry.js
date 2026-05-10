@@ -3,6 +3,12 @@
  *
  * McpToolRegistry — lists Synaps-exposed MCP tools and dispatches
  * tools/call requests to the user's synaps rpc session via SessionRouter.
+ *
+ * Phase 8 Track 2: when `surfaceRpcTools` is enabled, `list()` merges
+ * per-user rpc tool descriptors (fetched via rpcRouter.listTools) with
+ * the static `synaps_chat` descriptor.  Unknown-name calls are forwarded
+ * to rpcRouter.callTool() when surfacing is on, or return a JSON-RPC
+ * -32601 Method-not-found error when surfacing is off.
  */
 
 import {
@@ -56,14 +62,32 @@ export class McpToolTimeoutError extends Error {
 export class McpToolRegistry {
   /**
    * @param {object}   opts
-   * @param {object}   opts.sessionRouter   — has .getOrCreate({ synaps_user_id }) → Promise<SynapsRpc>
+   * @param {object}   opts.sessionRouter
+   *   Has .getOrCreate({ synaps_user_id }) → Promise<SynapsRpc>.
+   * @param {object}   [opts.rpcRouter]
+   *   Optional. SynapsRpcSessionRouter (or compatible) with:
+   *     listTools(synapsUserId) → Promise<Array>
+   *     callTool({synapsUserId, name, args}) → Promise<{content, isError}>
+   *   Injected for Phase 8 Track 2 per-tool surfacing.
+   * @param {boolean}  [opts.surfaceRpcTools=false]
+   *   Feature flag. When true and rpcRouter is present, list() merges the
+   *   rpc workspace tool list and call() dispatches unknown names to rpcRouter.
    * @param {number}   [opts.chatTimeoutMs=120_000]
    * @param {object}   [opts.logger=console]
    * @param {Function} [opts.now=Date.now]  — for tests
    */
-  constructor({ sessionRouter, chatTimeoutMs = 120_000, logger = console, now = Date.now }) {
+  constructor({
+    sessionRouter,
+    rpcRouter = null,
+    surfaceRpcTools = false,
+    chatTimeoutMs = 120_000,
+    logger = console,
+    now = Date.now,
+  }) {
     if (!sessionRouter) throw new TypeError('McpToolRegistry: sessionRouter required');
     this._sessionRouter = sessionRouter;
+    this._rpcRouter = rpcRouter;
+    this._surfaceRpcTools = Boolean(surfaceRpcTools);
     this._chatTimeoutMs = chatTimeoutMs;
     this._logger = logger;
     this._now = now;
@@ -72,18 +96,44 @@ export class McpToolRegistry {
   // ── Public API ────────────────────────────────────────────────────────────
 
   /**
-   * List all available tools. v0 returns the static [synaps_chat] descriptor.
-   * Filtering by approval is the gate's responsibility.
+   * List all available tools.
    *
-   * @param {object} _ctx  { synaps_user_id, institution_id }
+   * When `surfaceRpcTools` is enabled and `rpcRouter` is injected, fetches the
+   * rpc workspace tool list for the given user and merges it after `synaps_chat`.
+   * Caching is handled by the rpcRouter itself (30-second TTL per user).
+   *
+   * @param {object} [ctx]  { synaps_user_id, institution_id }
    * @returns {Promise<Array>}
    */
-  async listTools(_ctx) {
-    return ALL_TOOL_DESCRIPTORS.slice();
+  async listTools(ctx = {}) {
+    const synapsUserId = ctx?.synaps_user_id ?? ctx?.synapsUserId ?? null;
+
+    // Always include the static synaps_chat tool.
+    const base = ALL_TOOL_DESCRIPTORS.slice();
+
+    if (this._surfaceRpcTools && this._rpcRouter && synapsUserId) {
+      let rpcTools = [];
+      try {
+        rpcTools = await this._rpcRouter.listTools(synapsUserId);
+      } catch (err) {
+        this._logger.warn(
+          `McpToolRegistry.listTools: rpcRouter.listTools failed: ${err.message}`,
+        );
+        rpcTools = [];
+      }
+      return [...base, ...rpcTools];
+    }
+
+    return base;
   }
 
   /**
    * Invoke a tool by name. Returns the MCP-shape `{content, isError}` result.
+   *
+   * Routing:
+   *   - name === 'synaps_chat' → existing sessionRouter path
+   *   - else, surfaceRpcTools && rpcRouter → rpcRouter.callTool(...)
+   *   - else → throw McpToolNotFoundError (JSON-RPC -32601)
    *
    * @param {object} call
    * @param {string} call.name
@@ -94,16 +144,26 @@ export class McpToolRegistry {
    * @throws {McpToolNotFoundError|McpToolInvalidArgsError}
    */
   async callTool({ name, arguments: args, synaps_user_id, institution_id }) {
-    if (name !== SYNAPS_CHAT_TOOL_DESCRIPTOR.name) {
-      throw new McpToolNotFoundError(name);
+    // ── synaps_chat: existing path ─────────────────────────────────────────
+    if (name === SYNAPS_CHAT_TOOL_DESCRIPTOR.name) {
+      const v = validateArgs(args ?? {}, SYNAPS_CHAT_TOOL_DESCRIPTOR.inputSchema);
+      if (!v.valid) {
+        throw new McpToolInvalidArgsError(name, v.error);
+      }
+      return this._invokeChat({ args, synaps_user_id });
     }
 
-    const v = validateArgs(args ?? {}, SYNAPS_CHAT_TOOL_DESCRIPTOR.inputSchema);
-    if (!v.valid) {
-      throw new McpToolInvalidArgsError(name, v.error);
+    // ── unknown tool: forward to rpcRouter when surfacing is on ───────────
+    if (this._surfaceRpcTools && this._rpcRouter) {
+      return this._rpcRouter.callTool({
+        synapsUserId: synaps_user_id,
+        name,
+        args: args ?? {},
+      });
     }
 
-    return this._invokeChat({ args, synaps_user_id });
+    // ── surfacing off (or no rpcRouter): Method not found ─────────────────
+    throw new McpToolNotFoundError(name);
   }
 
   // ── Internal ──────────────────────────────────────────────────────────────
