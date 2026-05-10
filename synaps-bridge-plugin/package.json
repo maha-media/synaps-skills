@@ -1,0 +1,27 @@
+{
+  "name": "synaps-bridge-plugin",
+  "version": "0.1.0",
+  "description": "Multi-source bridge daemon connecting external chat platforms (Slack first) to per-thread Synaps sessions over the synaps rpc wire protocol.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "synaps-bridge": "./bin/synaps-bridge.js"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "echo 'lint: noop (eslint TBD)'"
+  },
+  "dependencies": {
+    "@slack/bolt": "^4.5.0",
+    "@iarna/toml": "^2.2.5"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0",
+    "@vitest/coverage-v8": "^2.1.0"
+  }
+}
