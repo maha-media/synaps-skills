@@ -68,6 +68,8 @@ export class ScpHttpServer {
     rateLimiter    = null,
     sseEnabled     = false,
     dcrHandler     = null,
+    metricsRegistry = null,
+    metricsConfig  = null,
   }) {
     if (!config)   throw new TypeError('ScpHttpServer: opts.config is required');
     if (!vncProxy) throw new TypeError('ScpHttpServer: opts.vncProxy is required');
@@ -82,6 +84,8 @@ export class ScpHttpServer {
     this._rateLimiter      = rateLimiter;
     this._sseEnabled       = Boolean(sseEnabled);
     this._dcrHandler       = dcrHandler;
+    this._metricsRegistry  = metricsRegistry;
+    this._metricsConfig    = metricsConfig;
 
     /** @type {import('node:http').Server | null} */
     this._server = null;
@@ -124,6 +128,8 @@ export class ScpHttpServer {
     const rateLimiter      = this._rateLimiter;
     const sseEnabled       = this._sseEnabled;
     const dcrHandler       = this._dcrHandler;
+    const metricsRegistry  = this._metricsRegistry;
+    const metricsConfig    = this._metricsConfig;
     const self             = this;
 
     // ── request handler ───────────────────────────────────────────────────────
@@ -195,6 +201,34 @@ export class ScpHttpServer {
           }
 
           _sendJson(res, httpStatus, { status, mode, ts, components });
+          return;
+        }
+
+        // ── /metrics → Prometheus text (Phase 9 Wave C Track 6) ─────────────
+        const metricsPath = metricsConfig?.path ?? '/metrics';
+        if (url === metricsPath || url.startsWith(metricsPath + '?')) {
+          if (!metricsRegistry || !metricsConfig?.enabled) {
+            return _send404(res);
+          }
+          // Bind guard: only respond to localhost or the configured bind address.
+          const remoteAddr = req.socket?.remoteAddress ?? '';
+          const LOCALHOST_ADDRS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+          const allowedBind     = metricsConfig?.bind ?? '127.0.0.1';
+          if (!LOCALHOST_ADDRS.has(remoteAddr) && remoteAddr !== allowedBind) {
+            if (!res.headersSent) {
+              res.writeHead(403, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'forbidden' }));
+            }
+            return;
+          }
+          const body = metricsRegistry.render();
+          if (!res.headersSent) {
+            res.writeHead(200, {
+              'Content-Type':   'text/plain; version=0.0.4; charset=utf-8',
+              'Content-Length': Buffer.byteLength(body),
+            });
+            res.end(body);
+          }
           return;
         }
 

@@ -878,3 +878,103 @@ describe('ScpHttpServer — POST /mcp/v1/register DCR (Wave B2)', () => {
     }
   });
 });
+
+// ─── Phase 9 Wave C Track 6 — /metrics endpoint ───────────────────────────────
+
+describe('ScpHttpServer — /metrics endpoint (Phase 9 C3 Track 6)', () => {
+  /** Start a server with optional metricsRegistry + metricsConfig. */
+  async function startMetricsServer({ metricsRegistry = null, metricsConfig = null } = {}) {
+    const srv = new ScpHttpServer({
+      config:     makeConfig({ mode: 'scp' }),
+      vncProxy:   makeMockVncProxy(),
+      logger:     makeLogger(),
+      metricsRegistry,
+      metricsConfig,
+    });
+    const { port } = await srv.start();
+    return { port, srv };
+  }
+
+  it('/metrics returns 404 when metricsRegistry is null', async () => {
+    const { port, srv } = await startMetricsServer({ metricsRegistry: null });
+    try {
+      const { statusCode } = await httpGet(port, '/metrics');
+      expect(statusCode).toBe(404);
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('/metrics returns 200 with Prometheus text when registry provided and request from 127.0.0.1', async () => {
+    // Build a simple fake MetricsRegistry that returns known text.
+    const fakeRegistry = {
+      render: vi.fn().mockReturnValue('# HELP test_gauge A test gauge\n# TYPE test_gauge gauge\ntest_gauge 1\n'),
+    };
+    const { port, srv } = await startMetricsServer({
+      metricsRegistry: fakeRegistry,
+      metricsConfig:   { enabled: true, path: '/metrics', bind: '127.0.0.1' },
+    });
+    try {
+      const { statusCode, headers, body } = await httpGet(port, '/metrics');
+      expect(statusCode).toBe(200);
+      expect(headers['content-type']).toMatch(/text\/plain/);
+      expect(headers['content-type']).toMatch(/0\.0\.4/);
+      expect(body).toContain('test_gauge');
+      expect(fakeRegistry.render).toHaveBeenCalledOnce();
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('/metrics returns 403 when request is from a non-localhost address', async () => {
+    // We cannot change the real socket's remoteAddress in tests (always 127.0.0.1).
+    // Instead, test the guard logic by using a registry + metricsConfig where
+    // bind = '10.0.0.5' and send from 127.0.0.1.  Since 127.0.0.1 IS in the
+    // LOCALHOST_ADDRS set, this request would still get 200 via the localhost bypass.
+    // To properly test the 403 path we exercise the request handler directly.
+    //
+    // Strategy: start the server, grab its Node.js http.Server listener, then
+    // invoke it with a mock req whose socket.remoteAddress = '10.0.0.5'.
+    const fakeRegistry = { render: vi.fn().mockReturnValue('# HELP x x\n') };
+    const metricsConfig = { enabled: true, path: '/metrics', bind: '127.0.0.1' };
+    const srv = new ScpHttpServer({
+      config:          makeConfig({ mode: 'scp' }),
+      vncProxy:        makeMockVncProxy(),
+      logger:          makeLogger(),
+      metricsRegistry: fakeRegistry,
+      metricsConfig,
+    });
+    await srv.start();
+
+    try {
+      // Build a minimal mock req / res.
+      const reqMock = {
+        url:     '/metrics',
+        method:  'GET',
+        headers: {},
+        socket:  { remoteAddress: '10.0.0.5' },
+        on:      vi.fn(),
+        resume:  vi.fn(),
+      };
+      let capturedStatus = null;
+      let capturedBody   = '';
+      const resMock = {
+        headersSent: false,
+        writeHead(status) { capturedStatus = status; this.headersSent = true; },
+        end(body) { capturedBody = body ?? ''; },
+        setHeader() {},
+      };
+
+      // Get the 'request' listener registered by start() and call it.
+      const listeners = srv._server.listeners('request');
+      expect(listeners.length).toBeGreaterThan(0);
+      listeners[0](reqMock, resMock);
+      // Wait for the async IIFE to resolve.
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(capturedStatus).toBe(403);
+    } finally {
+      await srv.stop();
+    }
+  });
+});
