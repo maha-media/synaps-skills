@@ -453,8 +453,8 @@ function defaultSlackAdapterFactory({ auth, sessionRouter, memoryGateway, identi
  * @param {{ sessionRouter: SessionRouter, identityRouter: object, logger: object, version: string }} opts
  * @returns {ControlSocket}
  */
-function defaultControlSocketFactory({ sessionRouter, identityRouter, credBroker, hookBus, mcpTokenRepo, logger, version }) { // eslint-disable-line no-unused-vars
-  return new ControlSocket({ sessionRouter, identityRouter, credBroker, hookBus, mcpTokenRepo, logger, version });
+function defaultControlSocketFactory({ sessionRouter, identityRouter, credBroker, hookBus, mcpTokenRepo, mcpToolAclRepo, mcpToolAclResolver, logger, version }) { // eslint-disable-line no-unused-vars
+  return new ControlSocket({ sessionRouter, identityRouter, credBroker, hookBus, mcpTokenRepo, mcpToolAclRepo, mcpToolAclResolver, logger, version });
 }
 
 // ─── BridgeDaemon ─────────────────────────────────────────────────────────────
@@ -588,6 +588,16 @@ export class BridgeDaemon extends EventEmitter {
     /** @type {object|null} McpDcrHandler or null when disabled */
     this._mcpDcrHandler = null;
 
+    // Phase 9 Wave C: ACL + Metrics.
+    /** @type {object|null} McpToolAclRepo or null when disabled */
+    this._mcpToolAclRepo = null;
+    /** @type {object|null} McpToolAclResolver or null when disabled */
+    this._mcpToolAclResolver = null;
+    /** @type {object|null} MetricsRegistry or null when disabled */
+    this._metricsRegistry = null;
+    /** @type {ReturnType<typeof setInterval>|null} daemon-level metrics poll interval */
+    this._metricsInterval = null;
+
     // Identity router (built in start()).
     /** @type {import('./core/identity-router.js').IdentityRouter|import('./core/identity-router.js').NoOpIdentityRouter|null} */
     this._identityRouter = null;
@@ -693,6 +703,15 @@ export class BridgeDaemon extends EventEmitter {
     // ─── MCP ──────────────────────────────────────────────────────────────────
     // Built after supervisor so _mongoose is available; before HTTP server so
     // mcpServer can be passed to ScpHttpServer.
+
+    // ── Phase 9 Wave C: MetricsRegistry (built before MCP block so it can be
+    //    injected into McpToolRegistry, McpServer, and ScpHttpServer).
+    if (this._config.metrics?.enabled) {
+      const { MetricsRegistry } = await import('./core/metrics/metrics-registry.js');
+      this._metricsRegistry = new MetricsRegistry();
+      this.logger.info?.('[metrics] registry initialised');
+    }
+
     if (isScp && this._config.mcp?.enabled) {
       let builtMcpServer = null;
       let builtRateLimiter = null;
@@ -778,11 +797,27 @@ export class BridgeDaemon extends EventEmitter {
             this.logger.info?.('[mcp] surface_rpc_tools enabled (rpcRouter wired)');
           }
 
+          // ── Phase 9 Wave C: ACL resolver ─────────────────────────────────
+          let aclResolver = null;
+          let aclRepo     = null;
+          if (this._config.mcp.acl?.enabled) {
+            const { getSynapsMcpToolAclModel } = await import('./core/db/models/synaps-mcp-tool-acl.js');
+            const { McpToolAclRepo }            = await import('./core/db/repositories/mcp-tool-acl-repo.js');
+            const { McpToolAclResolver }        = await import('./core/mcp/mcp-tool-acl-resolver.js');
+            const aclModel = getSynapsMcpToolAclModel(this._mongoose);
+            aclRepo     = new McpToolAclRepo({ model: aclModel, logger: this.logger });
+            aclResolver = new McpToolAclResolver({ repo: aclRepo, logger: this.logger });
+            this._mcpToolAclRepo     = aclRepo;
+            this._mcpToolAclResolver = aclResolver;
+            this.logger.info?.('[mcp] ACL resolver enabled');
+          }
+
           const toolRegistry  = new McpToolRegistry({
             getSessionRouter: () => this._sessionRouter,   // lazy: built after MCP
             rpcRouter,
             surfaceRpcTools: this._config.mcp.surface_rpc_tools,
             chatTimeoutMs:   this._config.mcp.chat_timeout_ms,
+            metrics:         this._metricsRegistry ?? null,
             logger:          this.logger,
           });
           const approvalGate  = new McpApprovalGate({
@@ -804,6 +839,8 @@ export class BridgeDaemon extends EventEmitter {
             audit,
             rateLimiter: builtRateLimiter,
             sseEnabled:  this._config.mcp.sse?.enabled ?? false,
+            aclResolver: aclResolver ?? null,
+            metrics:     this._metricsRegistry ?? null,
             logger: this.logger,
           });
         }
@@ -836,10 +873,12 @@ export class BridgeDaemon extends EventEmitter {
           vncProxy,
           heartbeatRepo,
           bridgeCriticalMs: this._config.supervisor?.bridge_critical_ms,
-          mcpServer:   this._mcpServer,
-          rateLimiter: this._mcpRateLimiter ?? null,
-          sseEnabled:  this._config.mcp?.sse?.enabled ?? false,
-          dcrHandler:  this._mcpDcrHandler ?? null,
+          mcpServer:       this._mcpServer,
+          rateLimiter:     this._mcpRateLimiter ?? null,
+          sseEnabled:      this._config.mcp?.sse?.enabled ?? false,
+          dcrHandler:      this._mcpDcrHandler ?? null,
+          metricsRegistry: this._metricsRegistry ?? null,
+          metricsConfig:   this._config.metrics ?? null,
           logger: this.logger,
         });
       }
@@ -874,7 +913,9 @@ export class BridgeDaemon extends EventEmitter {
       identityRouter: this._identityRouter,
       credBroker: this._credBroker,
       hookBus: this._hookBus,
-      mcpTokenRepo: this._mcpTokenRepo,
+      mcpTokenRepo:        this._mcpTokenRepo,
+      mcpToolAclRepo:      this._mcpToolAclRepo      ?? null,
+      mcpToolAclResolver:  this._mcpToolAclResolver  ?? null,
       logger: this.logger,
       version: '0.1.0',
     });
@@ -883,6 +924,32 @@ export class BridgeDaemon extends EventEmitter {
     // 4. Scheduler — built last (needs the dispatch surface to exist).
     const _getDispatcher = () => null; // v0 dispatcher stub — Wave C wires the real one
     this._scheduler = await this._schedulerFactory(this._config, this.logger, _getMongoose, _getDispatcher);
+
+    // ── Phase 9 Wave C: daemon-level metrics gauges ───────────────────────────
+    // Start a 5-second poll interval for:
+    //   synaps_mongoose_connection_state — 1 when mongoose readyState=1, else 0
+    //   synaps_bridge_heartbeat_age_seconds — seconds since last bridge heartbeat
+    if (this._metricsRegistry) {
+      const mongoGauge     = this._metricsRegistry.gauge('synaps_mongoose_connection_state', {
+        help: 'Mongoose connection readyState (1 = connected, 0 = disconnected)',
+      });
+      const heartbeatGauge = this._metricsRegistry.gauge('synaps_bridge_heartbeat_age_seconds', {
+        help: 'Seconds elapsed since the last bridge heartbeat was recorded',
+      });
+      const handle = setInterval(() => {
+        // mongoose connection state
+        const readyState = this._mongoose?.connection?.readyState ?? 0;
+        mongoGauge.set({}, readyState === 1 ? 1 : 0);
+        // bridge heartbeat age
+        if (this.supervisor?.bridgeHeartbeatAt) {
+          heartbeatGauge.set({}, (Date.now() - this.supervisor.bridgeHeartbeatAt) / 1000);
+        } else {
+          heartbeatGauge.set({}, 0);
+        }
+      }, 5_000);
+      if (typeof handle.unref === 'function') handle.unref();
+      this._metricsInterval = handle;
+    }
 
     this.emit('started');
     this.logger.info?.('BridgeDaemon: started');
@@ -905,6 +972,12 @@ export class BridgeDaemon extends EventEmitter {
 
     if (signal) {
       this.logger.info?.(`BridgeDaemon: stopping (signal=${signal})`);
+    }
+
+    // Clear metrics poll interval early so no more writes happen during teardown.
+    if (this._metricsInterval) {
+      clearInterval(this._metricsInterval);
+      this._metricsInterval = null;
     }
 
     // Reverse order: control socket → adapter → router.
