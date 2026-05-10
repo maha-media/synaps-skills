@@ -338,3 +338,229 @@ describe('ScpHttpServer — constructor validation', () => {
     expect(() => new ScpHttpServer({ config: makeConfig() })).toThrow(TypeError);
   });
 });
+
+// ─── /health — Wave B2: component table + graduated status ───────────────────
+
+/**
+ * Build a synthetic heartbeat document as HeartbeatRepo.findAll() returns.
+ *
+ * @param {object} opts
+ * @param {string}  opts.component
+ * @param {string}  opts.id
+ * @param {number}  opts.ageMs     - How many ms in the past the beat was recorded.
+ * @param {boolean} [opts.healthy=true]
+ * @returns {object}
+ */
+function mkBeat({ component, id, ageMs, healthy = true }) {
+  return {
+    component,
+    id,
+    healthy,
+    ts:      new Date(Date.now() - ageMs),
+    details: {},
+  };
+}
+
+/**
+ * Create a mock HeartbeatRepo whose findAll() resolves with the given beats.
+ *
+ * @param {object[]} beats
+ * @returns {{ findAll: import('vitest').MockedFunction }}
+ */
+function makeRepo(beats) {
+  return { findAll: vi.fn().mockResolvedValue(beats) };
+}
+
+describe('ScpHttpServer — /health with heartbeatRepo (Wave B2)', () => {
+  /**
+   * Helper: spin up a server with the given heartbeatRepo + optional
+   * bridgeCriticalMs, make a GET /health, stop the server, return parsed JSON
+   * and HTTP status code.
+   */
+  async function healthCheck({ repo, bridgeCriticalMs } = {}) {
+    const srv = new ScpHttpServer({
+      config:          makeConfig({ mode: 'scp' }),
+      vncProxy:        makeMockVncProxy(),
+      logger:          makeLogger(),
+      heartbeatRepo:   repo,
+      bridgeCriticalMs,
+    });
+    const { port } = await srv.start();
+    try {
+      const { statusCode, body } = await httpGet(port, '/health');
+      return { statusCode, json: JSON.parse(body) };
+    } finally {
+      await srv.stop();
+    }
+  }
+
+  // ── Test 1: backward compat — no repo → Phase-1 shape ──────────────────────
+  it('1: no heartbeatRepo → 200 Phase-1 shape: {status,mode,ts}, no components', async () => {
+    const { statusCode, json } = await healthCheck({ repo: null });
+
+    expect(statusCode).toBe(200);
+    expect(json.status).toBe('ok');
+    expect(json.mode).toBe('scp');
+    expect(typeof json.ts).toBe('string');
+    expect(json.components).toBeUndefined();
+  });
+
+  // ── Test 2: repo returns no beats → no bridge anchor → 503 down ────────────
+  it('2: repo present, no heartbeats → 503 down (no bridge anchor)', async () => {
+    const { statusCode, json } = await healthCheck({ repo: makeRepo([]) });
+
+    expect(statusCode).toBe(503);
+    expect(json.status).toBe('down');
+    expect(Array.isArray(json.components)).toBe(true);
+    expect(json.components).toHaveLength(0);
+  });
+
+  // ── Test 3: bridge healthy + recent → 200 ok ───────────────────────────────
+  it('3: bridge healthy + recent → 200 ok, components includes bridge', async () => {
+    const beats = [mkBeat({ component: 'bridge', id: 'main', ageMs: 500 })];
+    const { statusCode, json } = await healthCheck({ repo: makeRepo(beats) });
+
+    expect(statusCode).toBe(200);
+    expect(json.status).toBe('ok');
+    expect(json.components).toHaveLength(1);
+    expect(json.components[0].component).toBe('bridge');
+    expect(json.components[0].id).toBe('main');
+    expect(json.components[0].healthy).toBe(true);
+  });
+
+  // ── Test 4: bridge healthy but stale → 503 down ────────────────────────────
+  it('4: bridge healthy but ageMs > bridgeCriticalMs → 503 down', async () => {
+    const beats = [mkBeat({ component: 'bridge', id: 'main', ageMs: 70_000 })];
+    // bridgeCriticalMs = 60_000 (default)
+    const { statusCode, json } = await healthCheck({ repo: makeRepo(beats) });
+
+    expect(statusCode).toBe(503);
+    expect(json.status).toBe('down');
+  });
+
+  // ── Test 5: bridge.healthy === false → 503 down ────────────────────────────
+  it('5: bridge.healthy=false → 503 down', async () => {
+    const beats = [mkBeat({ component: 'bridge', id: 'main', ageMs: 500, healthy: false })];
+    const { statusCode, json } = await healthCheck({ repo: makeRepo(beats) });
+
+    expect(statusCode).toBe(503);
+    expect(json.status).toBe('down');
+  });
+
+  // ── Test 6: bridge ok + workspace stale → 200 degraded ─────────────────────
+  it('6: bridge ok + workspace stale → 200 degraded', async () => {
+    const beats = [
+      mkBeat({ component: 'bridge',    id: 'main',     ageMs: 500 }),
+      mkBeat({ component: 'workspace', id: 'ws_alice', ageMs: 90_000 }), // stale
+    ];
+    const { statusCode, json } = await healthCheck({ repo: makeRepo(beats) });
+
+    expect(statusCode).toBe(200);
+    expect(json.status).toBe('degraded');
+    expect(json.components).toHaveLength(2);
+  });
+
+  // ── Test 7: bridge ok + workspace.healthy=false → 200 degraded ─────────────
+  it('7: bridge ok + workspace.healthy=false → 200 degraded', async () => {
+    const beats = [
+      mkBeat({ component: 'bridge',    id: 'main',     ageMs: 500 }),
+      mkBeat({ component: 'workspace', id: 'ws_bob',   ageMs: 1000, healthy: false }),
+    ];
+    const { statusCode, json } = await healthCheck({ repo: makeRepo(beats) });
+
+    expect(statusCode).toBe(200);
+    expect(json.status).toBe('degraded');
+  });
+
+  // ── Test 8: bridge ok + rpc stale → 200 degraded ───────────────────────────
+  it('8: bridge ok + rpc stale → 200 degraded', async () => {
+    const beats = [
+      mkBeat({ component: 'bridge', id: 'main',     ageMs: 500 }),
+      mkBeat({ component: 'rpc',    id: 'sess_xyz', ageMs: 80_000 }), // stale
+    ];
+    const { statusCode, json } = await healthCheck({ repo: makeRepo(beats) });
+
+    expect(statusCode).toBe(200);
+    expect(json.status).toBe('degraded');
+  });
+
+  // ── Test 9: bridge ok + scp stale → 200 degraded ───────────────────────────
+  it('9: bridge ok + scp stale → 200 degraded', async () => {
+    const beats = [
+      mkBeat({ component: 'bridge', id: 'main', ageMs: 500 }),
+      mkBeat({ component: 'scp',    id: 'scp0', ageMs: 75_000 }), // stale, non-bridge
+    ];
+    const { statusCode, json } = await healthCheck({ repo: makeRepo(beats) });
+
+    expect(statusCode).toBe(200);
+    expect(json.status).toBe('degraded');
+  });
+
+  // ── Test 10: repo throws → 503 down, error:'heartbeat_unavailable' ──────────
+  it('10: repo.findAll() throws → 503 down with error:heartbeat_unavailable', async () => {
+    const errRepo = { findAll: vi.fn().mockRejectedValue(new Error('mongo exploded')) };
+    const { statusCode, json } = await healthCheck({ repo: errRepo });
+
+    expect(statusCode).toBe(503);
+    expect(json.status).toBe('down');
+    expect(json.error).toBe('heartbeat_unavailable');
+    expect(Array.isArray(json.components)).toBe(true);
+    expect(json.components).toHaveLength(0);
+  });
+
+  // ── Test 11: multiple all-healthy components → 200 ok, all listed ───────────
+  it('11: multiple components all healthy → 200 ok, all appear in components array', async () => {
+    const beats = [
+      mkBeat({ component: 'bridge',    id: 'main',     ageMs: 500 }),
+      mkBeat({ component: 'workspace', id: 'ws_alice', ageMs: 1000 }),
+      mkBeat({ component: 'rpc',       id: 'sess_xyz', ageMs: 2000 }),
+      mkBeat({ component: 'scp',       id: 'scp0',     ageMs: 800 }),
+    ];
+    const { statusCode, json } = await healthCheck({ repo: makeRepo(beats) });
+
+    expect(statusCode).toBe(200);
+    expect(json.status).toBe('ok');
+    expect(json.components).toHaveLength(4);
+    const names = json.components.map((c) => c.component);
+    expect(names).toContain('bridge');
+    expect(names).toContain('workspace');
+    expect(names).toContain('rpc');
+    expect(names).toContain('scp');
+  });
+
+  // ── Test 12: ageMs is a positive number for recent beats ────────────────────
+  it('12: ageMs is a positive number proportional to the beat age', async () => {
+    const TARGET_AGE_MS = 3_000;
+    const beats = [mkBeat({ component: 'bridge', id: 'main', ageMs: TARGET_AGE_MS })];
+    const { json } = await healthCheck({ repo: makeRepo(beats) });
+
+    const { ageMs } = json.components[0];
+    expect(typeof ageMs).toBe('number');
+    // Allow ±500 ms slop for test-execution time
+    expect(ageMs).toBeGreaterThanOrEqual(TARGET_AGE_MS - 500);
+    expect(ageMs).toBeLessThan(TARGET_AGE_MS + 500);
+  });
+
+  // ── Bonus: bridgeCriticalMs is respected when customised ────────────────────
+  it('13: custom bridgeCriticalMs=5000 makes bridge stale at 6s', async () => {
+    const beats = [mkBeat({ component: 'bridge', id: 'main', ageMs: 6_000 })];
+    const { statusCode, json } = await healthCheck({
+      repo: makeRepo(beats),
+      bridgeCriticalMs: 5_000,
+    });
+
+    expect(statusCode).toBe(503);
+    expect(json.status).toBe('down');
+  });
+
+  it('14: custom bridgeCriticalMs=5000: bridge at 4s is still ok', async () => {
+    const beats = [mkBeat({ component: 'bridge', id: 'main', ageMs: 4_000 })];
+    const { statusCode, json } = await healthCheck({
+      repo: makeRepo(beats),
+      bridgeCriticalMs: 5_000,
+    });
+
+    expect(statusCode).toBe(200);
+    expect(json.status).toBe('ok');
+  });
+});
