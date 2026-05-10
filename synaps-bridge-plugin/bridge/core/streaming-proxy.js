@@ -68,6 +68,14 @@ export class StreamingProxy extends EventEmitter {
     // ── text-debounce state ────────────────────────────────────────────────
     /** @type {string} */
     this._textBuffer = '';
+    /**
+     * Full text accumulated since the last start() call.  Unlike _textBuffer,
+     * this is never reset on flush — only on start().  Phase 2 memory hooks
+     * read this after agent_end to persist the assistant's response.
+     *
+     * @type {string}
+     */
+    this._accumulatedText = '';
     /** @type {NodeJS.Timeout|null} */
     this._flushTimer = null;
     /** @type {number} */
@@ -108,6 +116,7 @@ export class StreamingProxy extends EventEmitter {
    */
   async start({ conversation, thread, recipient } = {}) {
     this._textBuffer = '';
+    this._accumulatedText = '';
     this._lastDeltaAt = 0;
     this._stopped = false;
     this._started = true;
@@ -168,6 +177,17 @@ export class StreamingProxy extends EventEmitter {
   /** @returns {number} Count of subagents with status 'running' or 'pending'. */
   getPendingSubagentCount() {
     return this._subagentTracker.pendingCount();
+  }
+
+  /**
+   * Return the full text accumulated since the last start().
+   * Unlike the internal _textBuffer, this is never reset on flush.
+   * Phase 2 memory hooks use this after agent_end to persist the response.
+   *
+   * @returns {string}
+   */
+  getAccumulatedText() {
+    return this._accumulatedText;
   }
 
   // ── internal: event routing ───────────────────────────────────────────────
@@ -254,6 +274,7 @@ export class StreamingProxy extends EventEmitter {
    */
   _bufferText(delta) {
     this._textBuffer += delta;
+    this._accumulatedText += delta;
     this._lastDeltaAt = Date.now();
 
     if (this._textBuffer.length >= this._flushChars) {
@@ -408,6 +429,7 @@ export class StreamingProxy extends EventEmitter {
       const statusLabel = tool.status === 'done' ? 'done' : 'running';
       const inline = `\n_[tool: ${tool.toolName} — ${statusLabel}]_\n`;
       this._textBuffer += inline;
+      this._accumulatedText += inline;
       this._scheduleFlush();
     }
   }
@@ -461,7 +483,10 @@ export class StreamingProxy extends EventEmitter {
    */
   async _onAgentEnd(payload) {
     await this._forceFlushText();
-    this.emit('agent_end', payload);
+    const enriched = payload != null
+      ? { ...payload, final_text: this._accumulatedText }
+      : { final_text: this._accumulatedText };
+    this.emit('agent_end', enriched);
   }
 
   /**
@@ -493,6 +518,7 @@ export class StreamingProxy extends EventEmitter {
       // Inline text fallback — italicised. Append to buffer and schedule flush.
       const label = `_[subagent: ${entry.agent_name} — ${entry.status}]_`;
       this._textBuffer += `\n${label}\n`;
+      this._accumulatedText += `\n${label}\n`;
       this._scheduleFlush();
     }
   }
