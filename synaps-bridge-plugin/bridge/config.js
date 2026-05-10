@@ -76,6 +76,14 @@ export const BRIDGE_CONFIG_DEFAULTS = Object.freeze({
     link_code_ttl_secs: 300,        // 5 min
     default_institution_id: '',     // optional fallback for slack users without an inst
   }),
+  creds: Object.freeze({
+    enabled: false,                 // default off — preserves existing behavior
+    broker: 'noop',                 // 'noop' | 'infisical'
+    infisical_url: '',              // e.g. 'https://infisical.internal'
+    infisical_token_file: '',       // path; secret read at start()
+    cache_ttl_secs: 300,            // 5 min last-known-good cache
+    audit_attribute_user: true,     // include synaps_user_id in Infisical metadata
+  }),
 });
 
 /** Default config file path. */
@@ -120,6 +128,7 @@ export function expandHome(p) {
  * @property {{ uri: string }} mongodb
  * @property {{ enabled: boolean, transport: string, cli_path: string, brain_dir: string, recall_k: number, recall_min_score: number, recall_max_chars: number, axel_socket: string, consolidation_cron: string }} memory
  * @property {{ enabled: boolean, link_code_ttl_secs: number, default_institution_id: string }} identity
+ * @property {{ enabled: boolean, broker: string, infisical_url: string, infisical_token_file: string, cache_ttl_secs: number, audit_attribute_user: boolean }} creds
  */
 
 /**
@@ -178,7 +187,7 @@ function _buildConfig(parsed, logger) {
   const D = BRIDGE_CONFIG_DEFAULTS;
 
   // ── warn on unknown top-level keys ────────────────────────────────────────
-  const knownTopLevel = new Set(['bridge', 'rpc', 'sources', 'platform', 'workspace', 'web', 'mongodb', 'memory', 'identity']);
+  const knownTopLevel = new Set(['bridge', 'rpc', 'sources', 'platform', 'workspace', 'web', 'mongodb', 'memory', 'identity', 'creds']);
   for (const k of Object.keys(parsed)) {
     if (!knownTopLevel.has(k)) {
       logger.warn(`bridge/config: unknown top-level key "${k}" — ignoring`);
@@ -385,6 +394,58 @@ function _buildConfig(parsed, logger) {
     }
   }
 
+  // ── [creds] ───────────────────────────────────────────────────────────────
+  const rawCreds = (parsed.creds && typeof parsed.creds === 'object') ? parsed.creds : {};
+  const DCREDS = D.creds;
+
+  const credsEnabled = rawCreds.enabled !== undefined ? Boolean(rawCreds.enabled) : DCREDS.enabled;
+
+  const VALID_BROKERS = ['noop', 'infisical'];
+  let credsBroker = rawCreds.broker !== undefined ? rawCreds.broker : DCREDS.broker;
+  if (!VALID_BROKERS.includes(credsBroker)) {
+    logger.warn(`bridge/config: invalid creds.broker "${credsBroker}" — falling back to "${DCREDS.broker}"`);
+    credsBroker = DCREDS.broker;
+  }
+
+  const rawCredsInfisicalUrl = rawCreds.infisical_url !== undefined
+    ? String(rawCreds.infisical_url)
+    : DCREDS.infisical_url;
+
+  const rawCredsInfisicalTokenFile = rawCreds.infisical_token_file !== undefined
+    ? String(rawCreds.infisical_token_file)
+    : DCREDS.infisical_token_file;
+  const credsInfisicalTokenFile = expandHome(rawCredsInfisicalTokenFile);
+
+  // Require non-empty url + token_file when enabled + infisical.
+  if (credsEnabled && credsBroker === 'infisical') {
+    if (!rawCredsInfisicalUrl) {
+      throw new Error('bridge/config: creds.infisical_url must be non-empty when creds.enabled = true and creds.broker = "infisical"');
+    }
+    if (!rawCredsInfisicalTokenFile) {
+      throw new Error('bridge/config: creds.infisical_token_file must be non-empty when creds.enabled = true and creds.broker = "infisical"');
+    }
+  }
+
+  let credsCacheTtlSecs = rawCreds.cache_ttl_secs !== undefined
+    ? rawCreds.cache_ttl_secs
+    : DCREDS.cache_ttl_secs;
+  if (!Number.isInteger(credsCacheTtlSecs) || credsCacheTtlSecs < 0) {
+    logger.warn(`bridge/config: invalid creds.cache_ttl_secs "${credsCacheTtlSecs}" — falling back to ${DCREDS.cache_ttl_secs}`);
+    credsCacheTtlSecs = DCREDS.cache_ttl_secs;
+  }
+
+  const credsAuditAttributeUser = rawCreds.audit_attribute_user !== undefined
+    ? Boolean(rawCreds.audit_attribute_user)
+    : DCREDS.audit_attribute_user;
+
+  // Warn on unknown keys inside [creds].
+  const knownCredsKeys = new Set(['enabled', 'broker', 'infisical_url', 'infisical_token_file', 'cache_ttl_secs', 'audit_attribute_user']);
+  for (const k of Object.keys(rawCreds)) {
+    if (!knownCredsKeys.has(k)) {
+      logger.warn(`bridge/config: unknown creds key "${k}" — ignoring`);
+    }
+  }
+
   return Object.freeze({
     bridge: Object.freeze({
       log_level: logLevel,
@@ -430,6 +491,14 @@ function _buildConfig(parsed, logger) {
       enabled: identityEnabled,
       link_code_ttl_secs: identityLinkCodeTtlSecs,
       default_institution_id: identityDefaultInstitutionId,
+    }),
+    creds: Object.freeze({
+      enabled: credsEnabled,
+      broker: credsBroker,
+      infisical_url: rawCredsInfisicalUrl,
+      infisical_token_file: credsInfisicalTokenFile,
+      cache_ttl_secs: credsCacheTtlSecs,
+      audit_attribute_user: credsAuditAttributeUser,
     }),
   });
 }

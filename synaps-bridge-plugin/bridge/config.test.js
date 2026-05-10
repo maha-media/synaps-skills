@@ -990,3 +990,210 @@ describe('loadBridgeConfig — identity unknown keys', () => {
     expect(config.identity.unknown_future_key).toBeUndefined();
   });
 });
+
+// ─── creds section ────────────────────────────────────────────────────────────
+
+describe('BRIDGE_CONFIG_DEFAULTS includes creds section', () => {
+  it('has creds section with correct defaults', () => {
+    const c = BRIDGE_CONFIG_DEFAULTS.creds;
+    expect(c).toBeDefined();
+    expect(c.enabled).toBe(false);
+    expect(c.broker).toBe('noop');
+    expect(c.infisical_url).toBe('');
+    expect(c.infisical_token_file).toBe('');
+    expect(c.cache_ttl_secs).toBe(300);
+    expect(c.audit_attribute_user).toBe(true);
+  });
+
+  it('creds default sub-object is frozen', () => {
+    expect(Object.isFrozen(BRIDGE_CONFIG_DEFAULTS.creds)).toBe(true);
+  });
+});
+
+describe('loadBridgeConfig — creds section defaults', () => {
+  it('returns all creds defaults when [creds] is absent', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    const creds = config.creds;
+    expect(creds.enabled).toBe(false);
+    expect(creds.broker).toBe('noop');
+    expect(creds.infisical_url).toBe('');
+    expect(creds.infisical_token_file).toBe('');
+    expect(creds.cache_ttl_secs).toBe(300);
+    expect(creds.audit_attribute_user).toBe(true);
+  });
+
+  it('result.creds is frozen', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(Object.isFrozen(config.creds)).toBe(true);
+  });
+});
+
+describe('loadBridgeConfig — creds.enabled', () => {
+  it('honours enabled = true', async () => {
+    const toml = `[creds]\nenabled = true\nbroker = "noop"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.creds.enabled).toBe(true);
+  });
+
+  it('defaults to false and does not warn', async () => {
+    const toml = `[creds]\nenabled = false\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.creds.enabled).toBe(false);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe('loadBridgeConfig — creds.broker', () => {
+  it('accepts broker = "noop"', async () => {
+    const toml = `[creds]\nbroker = "noop"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.creds.broker).toBe('noop');
+  });
+
+  it('accepts broker = "infisical" when disabled', async () => {
+    const toml = `[creds]\nbroker = "infisical"\nenabled = false\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.creds.broker).toBe('infisical');
+  });
+
+  it('falls back to "noop" on invalid broker and warns', async () => {
+    const toml = `[creds]\nbroker = "vault"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.creds.broker).toBe('noop');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('creds.broker'));
+  });
+});
+
+describe('loadBridgeConfig — creds enabled+infisical requires url and token_file', () => {
+  it('throws when enabled+infisical but infisical_url is empty', async () => {
+    const toml = `[creds]\nenabled = true\nbroker = "infisical"\ninfisical_token_file = "/run/secrets/token"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    await expect(loadBridgeConfig({ path: '/cfg.toml', fsImpl })).rejects.toThrow(
+      /creds\.infisical_url must be non-empty/,
+    );
+  });
+
+  it('throws when enabled+infisical but infisical_token_file is empty', async () => {
+    const toml = `[creds]\nenabled = true\nbroker = "infisical"\ninfisical_url = "https://infisical.internal"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    await expect(loadBridgeConfig({ path: '/cfg.toml', fsImpl })).rejects.toThrow(
+      /creds\.infisical_token_file must be non-empty/,
+    );
+  });
+
+  it('accepts enabled+infisical with both url and token_file set', async () => {
+    const toml = [
+      '[creds]',
+      'enabled = true',
+      'broker = "infisical"',
+      'infisical_url = "https://infisical.internal"',
+      'infisical_token_file = "/run/secrets/infisical_token"',
+    ].join('\n');
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.creds.enabled).toBe(true);
+    expect(config.creds.broker).toBe('infisical');
+    expect(config.creds.infisical_url).toBe('https://infisical.internal');
+    expect(config.creds.infisical_token_file).toBe('/run/secrets/infisical_token');
+  });
+
+  it('does NOT require url/token_file when disabled even if broker = infisical', async () => {
+    const toml = `[creds]\nenabled = false\nbroker = "infisical"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    // No throw — disabled means url/file not required.
+    expect(config.creds.enabled).toBe(false);
+    expect(config.creds.broker).toBe('infisical');
+  });
+});
+
+describe('loadBridgeConfig — creds.cache_ttl_secs', () => {
+  it('accepts cache_ttl_secs = 0 (zero is valid — disable caching)', async () => {
+    const toml = `[creds]\ncache_ttl_secs = 0\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.creds.cache_ttl_secs).toBe(0);
+  });
+
+  it('accepts cache_ttl_secs = 600', async () => {
+    const toml = `[creds]\ncache_ttl_secs = 600\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.creds.cache_ttl_secs).toBe(600);
+  });
+
+  it('falls back to 300 on negative cache_ttl_secs and warns', async () => {
+    const toml = `[creds]\ncache_ttl_secs = -1\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.creds.cache_ttl_secs).toBe(300);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('creds.cache_ttl_secs'));
+  });
+
+  it('falls back to 300 on non-integer cache_ttl_secs and warns', async () => {
+    const toml = `[creds]\ncache_ttl_secs = 120.5\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.creds.cache_ttl_secs).toBe(300);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('creds.cache_ttl_secs'));
+  });
+});
+
+describe('loadBridgeConfig — creds.audit_attribute_user', () => {
+  it('honours audit_attribute_user = false', async () => {
+    const toml = `[creds]\naudit_attribute_user = false\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.creds.audit_attribute_user).toBe(false);
+  });
+
+  it('defaults to true when absent', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(config.creds.audit_attribute_user).toBe(true);
+  });
+});
+
+describe('loadBridgeConfig — creds.infisical_token_file tilde expansion', () => {
+  it('expands ~/... in infisical_token_file', async () => {
+    const toml = `[creds]\ninfisical_token_file = "~/.secrets/infisical_token"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.creds.infisical_token_file).toBe(
+      path.join(os.homedir(), '.secrets/infisical_token'),
+    );
+  });
+
+  it('leaves absolute infisical_token_file unchanged', async () => {
+    const toml = `[creds]\ninfisical_token_file = "/run/secrets/infisical_token"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.creds.infisical_token_file).toBe('/run/secrets/infisical_token');
+  });
+});
+
+describe('loadBridgeConfig — creds unknown keys', () => {
+  it('warns on unknown key inside [creds] and drops it', async () => {
+    const toml = `[creds]\nfuture_option = "xyz"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('unknown creds key "future_option"'),
+    );
+    expect(config.creds.future_option).toBeUndefined();
+  });
+});
+
