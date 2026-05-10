@@ -816,3 +816,236 @@ describe('McpServer — SSE branch', () => {
     expect(res.body.result).toBeDefined();
   });
 });
+
+// ─── Phase 9 Wave B — Track 2: streamDeltas ───────────────────────────────────
+
+describe('McpServer — Track 2 SSE streamDeltas', () => {
+  const SUCCESS_RESULT = { content: [{ type: 'text', text: 'hello world' }], isError: false };
+
+  function makeDeltaFakes() {
+    const fakes = makeFakes();
+    fakes.fakeTokenResolver.resolve.mockResolvedValue(VALID_IDENTITY);
+    fakes.fakeApprovalGate.isToolAllowed.mockResolvedValue(true);
+    return fakes;
+  }
+
+  it('streamDeltas=true: dispatcher calls transport.delta(id, text) for each onDelta invocation', async () => {
+    const fakes = makeDeltaFakes();
+
+    // toolRegistry.callTool invokes onDelta synchronously before resolving
+    fakes.fakeToolRegistry.callTool.mockImplementation(async ({ onDelta }) => {
+      onDelta?.('To ');
+      onDelta?.('be');
+      return SUCCESS_RESULT;
+    });
+
+    const server = makeServer(fakes, { sseEnabled: true, streamDeltas: true });
+
+    const res = await server.handle({
+      token:  'valid',
+      body:   rpcBody('tools/call', 'req-1', { name: 'synaps_chat', arguments: { prompt: 'hi' } }),
+      accept: 'text/event-stream',
+    });
+
+    expect(res.sse).toBe(true);
+
+    const transport = {
+      delta:  vi.fn(),
+      notify: vi.fn(),
+      result: vi.fn(),
+      error:  vi.fn(),
+    };
+
+    await res.sseDispatcher(transport);
+
+    expect(transport.delta).toHaveBeenCalledTimes(2);
+    expect(transport.delta).toHaveBeenNthCalledWith(1, 'req-1', 'To ');
+    expect(transport.delta).toHaveBeenNthCalledWith(2, 'req-1', 'be');
+    expect(transport.result).toHaveBeenCalledWith('req-1', SUCCESS_RESULT);
+  });
+
+  it('streamDeltas=false: dispatcher never calls transport.delta even when tool emits onDelta', async () => {
+    const fakes = makeDeltaFakes();
+
+    fakes.fakeToolRegistry.callTool.mockImplementation(async ({ onDelta }) => {
+      onDelta?.('should-not-appear');
+      return SUCCESS_RESULT;
+    });
+
+    const server = makeServer(fakes, { sseEnabled: true, streamDeltas: false });
+
+    const res = await server.handle({
+      token:  'valid',
+      body:   rpcBody('tools/call', 'req-2', { name: 'synaps_chat', arguments: { prompt: 'hi' } }),
+      accept: 'text/event-stream',
+    });
+
+    const transport = {
+      delta:  vi.fn(),
+      notify: vi.fn(),
+      result: vi.fn(),
+      error:  vi.fn(),
+    };
+
+    await res.sseDispatcher(transport);
+
+    expect(transport.delta).not.toHaveBeenCalled();
+    expect(transport.result).toHaveBeenCalledWith('req-2', SUCCESS_RESULT);
+  });
+
+  it('non-SSE branch: no onDelta involvement; baseline unchanged', async () => {
+    const fakes = makeDeltaFakes();
+    fakes.fakeToolRegistry.callTool.mockResolvedValue(SUCCESS_RESULT);
+
+    const server = makeServer(fakes, { sseEnabled: false, streamDeltas: true });
+
+    const res = await server.handle({
+      token:  'valid',
+      body:   rpcBody('tools/call', 'req-3', { name: 'synaps_chat', arguments: { prompt: 'hi' } }),
+      // no accept header
+    });
+
+    expect(res.sse).toBeUndefined();
+    expect(res.body.result).toEqual(SUCCESS_RESULT);
+    // callTool should have been called WITHOUT onDelta (or with onDelta=undefined)
+    const callArgs = fakes.fakeToolRegistry.callTool.mock.calls[0][0];
+    expect(callArgs.onDelta).toBeUndefined();
+  });
+});
+
+// ─── Phase 9 Wave B — Track 4: ACL resolver ───────────────────────────────────
+
+describe('McpServer — Track 4 ACL resolver', () => {
+  const SUCCESS_RESULT = { content: [{ type: 'text', text: 'ok' }], isError: false };
+
+  function makeAclFakes() {
+    const fakes = makeFakes();
+    fakes.fakeTokenResolver.resolve.mockResolvedValue(VALID_IDENTITY);
+    fakes.fakeApprovalGate.isToolAllowed.mockResolvedValue(true);
+    fakes.fakeToolRegistry.callTool.mockResolvedValue(SUCCESS_RESULT);
+    return fakes;
+  }
+
+  it('aclResolver.check returns allowed=true → dispatch proceeds normally', async () => {
+    const fakes = makeAclFakes();
+    const aclResolver = { check: vi.fn().mockResolvedValue({ allowed: true, source: 'exact' }) };
+
+    const server = makeServer(fakes, { aclResolver });
+
+    const res = await server.handle({
+      token: 'valid',
+      body:  rpcBody('tools/call', 1, { name: 'synaps_chat', arguments: { prompt: 'hi' } }),
+    });
+
+    expect(res.body.result).toEqual(SUCCESS_RESULT);
+    expect(aclResolver.check).toHaveBeenCalledWith({
+      synaps_user_id: VALID_IDENTITY.synaps_user_id,
+      tool_name:      'synaps_chat',
+    });
+  });
+
+  it('aclResolver.check returns allowed=false → 200 + METHOD_NOT_FOUND containing "Tool denied by ACL"', async () => {
+    const fakes = makeAclFakes();
+    const aclResolver = {
+      check: vi.fn().mockResolvedValue({ allowed: false, reason: 'not permitted' }),
+    };
+
+    const server = makeServer(fakes, { aclResolver });
+
+    const res = await server.handle({
+      token: 'valid',
+      body:  rpcBody('tools/call', 2, { name: 'synaps_chat', arguments: {} }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.error.code).toBe(MCP_ERROR_CODES.METHOD_NOT_FOUND);
+    expect(res.body.error.message).toMatch(/Tool denied by ACL/);
+    // dispatch must NOT have been called
+    expect(fakes.fakeToolRegistry.callTool).not.toHaveBeenCalled();
+  });
+
+  it('aclResolver deny → counter synaps_mcp_acl_denials_total{tool} incremented', async () => {
+    const { MetricsRegistry } = await import('../metrics/metrics-registry.js');
+    const metrics = new MetricsRegistry();
+
+    const fakes = makeAclFakes();
+    const aclResolver = {
+      check: vi.fn().mockResolvedValue({ allowed: false, reason: 'blocked' }),
+    };
+
+    const server = makeServer(fakes, { aclResolver, metrics });
+
+    await server.handle({
+      token: 'valid',
+      body:  rpcBody('tools/call', 3, { name: 'synaps_chat', arguments: {} }),
+    });
+
+    const rendered = metrics.render();
+    expect(rendered).toMatch(/synaps_mcp_acl_denials_total\{tool="synaps_chat"\} 1/);
+  });
+
+  it('aclResolver.check throws → fail-open: dispatch proceeds normally', async () => {
+    const fakes = makeAclFakes();
+    const aclResolver = {
+      check: vi.fn().mockRejectedValue(new Error('db down')),
+    };
+
+    const server = makeServer(fakes, { aclResolver });
+
+    const res = await server.handle({
+      token: 'valid',
+      body:  rpcBody('tools/call', 4, { name: 'synaps_chat', arguments: { prompt: 'hi' } }),
+    });
+
+    // Should succeed (fail-open)
+    expect(res.body.result).toEqual(SUCCESS_RESULT);
+    expect(fakes.fakeToolRegistry.callTool).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── Phase 9 Wave B — Track 6: metrics counters/histograms ────────────────────
+
+describe('McpServer — Track 6 metrics', () => {
+  const SUCCESS_RESULT = { content: [{ type: 'text', text: 'ok' }], isError: false };
+
+  async function makeMetricsFakes() {
+    const { MetricsRegistry } = await import('../metrics/metrics-registry.js');
+    const metrics = new MetricsRegistry();
+    const fakes   = makeFakes();
+    fakes.fakeTokenResolver.resolve.mockResolvedValue(VALID_IDENTITY);
+    fakes.fakeApprovalGate.isToolAllowed.mockResolvedValue(true);
+    fakes.fakeToolRegistry.callTool.mockResolvedValue(SUCCESS_RESULT);
+    return { fakes, metrics };
+  }
+
+  it('synaps_mcp_requests_total{tool,outcome} incremented after successful dispatch', async () => {
+    const { fakes, metrics } = await makeMetricsFakes();
+    const server = makeServer(fakes, { metrics });
+
+    await server.handle({
+      token: 'valid',
+      body:  rpcBody('tools/call', 1, { name: 'synaps_chat', arguments: { prompt: 'hi' } }),
+    });
+
+    const rendered = metrics.render();
+    expect(rendered).toMatch(/synaps_mcp_requests_total\{outcome="ok",tool="synaps_chat"\} 1/);
+  });
+
+  it('synaps_mcp_request_duration_seconds_bucket{tool,le="+Inf"} >= 1 after one dispatch', async () => {
+    const { fakes, metrics } = await makeMetricsFakes();
+    const server = makeServer(fakes, { metrics });
+
+    await server.handle({
+      token: 'valid',
+      body:  rpcBody('tools/call', 2, { name: 'synaps_chat', arguments: { prompt: 'hi' } }),
+    });
+
+    const rendered = metrics.render();
+    // +Inf bucket must be >= 1
+    const match = rendered.match(
+      /synaps_mcp_request_duration_seconds_bucket\{le="\+Inf",tool="synaps_chat"\} (\d+)/,
+    );
+    expect(match).not.toBeNull();
+    expect(Number(match[1])).toBeGreaterThanOrEqual(1);
+  });
+});
