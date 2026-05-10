@@ -861,3 +861,132 @@ describe('BRIDGE_CONFIG_DEFAULTS includes memory section', () => {
     expect(Object.isFrozen(BRIDGE_CONFIG_DEFAULTS.memory)).toBe(true);
   });
 });
+
+// ─── identity section ─────────────────────────────────────────────────────────
+
+describe('loadBridgeConfig — identity section defaults', () => {
+  it('returns all identity defaults when [identity] is absent', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    const id = config.identity;
+    expect(id.enabled).toBe(false);
+    expect(id.link_code_ttl_secs).toBe(300);
+    expect(id.default_institution_id).toBe('');
+  });
+
+  it('result.identity is frozen', async () => {
+    const fsImpl = makeFsImpl({});
+    const config = await loadBridgeConfig({ path: '/no/file.toml', fsImpl });
+    expect(Object.isFrozen(config.identity)).toBe(true);
+  });
+
+  it('BRIDGE_CONFIG_DEFAULTS has identity section with correct defaults', () => {
+    expect(BRIDGE_CONFIG_DEFAULTS.identity).toBeDefined();
+    expect(BRIDGE_CONFIG_DEFAULTS.identity.enabled).toBe(false);
+    expect(BRIDGE_CONFIG_DEFAULTS.identity.link_code_ttl_secs).toBe(300);
+    expect(BRIDGE_CONFIG_DEFAULTS.identity.default_institution_id).toBe('');
+    expect(Object.isFrozen(BRIDGE_CONFIG_DEFAULTS.identity)).toBe(true);
+  });
+});
+
+describe('loadBridgeConfig — identity.enabled', () => {
+  it('honours enabled = true', async () => {
+    const toml = `[identity]\nenabled = true\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.identity.enabled).toBe(true);
+  });
+
+  it('defaults to false and does not warn', async () => {
+    const toml = `[identity]\nenabled = false\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.identity.enabled).toBe(false);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe('loadBridgeConfig — identity.link_code_ttl_secs', () => {
+  it('accepts valid ttl = 60 (lower boundary)', async () => {
+    const toml = `[identity]\nlink_code_ttl_secs = 60\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.identity.link_code_ttl_secs).toBe(60);
+  });
+
+  it('accepts valid ttl = 3600 (upper boundary)', async () => {
+    const toml = `[identity]\nlink_code_ttl_secs = 3600\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.identity.link_code_ttl_secs).toBe(3600);
+  });
+
+  it('falls back to 300 on ttl < 60 and warns', async () => {
+    const toml = `[identity]\nlink_code_ttl_secs = 59\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.identity.link_code_ttl_secs).toBe(300);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('identity.link_code_ttl_secs'));
+  });
+
+  it('falls back to 300 on ttl > 3600 and warns', async () => {
+    const toml = `[identity]\nlink_code_ttl_secs = 7200\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.identity.link_code_ttl_secs).toBe(300);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('identity.link_code_ttl_secs'));
+  });
+
+  it('falls back to 300 on non-integer ttl and warns', async () => {
+    const toml = `[identity]\nlink_code_ttl_secs = 120.5\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.identity.link_code_ttl_secs).toBe(300);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('identity.link_code_ttl_secs'));
+  });
+});
+
+describe('loadBridgeConfig — identity.default_institution_id', () => {
+  it('accepts a valid 24-char hex institution_id', async () => {
+    const toml = `[identity]\ndefault_institution_id = "deadbeefdeadbeefdeadbeef"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.identity.default_institution_id).toBe('deadbeefdeadbeefdeadbeef');
+  });
+
+  it('accepts empty string (no institution fallback)', async () => {
+    const toml = `[identity]\ndefault_institution_id = ""\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.identity.default_institution_id).toBe('');
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('resets to "" on invalid institution_id (not 24-char hex) and warns', async () => {
+    const toml = `[identity]\ndefault_institution_id = "notvalid"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(config.identity.default_institution_id).toBe('');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('identity.default_institution_id'));
+  });
+});
+
+describe('loadBridgeConfig — identity unknown keys', () => {
+  it('warns on unknown key inside [identity] and drops it', async () => {
+    const toml = `[identity]\nunknown_future_key = "xyz"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const logger = makeLogger();
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl, logger });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('unknown identity key "unknown_future_key"'),
+    );
+    // Config does not have the unknown key.
+    expect(config.identity.unknown_future_key).toBeUndefined();
+  });
+});

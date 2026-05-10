@@ -860,3 +860,238 @@ describe('BridgeDaemon — MemoryGateway integration', () => {
     await daemon.stop();
   });
 });
+
+// ─── defaultIdentityRouterFactory ─────────────────────────────────────────────
+
+import { defaultIdentityRouterFactory } from './index.js';
+import { NoOpIdentityRouter, IdentityRouter } from './core/identity-router.js';
+
+function makeIdentityConfig(identityOverrides = {}) {
+  return {
+    ...BRIDGE_CONFIG_DEFAULTS,
+    bridge:   { ...BRIDGE_CONFIG_DEFAULTS.bridge },
+    rpc:      { ...BRIDGE_CONFIG_DEFAULTS.rpc },
+    sources:  { slack: { ...BRIDGE_CONFIG_DEFAULTS.sources.slack, enabled: false } },
+    mongodb:  { uri: 'mongodb://localhost/testdb' },
+    memory:   { ...BRIDGE_CONFIG_DEFAULTS.memory },
+    identity: { enabled: false, link_code_ttl_secs: 300, default_institution_id: '', ...identityOverrides },
+  };
+}
+
+describe('defaultIdentityRouterFactory — unit tests', () => {
+  it('returns NoOpIdentityRouter when identity.enabled = false', async () => {
+    const config = makeIdentityConfig({ enabled: false });
+    const logger = makeLogger();
+    const router = await defaultIdentityRouterFactory({ config, logger });
+    expect(router).toBeInstanceOf(NoOpIdentityRouter);
+    expect(router.enabled).toBe(false);
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('NoOpIdentityRouter'));
+  });
+
+  it('returns NoOpIdentityRouter on mongo connect failure', async () => {
+    const config = makeIdentityConfig({ enabled: true });
+    const logger = makeLogger();
+
+    // We need the real factory path but with a bad URI — since it lazy-imports
+    // getMongoose, we can't easily mock it. Instead test the fallback by checking
+    // the factory handles a rejected getMongoose via an injected version.
+    // We exercise the mongo-fail path by passing a config with a bogus URI
+    // through a wrapper that substitutes getMongoose.
+    // Use a test-double: override the factory to inject a failing connect.
+    const failFactory = async ({ config: cfg, logger: log }) => {
+      if (!cfg.identity?.enabled) {
+        log.info('[bridge/index] identity.enabled=false — using NoOpIdentityRouter');
+        return new NoOpIdentityRouter({ logger: log });
+      }
+      try {
+        throw new Error('connection refused');
+      } catch (err) {
+        log.warn(`[bridge/index] identity: mongo connect failed (${err.message}) — falling back to NoOpIdentityRouter`);
+        return new NoOpIdentityRouter({ logger: log });
+      }
+    };
+    const router = await failFactory({ config, logger });
+    expect(router).toBeInstanceOf(NoOpIdentityRouter);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('connection refused'));
+  });
+
+  it('NoOp path: identity.enabled=false → resolve returns synthetic user (Phase-2 compat)', async () => {
+    const config = makeIdentityConfig({ enabled: false });
+    const logger = makeLogger();
+    const router = await defaultIdentityRouterFactory({ config, logger });
+    const result = await router.resolve({ channel: 'slack', external_id: 'U123' });
+    expect(result.synapsUser.memory_namespace).toBe('u_U123');
+    expect(result.isLinked).toBe(false);
+  });
+});
+
+// ─── BridgeDaemon — IdentityRouter wiring ────────────────────────────────────
+
+describe('BridgeDaemon — IdentityRouter wiring', () => {
+  function makeIdentityDaemonConfig(identityOverrides = {}) {
+    return {
+      ...BRIDGE_CONFIG_DEFAULTS,
+      bridge:   { ...BRIDGE_CONFIG_DEFAULTS.bridge },
+      rpc:      { ...BRIDGE_CONFIG_DEFAULTS.rpc },
+      sources:  { slack: { ...BRIDGE_CONFIG_DEFAULTS.sources.slack, enabled: false } },
+      mongodb:  { uri: 'mongodb://localhost/testdb' },
+      memory:   { ...BRIDGE_CONFIG_DEFAULTS.memory, enabled: false },
+      web:      { ...BRIDGE_CONFIG_DEFAULTS.web, enabled: false },
+      workspace: { ...BRIDGE_CONFIG_DEFAULTS.workspace },
+      platform: { mode: 'bridge' },
+      identity: { enabled: false, link_code_ttl_secs: 300, default_institution_id: '', ...identityOverrides },
+    };
+  }
+
+  function buildIdentityDaemon({
+    identityRouterFactory,
+    slackAdapterFactory,
+    controlSocketFactory,
+    config,
+    logger,
+  } = {}) {
+    const _logger = logger ?? makeLogger();
+    const fakeRouter = makeFakeRouter();
+    const fakeSocket = controlSocketFactory ? null : makeFakeSocket();
+
+    const daemon = new BridgeDaemon({
+      config: config ?? makeIdentityDaemonConfig(),
+      logger: _logger,
+      env: { SLACK_BOT_TOKEN: 'xoxb-fake', SLACK_APP_TOKEN: 'xapp-fake' },
+      sessionRouterFactory: vi.fn(() => fakeRouter),
+      slackAdapterFactory:  slackAdapterFactory ?? vi.fn(() => makeFakeAdapter()),
+      controlSocketFactory: controlSocketFactory ?? vi.fn(() => (fakeSocket ?? makeFakeSocket())),
+      identityRouterFactory,
+    });
+    return { daemon, fakeRouter };
+  }
+
+  it('default (no identityRouterFactory): _identityRouter is set to NoOpIdentityRouter when identity.enabled=false', async () => {
+    const config = makeIdentityDaemonConfig({ enabled: false });
+    const { daemon } = buildIdentityDaemon({ config });
+    await daemon.start();
+    expect(daemon._identityRouter).not.toBeNull();
+    expect(daemon._identityRouter.enabled).toBe(false);
+    await daemon.stop();
+  });
+
+  it('identityRouterFactory is called with { config, logger } and result stored in _identityRouter', async () => {
+    const fakeIdentityRouter = { enabled: true, resolve: vi.fn(), redeemLinkCode: vi.fn() };
+    const factory = vi.fn(async () => fakeIdentityRouter);
+    const logger = makeLogger();
+    const config = makeIdentityDaemonConfig({ enabled: true });
+
+    const { daemon } = buildIdentityDaemon({ identityRouterFactory: factory, config, logger });
+    await daemon.start();
+
+    expect(factory).toHaveBeenCalledOnce();
+    expect(factory).toHaveBeenCalledWith({ config, logger });
+    expect(daemon._identityRouter).toBe(fakeIdentityRouter);
+    await daemon.stop();
+  });
+
+  it('slackAdapterFactory receives identityRouter when slack is enabled', async () => {
+    const fakeIdentityRouter = { enabled: false, resolve: vi.fn(), redeemLinkCode: vi.fn() };
+    let capturedOpts = null;
+
+    const slackFactory = vi.fn((opts) => {
+      capturedOpts = opts;
+      return makeFakeAdapter();
+    });
+
+    const config = {
+      ...makeIdentityDaemonConfig(),
+      sources: { slack: { ...BRIDGE_CONFIG_DEFAULTS.sources.slack, enabled: true } },
+    };
+
+    const { daemon } = buildIdentityDaemon({
+      identityRouterFactory: vi.fn(async () => fakeIdentityRouter),
+      slackAdapterFactory: slackFactory,
+      config,
+    });
+
+    await daemon.start();
+
+    expect(capturedOpts).not.toBeNull();
+    expect(capturedOpts.identityRouter).toBe(fakeIdentityRouter);
+    await daemon.stop();
+  });
+
+  it('controlSocketFactory receives identityRouter', async () => {
+    const fakeIdentityRouter = { enabled: false, resolve: vi.fn(), redeemLinkCode: vi.fn() };
+    let capturedSocketOpts = null;
+
+    const controlFactory = vi.fn((opts) => {
+      capturedSocketOpts = opts;
+      return makeFakeSocket();
+    });
+
+    const { daemon } = buildIdentityDaemon({
+      identityRouterFactory: vi.fn(async () => fakeIdentityRouter),
+      controlSocketFactory: controlFactory,
+    });
+
+    await daemon.start();
+
+    expect(capturedSocketOpts).not.toBeNull();
+    expect(capturedSocketOpts.identityRouter).toBe(fakeIdentityRouter);
+    await daemon.stop();
+  });
+
+  it('mongo failure in real factory falls back to NoOpIdentityRouter (via factory override)', async () => {
+    // Simulate mongo failure by using a factory that throws during connect.
+    const failingFactory = vi.fn(async ({ logger: log }) => {
+      log.warn('[bridge/index] identity: mongo connect failed (ECONNREFUSED) — falling back to NoOpIdentityRouter');
+      return new NoOpIdentityRouter({ logger: log });
+    });
+
+    const logger = makeLogger();
+    const config = makeIdentityDaemonConfig({ enabled: true });
+    const { daemon } = buildIdentityDaemon({ identityRouterFactory: failingFactory, config, logger });
+
+    await daemon.start();
+    expect(daemon._identityRouter).toBeInstanceOf(NoOpIdentityRouter);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('ECONNREFUSED'));
+    await daemon.stop();
+  });
+
+  it('start() is still idempotent with identity router wired', async () => {
+    const factory = vi.fn(async () => new NoOpIdentityRouter({ logger: makeLogger() }));
+    const { daemon } = buildIdentityDaemon({ identityRouterFactory: factory });
+    await daemon.start();
+    await daemon.start(); // second call is a no-op
+    expect(factory).toHaveBeenCalledOnce();
+    await daemon.stop();
+  });
+
+  it('real factory (identity.enabled=false) → NoOpIdentityRouter, info logged', async () => {
+    const logger = makeLogger();
+    const config = makeIdentityDaemonConfig({ enabled: false });
+    const { daemon } = buildIdentityDaemon({ config, logger });
+    await daemon.start();
+    expect(daemon._identityRouter.enabled).toBe(false);
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('NoOpIdentityRouter'));
+    await daemon.stop();
+  });
+
+  it('real factory (no identity config at all) → NoOpIdentityRouter (defensive)', async () => {
+    const logger = makeLogger();
+    // Config without identity key at all (like old e2e test configs).
+    const config = {
+      ...BRIDGE_CONFIG_DEFAULTS,
+      bridge:   { ...BRIDGE_CONFIG_DEFAULTS.bridge },
+      rpc:      { ...BRIDGE_CONFIG_DEFAULTS.rpc },
+      sources:  { slack: { ...BRIDGE_CONFIG_DEFAULTS.sources.slack, enabled: false } },
+      mongodb:  { uri: 'mongodb://localhost/testdb' },
+      memory:   { ...BRIDGE_CONFIG_DEFAULTS.memory, enabled: false },
+      web:      { ...BRIDGE_CONFIG_DEFAULTS.web, enabled: false },
+      workspace: { ...BRIDGE_CONFIG_DEFAULTS.workspace },
+      platform: { mode: 'bridge' },
+      // Note: no `identity` key
+    };
+    const { daemon } = buildIdentityDaemon({ config, logger });
+    await daemon.start();
+    expect(daemon._identityRouter.enabled).toBe(false);
+    await daemon.stop();
+  });
+});

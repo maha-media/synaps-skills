@@ -16,6 +16,9 @@
 
 export { getMongoose, disconnect, isConnected } from './connect.js';
 export { getSynapsWorkspaceModel }              from './models/synaps-workspace.js';
+export { getSynapsUserModel }                   from './models/synaps-user.js';
+export { getSynapsChannelIdentityModel }        from './models/synaps-channel-identity.js';
+export { getSynapsLinkCodeModel }               from './models/synaps-link-code.js';
 export { WorkspaceRepo }                        from './repositories/workspace-repo.js';
 export { UserRepo }                             from './repositories/user-repo.js';
 export { ChannelIdentityRepo }                  from './repositories/channel-identity-repo.js';
