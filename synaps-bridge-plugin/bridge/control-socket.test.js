@@ -1273,3 +1273,679 @@ describe('ControlSocket — cred_broker_use op', () => {
     expect(allLoggedArgs).not.toContain(SECRET_TOKEN);
   });
 });
+
+// ─── Phase 6 op helpers ───────────────────────────────────────────────────────
+
+import { NoopScheduler } from './core/scheduler.js';
+import { NoopHookBus }   from './core/hook-bus.js';
+
+/** Make a fake scheduler with all methods as vi.fn(). */
+function makeFakeScheduler() {
+  return {
+    create: vi.fn(),
+    list:   vi.fn(),
+    remove: vi.fn(),
+  };
+}
+
+/** Make a fake hookBus (enabled). */
+function makeFakeHookBus() {
+  return { emit: vi.fn() };
+}
+
+/** Make a fake hookRepo. */
+function makeFakeHookRepo(hooks = []) {
+  return {
+    create:    vi.fn(async (data) => ({ _id: 'hook-1', ...data })),
+    findById:  vi.fn(async (id) => hooks.find((h) => String(h._id) === String(id)) ?? null),
+    listAll:   vi.fn(async () => hooks),
+    listByEvent: vi.fn(async () => hooks),
+    remove:    vi.fn(async () => true),
+  };
+}
+
+/** Make a fake scheduledTaskRepo. */
+function makeFakeScheduledTaskRepo(tasks = []) {
+  return {
+    findById: vi.fn(async (id) => tasks.find((t) => String(t._id) === String(id)) ?? null),
+    create:   vi.fn(),
+    remove:   vi.fn(async () => true),
+    listByUser: vi.fn(async () => tasks),
+  };
+}
+
+/** Make a fake heartbeatRepo. */
+function makeFakeHeartbeatRepo() {
+  return {
+    record: vi.fn(async () => ({ component: 'workspace', id: 'ws-1', healthy: true, ts: new Date() })),
+  };
+}
+
+/** Make a fake workspaceRepo. */
+function makeFakeWorkspaceRepo(workspace = null) {
+  return {
+    byId:     vi.fn(async () => workspace),
+    findById: vi.fn(async () => workspace),
+  };
+}
+
+// ─── op: heartbeat_emit ───────────────────────────────────────────────────────
+
+describe('ControlSocket — op: heartbeat_emit', () => {
+  let socketPath, cs, heartbeatRepo, workspaceRepo, logger;
+
+  beforeEach(async () => {
+    socketPath    = tmpSocketPath();
+    logger        = makeLogger();
+    heartbeatRepo = makeFakeHeartbeatRepo();
+    workspaceRepo = makeFakeWorkspaceRepo({ _id: 'ws-1', synaps_user_id: 'user-abc' });
+    cs = new ControlSocket({
+      socketPath,
+      sessionRouter: makeFakeRouter(),
+      heartbeatRepo,
+      workspaceRepo,
+      logger,
+    });
+    await cs.start();
+  });
+
+  afterEach(async () => { await cs.stop(); });
+
+  it('happy path workspace — returns ok:true with ts (ISO8601)', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'heartbeat_emit',
+      component: 'workspace',
+      id: 'ws-1',
+      synaps_user_id: 'user-abc',
+    });
+    expect(resp.ok).toBe(true);
+    expect(typeof resp.ts).toBe('string');
+    expect(new Date(resp.ts).toISOString()).toBe(resp.ts);
+    expect(heartbeatRepo.record).toHaveBeenCalledOnce();
+  });
+
+  it('happy path rpc — skips ownership check, records heartbeat', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'heartbeat_emit',
+      component: 'rpc',
+      id: 'sess-1',
+      synaps_user_id: 'any-user',
+    });
+    expect(resp.ok).toBe(true);
+    expect(heartbeatRepo.record).toHaveBeenCalledWith(expect.objectContaining({
+      component: 'rpc',
+      id: 'sess-1',
+    }));
+  });
+
+  it('happy path agent — skips ownership check', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'heartbeat_emit',
+      component: 'agent',
+      id: 'agent-xyz',
+      synaps_user_id: 'user-1',
+    });
+    expect(resp.ok).toBe(true);
+    expect(heartbeatRepo.record).toHaveBeenCalledOnce();
+  });
+
+  it('missing heartbeatRepo — returns { ok:true, supervisor:"noop" }', async () => {
+    const sp2 = tmpSocketPath();
+    const cs2 = new ControlSocket({
+      socketPath: sp2,
+      sessionRouter: makeFakeRouter(),
+      // heartbeatRepo omitted
+      logger: makeLogger(),
+    });
+    await cs2.start();
+    const resp = await sendRequest(sp2, {
+      op: 'heartbeat_emit',
+      component: 'workspace',
+      id: 'ws-x',
+      synaps_user_id: 'user-y',
+    });
+    expect(resp.ok).toBe(true);
+    expect(resp.supervisor).toBe('noop');
+    await cs2.stop();
+  });
+
+  it('workspace owner mismatch — returns code:unauthorized', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'heartbeat_emit',
+      component: 'workspace',
+      id: 'ws-1',
+      synaps_user_id: 'wrong-user',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('unauthorized');
+    expect(resp.error).toMatch(/mismatch/);
+  });
+
+  it('invalid component — returns code:invalid_request', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'heartbeat_emit',
+      component: 'bridge',  // not in allowed set
+      id: 'ws-1',
+      synaps_user_id: 'user-abc',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('invalid_request');
+  });
+
+  it('missing id — returns code:invalid_request', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'heartbeat_emit',
+      component: 'workspace',
+      synaps_user_id: 'user-abc',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('invalid_request');
+    expect(resp.error).toMatch(/id/);
+  });
+
+  it('missing synaps_user_id — returns code:invalid_request', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'heartbeat_emit',
+      component: 'workspace',
+      id: 'ws-1',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('invalid_request');
+    expect(resp.error).toMatch(/synaps_user_id/);
+  });
+
+  it('heartbeatRepo.record throws — returns code:internal_error', async () => {
+    heartbeatRepo.record.mockRejectedValueOnce(new Error('db down'));
+    const resp = await sendRequest(socketPath, {
+      op: 'heartbeat_emit',
+      component: 'rpc',
+      id: 'sess-1',
+      synaps_user_id: 'user-abc',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('internal_error');
+  });
+});
+
+// ─── op: scheduled_task_create ────────────────────────────────────────────────
+
+describe('ControlSocket — op: scheduled_task_create', () => {
+  let socketPath, cs, scheduler, logger;
+
+  beforeEach(async () => {
+    socketPath = tmpSocketPath();
+    logger     = makeLogger();
+    scheduler  = makeFakeScheduler();
+    scheduler.create.mockResolvedValue({
+      id: 'task-1',
+      agenda_job_id: 'agenda-1',
+      next_run: new Date('2025-01-01T09:00:00Z'),
+    });
+    cs = new ControlSocket({
+      socketPath,
+      sessionRouter: makeFakeRouter(),
+      scheduler,
+      logger,
+    });
+    await cs.start();
+  });
+
+  afterEach(async () => { await cs.stop(); });
+
+  it('happy path — returns ok:true with id, agenda_job_id, next_run', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'scheduled_task_create',
+      synaps_user_id: 'user-1',
+      institution_id: 'inst-1',
+      name: 'Test Task',
+      cron: '0 9 * * MON',
+      channel: '#dev',
+      prompt: 'Post digest',
+    });
+    expect(resp.ok).toBe(true);
+    expect(resp.id).toBe('task-1');
+    expect(resp.agenda_job_id).toBe('agenda-1');
+    expect(scheduler.create).toHaveBeenCalledWith({
+      synapsUserId: 'user-1',
+      institutionId: 'inst-1',
+      name: 'Test Task',
+      cron: '0 9 * * MON',
+      channel: '#dev',
+      prompt: 'Post digest',
+    });
+  });
+
+  it('NoopScheduler — returns code:scheduler_disabled', async () => {
+    const sp2 = tmpSocketPath();
+    const cs2 = new ControlSocket({
+      socketPath: sp2,
+      sessionRouter: makeFakeRouter(),
+      scheduler: new NoopScheduler(),
+      logger: makeLogger(),
+    });
+    await cs2.start();
+    const resp = await sendRequest(sp2, {
+      op: 'scheduled_task_create',
+      synaps_user_id: 'user-1',
+      institution_id: 'inst-1',
+      name: 'n',
+      cron: '* * * * *',
+      channel: 'c',
+      prompt: 'p',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('scheduler_disabled');
+    await cs2.stop();
+  });
+
+  it('missing scheduler — returns code:scheduler_disabled', async () => {
+    const sp3 = tmpSocketPath();
+    const cs3 = new ControlSocket({
+      socketPath: sp3,
+      sessionRouter: makeFakeRouter(),
+      logger: makeLogger(),
+    });
+    await cs3.start();
+    const resp = await sendRequest(sp3, {
+      op: 'scheduled_task_create',
+      synaps_user_id: 'u',
+      institution_id: 'i',
+      name: 'n',
+      cron: '* * * * *',
+      channel: 'c',
+      prompt: 'p',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('scheduler_disabled');
+    await cs3.stop();
+  });
+
+  it('missing synaps_user_id — code:invalid_request', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'scheduled_task_create',
+      institution_id: 'inst-1',
+      name: 'n',
+      cron: '* * * * *',
+      channel: 'c',
+      prompt: 'p',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('invalid_request');
+  });
+
+  it('missing cron — code:invalid_request', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'scheduled_task_create',
+      synaps_user_id: 'u',
+      institution_id: 'i',
+      name: 'n',
+      channel: 'c',
+      prompt: 'p',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('invalid_request');
+  });
+});
+
+// ─── op: scheduled_task_list ──────────────────────────────────────────────────
+
+describe('ControlSocket — op: scheduled_task_list', () => {
+  let socketPath, cs, scheduler;
+
+  beforeEach(async () => {
+    socketPath = tmpSocketPath();
+    scheduler  = makeFakeScheduler();
+    scheduler.list.mockResolvedValue([
+      { _id: 'task-1', name: 'Task 1', cron: '* * * * *' },
+    ]);
+    cs = new ControlSocket({
+      socketPath,
+      sessionRouter: makeFakeRouter(),
+      scheduler,
+      logger: makeLogger(),
+    });
+    await cs.start();
+  });
+
+  afterEach(async () => { await cs.stop(); });
+
+  it('happy path — returns ok:true with tasks array', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'scheduled_task_list',
+      synaps_user_id: 'user-1',
+    });
+    expect(resp.ok).toBe(true);
+    expect(Array.isArray(resp.tasks)).toBe(true);
+    expect(resp.tasks).toHaveLength(1);
+    expect(scheduler.list).toHaveBeenCalledWith({ synapsUserId: 'user-1' });
+  });
+
+  it('NoopScheduler — returns code:scheduler_disabled', async () => {
+    const sp2 = tmpSocketPath();
+    const cs2 = new ControlSocket({
+      socketPath: sp2,
+      sessionRouter: makeFakeRouter(),
+      scheduler: new NoopScheduler(),
+      logger: makeLogger(),
+    });
+    await cs2.start();
+    const resp = await sendRequest(sp2, {
+      op: 'scheduled_task_list',
+      synaps_user_id: 'u',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('scheduler_disabled');
+    await cs2.stop();
+  });
+
+  it('missing synaps_user_id — code:invalid_request', async () => {
+    const resp = await sendRequest(socketPath, { op: 'scheduled_task_list' });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('invalid_request');
+  });
+});
+
+// ─── op: scheduled_task_remove ────────────────────────────────────────────────
+
+describe('ControlSocket — op: scheduled_task_remove', () => {
+  let socketPath, cs, scheduler, scheduledTaskRepo;
+
+  beforeEach(async () => {
+    socketPath         = tmpSocketPath();
+    scheduler          = makeFakeScheduler();
+    scheduler.remove.mockResolvedValue({ ok: true });
+    scheduledTaskRepo  = makeFakeScheduledTaskRepo([
+      { _id: 'task-1', synaps_user_id: 'user-1', name: 'My Task' },
+    ]);
+    cs = new ControlSocket({
+      socketPath,
+      sessionRouter: makeFakeRouter(),
+      scheduler,
+      scheduledTaskRepo,
+      logger: makeLogger(),
+    });
+    await cs.start();
+  });
+
+  afterEach(async () => { await cs.stop(); });
+
+  it('happy path — returns ok:true', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'scheduled_task_remove',
+      id: 'task-1',
+      synaps_user_id: 'user-1',
+    });
+    expect(resp.ok).toBe(true);
+    expect(scheduler.remove).toHaveBeenCalledWith('task-1');
+  });
+
+  it('task not found — returns code:not_found', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'scheduled_task_remove',
+      id: 'unknown-task',
+      synaps_user_id: 'user-1',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('not_found');
+  });
+
+  it('ownership mismatch — returns code:unauthorized', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'scheduled_task_remove',
+      id: 'task-1',
+      synaps_user_id: 'wrong-user',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('unauthorized');
+  });
+
+  it('missing id — code:invalid_request', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'scheduled_task_remove',
+      synaps_user_id: 'user-1',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('invalid_request');
+  });
+
+  it('scheduler disabled — code:scheduler_disabled', async () => {
+    const sp2 = tmpSocketPath();
+    const cs2 = new ControlSocket({
+      socketPath: sp2,
+      sessionRouter: makeFakeRouter(),
+      scheduler: new NoopScheduler(),
+      logger: makeLogger(),
+    });
+    await cs2.start();
+    const resp = await sendRequest(sp2, {
+      op: 'scheduled_task_remove',
+      id: 'task-1',
+      synaps_user_id: 'user-1',
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('scheduler_disabled');
+    await cs2.stop();
+  });
+});
+
+// ─── op: hook_create ─────────────────────────────────────────────────────────
+
+describe('ControlSocket — op: hook_create', () => {
+  let socketPath, cs, hookBus, hookRepo;
+
+  beforeEach(async () => {
+    socketPath = tmpSocketPath();
+    hookBus    = makeFakeHookBus();
+    hookRepo   = makeFakeHookRepo();
+    cs = new ControlSocket({
+      socketPath,
+      sessionRouter: makeFakeRouter(),
+      hookBus,
+      hookRepo,
+      logger: makeLogger(),
+    });
+    await cs.start();
+  });
+
+  afterEach(async () => { await cs.stop(); });
+
+  const goodHookReq = {
+    op: 'hook_create',
+    scope: { type: 'user', id: 'user-1' },
+    event: 'pre_tool',
+    action: { type: 'webhook', config: { url: 'https://example.com/hook', secret: 'mysecret' } },
+    enabled: true,
+  };
+
+  it('happy path — returns ok:true with id', async () => {
+    const resp = await sendRequest(socketPath, goodHookReq);
+    expect(resp.ok).toBe(true);
+    expect(typeof resp.id).toBe('string');
+    expect(hookRepo.create).toHaveBeenCalledOnce();
+  });
+
+  it('NoopHookBus — returns code:hooks_disabled', async () => {
+    const sp2 = tmpSocketPath();
+    const cs2 = new ControlSocket({
+      socketPath: sp2,
+      sessionRouter: makeFakeRouter(),
+      hookBus: new NoopHookBus(),
+      hookRepo,
+      logger: makeLogger(),
+    });
+    await cs2.start();
+    const resp = await sendRequest(sp2, goodHookReq);
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('hooks_disabled');
+    await cs2.stop();
+  });
+
+  it('missing hookBus — returns code:hooks_disabled', async () => {
+    const sp3 = tmpSocketPath();
+    const cs3 = new ControlSocket({
+      socketPath: sp3,
+      sessionRouter: makeFakeRouter(),
+      hookRepo,
+      logger: makeLogger(),
+    });
+    await cs3.start();
+    const resp = await sendRequest(sp3, goodHookReq);
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('hooks_disabled');
+    await cs3.stop();
+  });
+
+  it('missing event — code:invalid_request', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'hook_create',
+      scope: { type: 'global' },
+      action: { type: 'webhook', config: {} },
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('invalid_request');
+    expect(resp.error).toMatch(/event/);
+  });
+
+  it('missing scope — code:invalid_request', async () => {
+    const resp = await sendRequest(socketPath, {
+      op: 'hook_create',
+      event: 'pre_tool',
+      action: { type: 'webhook', config: {} },
+    });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('invalid_request');
+    expect(resp.error).toMatch(/scope/);
+  });
+});
+
+// ─── op: hook_list ───────────────────────────────────────────────────────────
+
+describe('ControlSocket — op: hook_list', () => {
+  let socketPath, cs, hookBus, hookRepo;
+  const SECRET = 'super-secret-do-not-leak';
+
+  const fakeHooks = [
+    {
+      _id: 'hook-1',
+      scope: { type: 'user', id: 'user-1' },
+      event: 'pre_tool',
+      action: {
+        type: 'webhook',
+        config: { url: 'https://example.com/hook', secret: SECRET },
+      },
+      enabled: true,
+    },
+  ];
+
+  beforeEach(async () => {
+    socketPath = tmpSocketPath();
+    hookBus    = makeFakeHookBus();
+    hookRepo   = makeFakeHookRepo(fakeHooks);
+    cs = new ControlSocket({
+      socketPath,
+      sessionRouter: makeFakeRouter(),
+      hookBus,
+      hookRepo,
+      logger: makeLogger(),
+    });
+    await cs.start();
+  });
+
+  afterEach(async () => { await cs.stop(); });
+
+  it('returns ok:true with hooks array', async () => {
+    const resp = await sendRequest(socketPath, { op: 'hook_list' });
+    expect(resp.ok).toBe(true);
+    expect(Array.isArray(resp.hooks)).toBe(true);
+    expect(resp.hooks).toHaveLength(1);
+  });
+
+  it('SANITIZATION: action.config.secret is redacted to "<redacted>"', async () => {
+    const resp = await sendRequest(socketPath, { op: 'hook_list' });
+    expect(resp.ok).toBe(true);
+    const hook = resp.hooks[0];
+    expect(hook.action.config.secret).toBe('<redacted>');
+  });
+
+  it('SANITIZATION: secret literal value never appears anywhere in response', async () => {
+    const resp = await sendRequest(socketPath, { op: 'hook_list' });
+    // Deep-search the entire response string for the secret.
+    const responseStr = JSON.stringify(resp);
+    expect(responseStr).not.toContain(SECRET);
+  });
+
+  it('NoopHookBus — code:hooks_disabled', async () => {
+    const sp2 = tmpSocketPath();
+    const cs2 = new ControlSocket({
+      socketPath: sp2,
+      sessionRouter: makeFakeRouter(),
+      hookBus: new NoopHookBus(),
+      hookRepo,
+      logger: makeLogger(),
+    });
+    await cs2.start();
+    const resp = await sendRequest(sp2, { op: 'hook_list' });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('hooks_disabled');
+    await cs2.stop();
+  });
+});
+
+// ─── op: hook_remove ─────────────────────────────────────────────────────────
+
+describe('ControlSocket — op: hook_remove', () => {
+  let socketPath, cs, hookBus, hookRepo;
+
+  const fakeHooks = [{ _id: 'hook-1', event: 'pre_tool' }];
+
+  beforeEach(async () => {
+    socketPath = tmpSocketPath();
+    hookBus    = makeFakeHookBus();
+    hookRepo   = makeFakeHookRepo(fakeHooks);
+    cs = new ControlSocket({
+      socketPath,
+      sessionRouter: makeFakeRouter(),
+      hookBus,
+      hookRepo,
+      logger: makeLogger(),
+    });
+    await cs.start();
+  });
+
+  afterEach(async () => { await cs.stop(); });
+
+  it('happy path — returns ok:true', async () => {
+    const resp = await sendRequest(socketPath, { op: 'hook_remove', id: 'hook-1' });
+    expect(resp.ok).toBe(true);
+    expect(hookRepo.remove).toHaveBeenCalledWith('hook-1');
+  });
+
+  it('not found — returns code:not_found', async () => {
+    const resp = await sendRequest(socketPath, { op: 'hook_remove', id: 'nonexistent' });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('not_found');
+  });
+
+  it('missing id — code:invalid_request', async () => {
+    const resp = await sendRequest(socketPath, { op: 'hook_remove' });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('invalid_request');
+    expect(resp.error).toMatch(/id/);
+  });
+
+  it('NoopHookBus — code:hooks_disabled', async () => {
+    const sp2 = tmpSocketPath();
+    const cs2 = new ControlSocket({
+      socketPath: sp2,
+      sessionRouter: makeFakeRouter(),
+      hookBus: new NoopHookBus(),
+      hookRepo,
+      logger: makeLogger(),
+    });
+    await cs2.start();
+    const resp = await sendRequest(sp2, { op: 'hook_remove', id: 'hook-1' });
+    expect(resp.ok).toBe(false);
+    expect(resp.code).toBe('hooks_disabled');
+    await cs2.stop();
+  });
+});

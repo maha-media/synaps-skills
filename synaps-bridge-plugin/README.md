@@ -976,3 +976,151 @@ installation, policy application, fork-bomb kill test, cloud metadata egress
 block test, `/health` component table verification (including the
 freeze-and-recover cycle), Reaper smoke with direct MongoDB injection, and
 full audit-trail review via `tetra getevents`.
+
+## Phase 6 — Scheduler, Hooks & Watcher Integration
+
+### What Phase 6 adds
+
+Phase 6 introduces three new subsystems that work together to give Synaps
+autonomous scheduling, extensible lifecycle hooks, and deep integration with
+the SynapsCLI in-container watcher process.
+
+---
+
+#### 1. Agenda-js Scheduler
+
+Cron-based scheduled tasks stored in `synaps_scheduled_task`.  On fire, agenda
+reads the task row and calls an injected `dispatcher` callback that injects a
+synthetic inbound event into the user's default channel.
+
+```
+Monday 9am: "Post the weekly GitHub PR digest to #dev"
+```
+
+The scheduler is **default-off** (`[scheduler] enabled = false`).  When disabled,
+all operations return `code: "scheduler_disabled"`.  The dispatcher is injected
+by BridgeDaemon — the scheduler itself has no Slack or channel imports.
+
+#### 2. HookBus — Lifecycle Webhooks
+
+`synaps_hook` rows route the five RPC lifecycle events:
+`pre_tool` / `post_tool` / `pre_stream` / `post_stream` / `on_error`
+to `webhook` actions with HMAC-SHA256 signing and a 5-second timeout.
+
+- Hooks matched by scope (user > institution > global), then by `matcher.tool` / `matcher.channel`
+- Fired in parallel via `Promise.allSettled`
+- `block: true` in a `pre_tool` response aborts the tool call (caller decision)
+- **Secrets never appear in logs or `hook_list` responses** — `action.config.secret` is always `<redacted>` on the wire
+
+The HookBus is **default-off** (`[hooks] enabled = false`).
+
+#### 3. Watcher Integration
+
+Two narrow interfaces bridge the JS host-level supervisor (Phase 5) with the
+Rust in-container SynapsCLI watcher:
+
+**In: `heartbeat_emit` ControlSocket op**  
+The SynapsCLI watcher pushes workspace heartbeats from inside the container:
+```json
+{ "op": "heartbeat_emit", "component": "workspace", "id": "<workspace-id>", "synaps_user_id": "...", "healthy": true }
+```
+- For `component === 'workspace'`: ownership checked against WorkspaceRepo (defense-in-depth)
+- For `component === 'rpc'` / `'agent'`: trusted from the local UDS (same-host only)
+- When supervisor is disabled: returns `{ "ok": true, "supervisor": "noop" }` silently
+
+**Out: `InboxNotifier`**  
+When the Phase-5 Reaper stops a stale workspace, it writes a Rust-`Event`-shaped
+JSON file to `~/.synaps-cli/inbox/`:
+```
+reaper-<workspace-id>-20260510-123456.json
+```
+The SynapsCLI event bus picks this up automatically.  Payload exactly matches
+the Rust `Event` / `EventSource` / `EventContent` struct serialization.
+
+---
+
+### New ControlSocket ops (Phase 6)
+
+| Op | Input | Output |
+|----|-------|--------|
+| `heartbeat_emit` | `{ component, id, healthy?, details?, synaps_user_id }` | `{ ok:true, ts }` or `{ ok:true, supervisor:'noop' }` |
+| `scheduled_task_create` | `{ synaps_user_id, institution_id, name, cron, channel, prompt }` | `{ ok:true, id, agenda_job_id, next_run }` |
+| `scheduled_task_list` | `{ synaps_user_id }` | `{ ok:true, tasks:[...] }` |
+| `scheduled_task_remove` | `{ id, synaps_user_id }` | `{ ok:true }` |
+| `hook_create` | `{ scope, event, matcher, action, enabled? }` | `{ ok:true, id }` |
+| `hook_list` | _(no required fields)_ | `{ ok:true, hooks:[...] }` (**secret redacted**) |
+| `hook_remove` | `{ id }` | `{ ok:true }` |
+
+### Error codes (Phase 6)
+
+| Code | Meaning |
+|------|---------|
+| `invalid_request` | Missing or wrong-typed required field |
+| `not_found` | Entity ID not found |
+| `unauthorized` | Ownership mismatch (e.g. wrong `synaps_user_id` for a workspace) |
+| `scheduler_disabled` | `[scheduler] enabled = false` or NoopScheduler |
+| `hooks_disabled` | `[hooks] enabled = false` or NoopHookBus |
+| `supervisor_disabled` | `heartbeatRepo` absent (supervisor off) |
+| `internal_error` | Unexpected server-side error |
+
+### Configuration (bridge.toml)
+
+```toml
+[scheduler]
+enabled             = false  # default OFF
+process_every_secs  = 30
+max_concurrency     = 5
+
+[hooks]
+enabled      = false         # default OFF
+timeout_ms   = 5000
+max_parallel = 16
+
+[inbox]
+enabled      = false         # default OFF — writes watcher Event files
+dir_template = ""            # resolved per-workspace by WorkspaceManager
+```
+
+### Layer boundary (§9.x)
+
+| Layer | Scope | Owns |
+|-------|-------|------|
+| `synaps watcher` (Rust, in-container) | Per-agent process reaping | `~/.synaps-cli/inbox/` event drops |
+| Phase-5 `Reaper` (JS, host-level) | Workspace container reaping | `WorkspaceManager.stopWorkspace()` |
+
+**Never overlap:** the watcher does not stop containers; the Reaper does not
+signal in-container processes directly.
+
+### What Phase 6 ships
+
+| File | Description |
+|------|-------------|
+| `bridge/core/db/models/synaps-scheduled-task.js` | Mongoose model factory |
+| `bridge/core/db/repositories/scheduled-task-repo.js` | `ScheduledTaskRepo` |
+| `bridge/core/db/models/synaps-hook.js` | Mongoose model factory |
+| `bridge/core/db/repositories/hook-repo.js` | `HookRepo` |
+| `bridge/core/hook-bus.js` | `HookBus` + `NoopHookBus` |
+| `bridge/core/inbox-notifier.js` | `InboxNotifier` + `NoopInboxNotifier` |
+| `bridge/core/scheduler.js` | `Scheduler` + `NoopScheduler` |
+| `bridge/core/reaper.js` | Extended with `inboxNotifier` + `inboxDirFor` |
+| `bridge/control-socket.js` | 7 new ops (Phase 6) |
+| `bridge/index.js` | Phase 6 factory wiring |
+| `bridge/config.js` | `[scheduler]`, `[hooks]`, `[inbox]` sections |
+
+### Acceptance tests
+
+| File | Tests |
+|------|-------|
+| `tests/scp-phase-6/00-scheduler-end-to-end.test.mjs` | 8 |
+| `tests/scp-phase-6/01-hook-bus-webhook.test.mjs` | 9 |
+| `tests/scp-phase-6/02-inbox-notifier-fs.test.mjs` | 7 |
+| `tests/scp-phase-6/03-heartbeat-emit-control-socket.test.mjs` | 8 |
+| `tests/scp-phase-6/04-phase-6-disabled.test.mjs` | 12 |
+| **Total new** | **44** |
+
+### Operator playbook
+
+See [`docs/smoke/phase-6-scheduler.md`](docs/smoke/phase-6-scheduler.md) for
+the complete manual verification procedure including: create/list/remove
+scheduled tasks, hook CRUD with secret-redaction verification, heartbeat_emit
+with ownership checks, and InboxNotifier event-file validation.

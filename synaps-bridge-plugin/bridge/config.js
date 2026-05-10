@@ -93,6 +93,20 @@ export const BRIDGE_CONFIG_DEFAULTS = Object.freeze({
     scp_stale_ms:              30_000,   // 30 s (info only)
     bridge_critical_ms:        60_000,   // /health 503 threshold
   }),
+  scheduler: Object.freeze({
+    enabled:            false,
+    process_every_secs: 30,
+    max_concurrency:    5,
+  }),
+  hooks: Object.freeze({
+    enabled:      false,
+    timeout_ms:   5000,
+    max_parallel: 16,
+  }),
+  inbox: Object.freeze({
+    enabled:      false,
+    dir_template: '',
+  }),
 });
 
 /** Default config file path. */
@@ -196,7 +210,7 @@ function _buildConfig(parsed, logger) {
   const D = BRIDGE_CONFIG_DEFAULTS;
 
   // ── warn on unknown top-level keys ────────────────────────────────────────
-  const knownTopLevel = new Set(['bridge', 'rpc', 'sources', 'platform', 'workspace', 'web', 'mongodb', 'memory', 'identity', 'creds', 'supervisor']);
+  const knownTopLevel = new Set(['bridge', 'rpc', 'sources', 'platform', 'workspace', 'web', 'mongodb', 'memory', 'identity', 'creds', 'supervisor', 'scheduler', 'hooks', 'inbox']);
   for (const k of Object.keys(parsed)) {
     if (!knownTopLevel.has(k)) {
       logger.warn(`bridge/config: unknown top-level key "${k}" — ignoring`);
@@ -494,6 +508,93 @@ function _buildConfig(parsed, logger) {
     }
   }
 
+  // ── [scheduler] ───────────────────────────────────────────────────────────
+  const rawScheduler = (parsed.scheduler && typeof parsed.scheduler === 'object') ? parsed.scheduler : {};
+  const DSCHED = D.scheduler;
+
+  const schedulerEnabled = rawScheduler.enabled !== undefined ? Boolean(rawScheduler.enabled) : DSCHED.enabled;
+
+  // Helper for integer ≥ 0.
+  function validateNonNegInt(rawVal, defaultVal, sectionField) {
+    if (rawVal === undefined) return defaultVal;
+    if (!Number.isInteger(rawVal) || rawVal < 0) {
+      logger.warn(`bridge/config: invalid ${sectionField} "${rawVal}" — falling back to ${defaultVal}`);
+      return defaultVal;
+    }
+    return rawVal;
+  }
+
+  // Helper for integer ≥ 1.
+  function validatePosInt(rawVal, defaultVal, sectionField) {
+    if (rawVal === undefined) return defaultVal;
+    if (!Number.isInteger(rawVal) || rawVal < 1) {
+      logger.warn(`bridge/config: invalid ${sectionField} "${rawVal}" — falling back to ${defaultVal}`);
+      return defaultVal;
+    }
+    return rawVal;
+  }
+
+  const schedulerProcessEverySecs = validateNonNegInt(
+    rawScheduler.process_every_secs,
+    DSCHED.process_every_secs,
+    'scheduler.process_every_secs',
+  );
+  const schedulerMaxConcurrency = validatePosInt(
+    rawScheduler.max_concurrency,
+    DSCHED.max_concurrency,
+    'scheduler.max_concurrency',
+  );
+
+  // Warn on unknown keys inside [scheduler].
+  const knownSchedulerKeys = new Set(['enabled', 'process_every_secs', 'max_concurrency']);
+  for (const k of Object.keys(rawScheduler)) {
+    if (!knownSchedulerKeys.has(k)) {
+      logger.warn(`bridge/config: unknown scheduler key "${k}" — ignoring`);
+    }
+  }
+
+  // ── [hooks] ───────────────────────────────────────────────────────────────
+  const rawHooks = (parsed.hooks && typeof parsed.hooks === 'object') ? parsed.hooks : {};
+  const DHOOKS = D.hooks;
+
+  const hooksEnabled = rawHooks.enabled !== undefined ? Boolean(rawHooks.enabled) : DHOOKS.enabled;
+
+  const hooksTimeoutMs = validateNonNegInt(
+    rawHooks.timeout_ms,
+    DHOOKS.timeout_ms,
+    'hooks.timeout_ms',
+  );
+  const hooksMaxParallel = validatePosInt(
+    rawHooks.max_parallel,
+    DHOOKS.max_parallel,
+    'hooks.max_parallel',
+  );
+
+  // Warn on unknown keys inside [hooks].
+  const knownHooksKeys = new Set(['enabled', 'timeout_ms', 'max_parallel']);
+  for (const k of Object.keys(rawHooks)) {
+    if (!knownHooksKeys.has(k)) {
+      logger.warn(`bridge/config: unknown hooks key "${k}" — ignoring`);
+    }
+  }
+
+  // ── [inbox] ───────────────────────────────────────────────────────────────
+  const rawInbox = (parsed.inbox && typeof parsed.inbox === 'object') ? parsed.inbox : {};
+  const DINBOX = D.inbox;
+
+  const inboxEnabled = rawInbox.enabled !== undefined ? Boolean(rawInbox.enabled) : DINBOX.enabled;
+  const inboxDirTemplate = rawInbox.dir_template !== undefined
+    ? String(rawInbox.dir_template)
+    : DINBOX.dir_template;
+
+  // Warn on unknown keys inside [inbox].
+  const knownInboxKeys = new Set(['enabled', 'dir_template']);
+  for (const k of Object.keys(rawInbox)) {
+    if (!knownInboxKeys.has(k)) {
+      logger.warn(`bridge/config: unknown inbox key "${k}" — ignoring`);
+    }
+  }
+
   return Object.freeze({
     bridge: Object.freeze({
       log_level: logLevel,
@@ -556,6 +657,20 @@ function _buildConfig(parsed, logger) {
       rpc_stale_ms:          supRpcStaleMs,
       scp_stale_ms:          supScpStaleMs,
       bridge_critical_ms:    supBridgeCriticalMs,
+    }),
+    scheduler: Object.freeze({
+      enabled:            schedulerEnabled,
+      process_every_secs: schedulerProcessEverySecs,
+      max_concurrency:    schedulerMaxConcurrency,
+    }),
+    hooks: Object.freeze({
+      enabled:      hooksEnabled,
+      timeout_ms:   hooksTimeoutMs,
+      max_parallel: hooksMaxParallel,
+    }),
+    inbox: Object.freeze({
+      enabled:      inboxEnabled,
+      dir_template: inboxDirTemplate,
     }),
   });
 }

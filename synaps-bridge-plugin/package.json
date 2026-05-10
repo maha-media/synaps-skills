@@ -19,6 +19,7 @@
   "dependencies": {
     "@iarna/toml": "^2.2.5",
     "@slack/bolt": "^4.5.0",
+    "agenda": "^6.2.5",
     "dockerode": "^4.0.2",
     "mongoose": "^8.6.0"
   },

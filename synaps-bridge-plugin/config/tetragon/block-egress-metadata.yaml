@@ -10,12 +10,12 @@
 # What it blocks
 # ──────────────
 # Any process that calls connect(2) (or sendto/sendmsg for raw/UDP paths) with
-# a destination of 169.254.169.254 on any port will receive -EPERM.
+# a destination of 169.254.169.254 on any port will be SIGKILLed immediately.
 #
 # User-visible behaviour
 # ──────────────────────
-# • curl http://169.254.169.254/...  → "connect: Operation not permitted"
-# • Python requests / boto3          → ConnectionError / NoCredentialsError
+# • curl http://169.254.169.254/...  → terminated by signal 9 (SIGKILL); exit code 137
+# • Python requests / boto3          → ConnectionError (process killed before connect)
 # • AWS SDK default credential chain → falls through to explicit-env-var only
 #
 # Tetragon docs: https://tetragon.io/docs/concepts/tracing-policy/
@@ -44,17 +44,26 @@ spec:
       selectors:
         - matchArgs:
             - index: 0
-              operator: "Equal"
-              # Tetragon resolves daddr4 from the sock* at arg index 0.
-              # NOTE: Tetragon >= 1.1 supports sock field matching via
-              # `type: sock` + `operator: Equal` on dotted-decimal strings.
+              operator: "DAddr"
+              # Tetragon v1.7+ requires operator: DAddr (not Equal) when matching
+              # the destination address extracted from a sock* argument.
+              # Equal is rejected outright on sock-typed args in v1.7+.
+              # DAddr resolves the IPv4 destination from the sock* at arg index 0.
               # See: https://tetragon.io/docs/concepts/tracing-policy/selectors/
               #
-              # TODO: If your Tetragon version requires a raw u32 instead of
+              # NOTE: If your Tetragon version requires a raw u32 instead of
               # dotted-decimal, replace the value with "2852039166"
               # (0xA9FEA9FE in decimal = 169.254.169.254 big-endian).
               values:
                 - "169.254.169.254"
           matchActions:
-            - action: Override
-              argError: -1   # -EPERM
+            # Post is required for the kill event to appear in `tetra getevents`
+            # output.  Without an explicit Post, Sigkill events on non-syscall
+            # kprobes are silently enforced but not emitted to the audit stream.
+            - action: Post
+            # Sigkill is used instead of Override because Tetragon v1.7+ forbids
+            # Override on non-syscall / non-security_* kprobes.  tcp_connect is
+            # a generic kprobe, so Override is rejected at policy-load time.
+            # User-visible effect: curl is terminated mid-connect with SIGKILL
+            # (exit code 137) rather than receiving EPERM from the syscall.
+            - action: Sigkill

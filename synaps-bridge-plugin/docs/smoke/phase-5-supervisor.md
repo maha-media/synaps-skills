@@ -1,5 +1,11 @@
 # Phase 5 — Supervisor & Heartbeat Smoke Playbook
 
+> **Pass 2 run record**: See [`phase-5-pass-2-report.md`](phase-5-pass-2-report.md) for the
+> full real-host run on 2026-05-10 (Ubuntu 26.04, Tetragon v1.7.0). That report documents the
+> v1.2 → v1.7 API migration findings, egress-block end-to-end verification (3× rc=137), the
+> kernel-symbol sensitivity finding for `block-kernel-modules`, and the `kill-fork-bomb`
+> known-gap status.
+
 Manual verification procedure for Phase 5 (heartbeat infrastructure + Tetragon
 security policies).
 
@@ -23,9 +29,12 @@ docker run --name tetragon \
   --cgroupns=host \
   -v /sys/kernel/btf:/sys/kernel/btf:ro \
   -v /sys/fs/cgroup:/sys/fs/cgroup:ro \
-  quay.io/cilium/tetragon:v1.2 \
+  quay.io/cilium/tetragon:v1.7.0 \
   /usr/bin/tetragon
 ```
+
+> **Note**: `v1.2` tag was removed from quay.io; `v1.7.0` is the latest stable as of this
+> playbook revision.
 
 Wait for readiness:
 
@@ -37,7 +46,7 @@ docker logs -f tetragon 2>&1 | grep -m1 "Tetragon running"
 Install the `tetra` CLI (if not already present):
 
 ```bash
-TETRA_VERSION=v1.2.0
+TETRA_VERSION=v1.7.0
 curl -fsSL https://github.com/cilium/tetragon/releases/download/${TETRA_VERSION}/tetra-linux-amd64.tar.gz \
   | tar xz -C /usr/local/bin tetra
 tetra version
@@ -47,14 +56,18 @@ tetra version
 
 ## Step 2 — Apply Tetragon TracingPolicies
 
-Apply all four policies from the project repository root:
+> **Note**: `kill-fork-bomb.yaml` **will fail to load on Tetragon v1.7+** with
+> `unknown field "matchRateLimit"`. This is a documented known gap — see the header
+> comment in that file for full explanation. Apply only the three working policies below:
 
 ```bash
 cd /path/to/synaps-bridge-plugin
 
 tetra tracingpolicy add config/tetragon/block-egress-metadata.yaml
 tetra tracingpolicy add config/tetragon/block-kernel-modules.yaml
-tetra tracingpolicy add config/tetragon/kill-fork-bomb.yaml
+# kill-fork-bomb.yaml is NOT applied — it fails to load on v1.7+ (matchRateLimit
+# is not a stable Tetragon primitive). Fork-bomb defence is provided by the
+# workspace container's pids.max cgroup limit instead.
 # kill-cpu-runaway.yaml is a documented stub — skip or apply for audit:
 tetra tracingpolicy add config/tetragon/kill-cpu-runaway.yaml
 ```
@@ -76,45 +89,39 @@ Expected output (abbreviated):
 NAME                     STATE     FILTERID
 block-egress-metadata    enabled   1
 block-kernel-modules     enabled   2
-kill-fork-bomb           enabled   3
-kill-cpu-runaway         enabled   4   # stub — 0 tracepoints but loads cleanly
+kill-cpu-runaway         enabled   3   # stub — 0 tracepoints but loads cleanly
 ```
 
-All policies must show `STATE=enabled`. If any shows `error`, check
+All applied policies must show `STATE=enabled`. If any shows `error`, check
 `docker logs tetragon` for the BPF compilation error.
 
 ---
 
 ## Step 4 — Fork-Bomb Test
 
-Start a workspace container (or any privileged test container):
+**SKIPPED — see Step 2 note.** `kill-fork-bomb.yaml` does not load on Tetragon
+v1.7+ (`matchRateLimit` field rejected). Fork-bomb defence is provided by the
+workspace container's `pids.max` cgroup limit set at workspace-creation time;
+verify that limit is set correctly at container launch instead.
 
 ```bash
+# Verify the pids.max cgroup limit on a workspace container:
+# docker inspect <container> --format '{{ .HostConfig.PidsLimit }}'
+# Expected: a non-zero value (e.g. 512)
+```
+
+<!-- Tetragon fork-bomb test — preserved for future Tetragon-version revisit
+     when/if a per-PID counting primitive lands in Tetragon stable.
+
 docker run --name workspace-alice --rm -d ubuntu:24.04 sleep infinity
-```
 
-Trigger the fork bomb:
-
-```bash
 docker exec -it workspace-alice bash -c ':() { :|: & }; :'
-```
+# Expected (future): process SIGKILLed within ~100 ms; Tetragon event visible:
+# tetra getevents --event-types PROCESS_KPROBE 2>/dev/null | grep -A5 "Sigkill"
+# Expected event: action="Sigkill", function="wake_up_new_task"
 
-**Expected**: The process is SIGKILLed within ~100 ms. The terminal returns
-immediately or with a "Killed" message. The container stays alive (only the
-offending PID is killed, not the entire container).
-
-Verify the Tetragon kill event:
-
-```bash
-tetra getevents --event-types PROCESS_KPROBE 2>/dev/null | grep -A5 "Sigkill"
-# Expected: an event with action="Sigkill", function="wake_up_new_task"
-```
-
-Cleanup:
-
-```bash
 docker stop workspace-alice
-```
+-->
 
 ---
 
@@ -127,15 +134,18 @@ docker exec workspace-alice apt-get install -y -q curl 2>/dev/null
 docker exec workspace-alice curl -m 2 http://169.254.169.254/latest/meta-data/
 ```
 
-**Expected**: `curl: (7) Failed to connect to 169.254.169.254 port 80 after X ms: Operation not permitted`
-or equivalent EPERM/ECONNREFUSED error. The request must NOT return any
-metadata content.
+**Expected**:
+- `Killed` — curl is terminated by SIGKILL mid-connect (not an EPERM/ECONNREFUSED)
+- Exit code **137** (= 128 + SIGKILL)
+- The request must NOT return any metadata content
 
-Verify the Tetragon override event:
+Verify the Tetragon kill event:
 
 ```bash
 tetra getevents --event-types PROCESS_KPROBE 2>/dev/null | grep -A5 "block-egress-metadata"
-# Expected: event with action="Override", destination 169.254.169.254
+# Expected: event with function_name="tcp_connect", action="KPROBE_ACTION_SIGKILL",
+#           policy_name="block-egress-metadata", args showing daddr=169.254.169.254
+# NPOST / NENFORCE counters on the policy tick up by 1 per curl attempt.
 ```
 
 Cleanup:
@@ -322,8 +332,8 @@ Remove Tetragon policies:
 ```bash
 tetra tracingpolicy delete block-egress-metadata
 tetra tracingpolicy delete block-kernel-modules
-tetra tracingpolicy delete kill-fork-bomb
 tetra tracingpolicy delete kill-cpu-runaway
+# kill-fork-bomb was not applied (known gap — see Step 2 note)
 ```
 
 Stop the Tetragon container:
@@ -357,8 +367,7 @@ jq -r '.process_kprobe | "\(.action)\t\(.function_name)\t\(.process.pid)\t\(.pro
 ```
 
 **Expected entries** (at minimum):
-- `Sigkill` / `wake_up_new_task` — fork bomb kill (Step 4)
-- `Override` / `tcp_connect` — metadata egress block (Step 5)
+- `Sigkill` / `tcp_connect` — metadata egress block (Step 5)
 
 If either entry is absent, re-run the relevant step and confirm the policy
 is in `enabled` state via `tetra tracingpolicy list`.
@@ -369,15 +378,17 @@ is in `enabled` state via `tetra tracingpolicy list`.
 
 | Check | Expected |
 |---|---|
-| All 4 policies load without error | ✅ `tetra tracingpolicy list` shows `enabled` |
-| Fork bomb killed within 100 ms | ✅ `Sigkill` event visible in `tetra getevents` |
-| Metadata curl returns EPERM/ECONNREFUSED | ✅ No metadata content returned |
+| block-egress-metadata and block-kernel-modules load without error | ✅ `tetra tracingpolicy list` shows `enabled` |
+| kill-cpu-runaway loads cleanly (stub) | ✅ `tetra tracingpolicy list` shows `enabled` |
+| kill-fork-bomb fails to load with `matchRateLimit` error (known gap) | ✅ documented expected behaviour |
+| Metadata curl terminated with SIGKILL (exit code 137) | ✅ No metadata content returned; `tetra getevents` shows `KPROBE_ACTION_SIGKILL` |
+| `tetra getevents` shows `tcp_connect` + `KPROBE_ACTION_SIGKILL` + `block-egress-metadata` | ✅ NPOST/NENFORCE tick per attempt |
 | `/health` 200 + `status:ok` when bridge fresh | ✅ HTTP 200 |
 | `/health` 503 + `status:down` after 70 s freeze | ✅ HTTP 503 |
 | `/health` 200 again after resume + one interval | ✅ HTTP 200 |
 | Stale workspace row reaped within `reaper_interval_ms` | ✅ Row absent from MongoDB |
 | Multiple components visible in component table | ✅ `components.length` = expected count |
-| Audit log captures all SIGKILL + Override events | ✅ JSON log non-empty |
+| Audit log captures SIGKILL events for egress test | ✅ JSON log non-empty |
 
 ---
 
@@ -389,3 +400,4 @@ is in `enabled` state via `tetra tracingpolicy list`.
 - YAML sources: `config/tetragon/*.yaml`
 - JS Reaper: `bridge/core/reaper.js`
 - JS HeartbeatEmitter: `bridge/core/heartbeat-emitter.js`
+- Pass 2 smoke report: [`docs/smoke/phase-5-pass-2-report.md`](phase-5-pass-2-report.md)

@@ -40,6 +40,28 @@ metadata:
   labels:
     synaps-control-plane: "v0"
 spec:
+  # ── KERNEL-SYMBOL SENSITIVITY ────────────────────────────────────────────────
+  #
+  # On some Ubuntu HWE kernels (e.g. 7.0.0-15-generic, observed during Pass 2
+  # smoke on 2026-05-10), __x64_sys_finit_module and __x64_sys_init_module may
+  # exist only as ".cold" out-of-line symbols in /proc/kallsyms.  In that case
+  # the kprobe attaches successfully (Tetragon reports "Added kprobe") but NEVER
+  # fires on real insmod/modprobe invocations — the hot path is inlined or has a
+  # different symbol name on that kernel build.
+  #
+  # Before relying on this policy in production, operators MUST verify:
+  #   1. grep "sys_(f?init_module)" /proc/kallsyms
+  #      Confirm a non-.cold "T" symbol exists (e.g. "T __x64_sys_finit_module").
+  #   2. Run: insmod /tmp/fake.ko from a seccomp=unconfined test container and
+  #      confirm `tetra tracingpolicy list` shows NPOST > 0 for block-kernel-modules.
+  #
+  # Docker's default seccomp profile already blocks init_module / finit_module
+  # from unprivileged containers (EPERM before the syscall reaches the kernel).
+  # This policy is therefore defence-in-depth for scenarios where seccomp is
+  # relaxed: privileged containers, custom seccomp profiles, or bare-metal hosts
+  # running workspaces without Docker's seccomp filter.
+  #
+  # ────────────────────────────────────────────────────────────────────────────
   kprobes:
     # ── finit_module(2) — most common path (insmod / modprobe) ───────────────
     - call: "__x64_sys_finit_module"
@@ -48,11 +70,14 @@ spec:
         - matchNamespaces:
             # Only intercept processes running inside a user namespace
             # (container workloads).  Processes in the host init namespace
-            # (nstype: User, operator: NotIn, values: ["host"]) are excluded.
+            # (nstype: User, operator: NotIn, values: ["host_ns"]) are excluded.
+            # NOTE: Tetragon v1.7+ requires "host_ns" (not bare "host") as the
+            # special sentinel value for the init namespace in matchNamespaces.
+            # Using "host" causes the policy to be rejected at load time.
             - namespace: User
               operator: "NotIn"
               values:
-                - "host"
+                - "host_ns"
           matchActions:
             - action: Override
               argError: -1   # -EPERM
@@ -65,7 +90,7 @@ spec:
             - namespace: User
               operator: "NotIn"
               values:
-                - "host"
+                - "host_ns"
           matchActions:
             - action: Override
               argError: -1   # -EPERM

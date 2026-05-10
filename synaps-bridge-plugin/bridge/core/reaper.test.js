@@ -48,6 +48,7 @@ function makeLogger() {
 
 /** Heartbeat document stubs. */
 function wsDoc(id) { return { component: 'workspace', id }; }
+function wsDocWithTs(id, ts, details = {}) { return { component: 'workspace', id, ts, details }; }
 function rpcDoc(id) { return { component: 'rpc',       id }; }
 function scpDoc(id) { return { component: 'scp',       id }; }
 
@@ -63,6 +64,9 @@ function makeReaper({
   logger,
   setIntervalImpl,
   clearIntervalImpl,
+  inboxNotifier,
+  inboxDirFor,
+  now,
 } = {}) {
   return new Reaper({
     repo:          repo    ?? makeRepo(),
@@ -73,7 +77,17 @@ function makeReaper({
     logger:        logger  ?? makeLogger(),
     setInterval:   setIntervalImpl  ?? globalThis.setInterval,
     clearInterval: clearIntervalImpl ?? globalThis.clearInterval,
+    inboxNotifier,
+    inboxDirFor,
+    now,
   });
+}
+
+function makeInboxNotifier(overrides = {}) {
+  return {
+    notifyWorkspaceReaped: vi.fn().mockResolvedValue({ written: true, path: '/tmp/fake.json' }),
+    ...overrides,
+  };
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -570,3 +584,168 @@ describe('Reaper — logger.info on sweep complete', () => {
     expect(logger.info).toHaveBeenCalledWith('reaper sweep complete', summary);
   });
 });
+
+// ─── Phase 6: InboxNotifier wiring tests ────────────────────────────────────
+
+describe('Reaper — InboxNotifier wiring (Phase 6)', () => {
+  // B2-1: notifier called with correct payload after workspace reap
+  it('B2-1: calls notifyWorkspaceReaped with all four correct fields after workspace reap', async () => {
+    const TS     = new Date('2024-03-15T12:00:00.000Z');
+    const NOW_TS = new Date('2024-03-15T12:31:00.000Z'); // 31 minutes later → ageMs = 31 * 60_000
+    const expectedAgeMs = NOW_TS.getTime() - TS.getTime();
+
+    const repo = makeRepo({
+      findStale: vi.fn().mockImplementation(({ component }) =>
+        component === 'workspace'
+          ? Promise.resolve([wsDocWithTs('ws-notify', TS, { synaps_user_id: 'user-99' })])
+          : Promise.resolve([]),
+      ),
+    });
+    const wm      = makeWorkspaceManager();
+    const notifier = makeInboxNotifier();
+    const reaper  = makeReaper({
+      repo,
+      workspaceManager: wm,
+      inboxNotifier:    notifier,
+      now:              () => NOW_TS,
+    });
+
+    await reaper.sweepNow();
+
+    expect(notifier.notifyWorkspaceReaped).toHaveBeenCalledOnce();
+    expect(notifier.notifyWorkspaceReaped).toHaveBeenCalledWith({
+      workspaceId:  'ws-notify',
+      synapsUserId: 'user-99',
+      reason:       'stale_heartbeat',
+      details:      {
+        ageMs:     expectedAgeMs,
+        threshold: 30 * 60_000, // default workspaceMs threshold
+      },
+    });
+  });
+
+  // B2-2: notifier error caught + warn-logged + reap still counted as success
+  it('B2-2: notifier error is caught + warn-logged; workspace still appears in reaped list', async () => {
+    const logger  = makeLogger();
+    const repo    = makeRepo({
+      findStale: vi.fn().mockImplementation(({ component }) =>
+        component === 'workspace'
+          ? Promise.resolve([wsDoc('ws-err-notify')])
+          : Promise.resolve([]),
+      ),
+    });
+    const wm      = makeWorkspaceManager();
+    const notifier = makeInboxNotifier({
+      notifyWorkspaceReaped: vi.fn().mockRejectedValue(new Error('inbox write failed')),
+    });
+    const reaper  = makeReaper({
+      repo,
+      workspaceManager: wm,
+      inboxNotifier:    notifier,
+      logger,
+    });
+
+    const summary = await reaper.sweepNow();
+
+    // Reap still counted as success
+    expect(summary.reaped.workspaces).toContain('ws-err-notify');
+    // No additional errors[] entry for notifier failure (it's warn-only)
+    expect(summary.errors).toHaveLength(0);
+    // Warn was logged
+    expect(logger.warn).toHaveBeenCalledWith(
+      'inbox notify failed',
+      expect.objectContaining({ workspaceId: 'ws-err-notify', err: 'inbox write failed' }),
+    );
+  });
+
+  // B2-3: rpc reap does NOT call notifier (layer-boundary discipline)
+  it('B2-3: rpc reap does NOT call inboxNotifier (layer-boundary discipline)', async () => {
+    const killer  = makeRpcKiller();
+    const notifier = makeInboxNotifier();
+    const repo    = makeRepo({
+      findStale: vi.fn().mockImplementation(({ component }) =>
+        component === 'rpc'
+          ? Promise.resolve([rpcDoc('sess-boundary')])
+          : Promise.resolve([]),
+      ),
+    });
+    const reaper = makeReaper({
+      repo,
+      rpcKiller:     killer,
+      inboxNotifier: notifier,
+    });
+
+    await reaper.sweepNow();
+
+    expect(killer).toHaveBeenCalledWith('sess-boundary');
+    expect(notifier.notifyWorkspaceReaped).not.toHaveBeenCalled();
+  });
+
+  // B2-4: scp-stale warn does NOT call notifier
+  it('B2-4: scp-stale warn path does NOT call inboxNotifier', async () => {
+    const notifier = makeInboxNotifier();
+    const repo    = makeRepo({
+      findStale: vi.fn().mockImplementation(({ component }) =>
+        component === 'scp'
+          ? Promise.resolve([scpDoc('scp-boundary')])
+          : Promise.resolve([]),
+      ),
+    });
+    const reaper = makeReaper({
+      repo,
+      inboxNotifier: notifier,
+    });
+
+    await reaper.sweepNow();
+
+    expect(notifier.notifyWorkspaceReaped).not.toHaveBeenCalled();
+  });
+
+  // B2-5: inboxNotifier null → no calls + no errors (back-compat with Phase 5)
+  it('B2-5: inboxNotifier null → notifier never called + no errors (Phase 5 back-compat)', async () => {
+    const repo = makeRepo({
+      findStale: vi.fn().mockImplementation(({ component }) =>
+        component === 'workspace'
+          ? Promise.resolve([wsDoc('ws-compat')])
+          : Promise.resolve([]),
+      ),
+    });
+    const wm   = makeWorkspaceManager();
+    // Explicitly pass null (same as omitting it in makeReaper)
+    const reaper = makeReaper({ repo, workspaceManager: wm, inboxNotifier: null });
+
+    const summary = await reaper.sweepNow();
+
+    // Workspace reaped successfully
+    expect(summary.reaped.workspaces).toContain('ws-compat');
+    expect(summary.errors).toHaveLength(0);
+    // No notifier was used — no interference
+  });
+
+  // B2-6: synapsUserId from heartbeat.details.synaps_user_id when present, null otherwise
+  it('B2-6: synapsUserId is null when heartbeat.details.synaps_user_id is absent', async () => {
+    const repo = makeRepo({
+      findStale: vi.fn().mockImplementation(({ component }) =>
+        component === 'workspace'
+          // doc has no details.synaps_user_id
+          ? Promise.resolve([{ component: 'workspace', id: 'ws-noid', details: {} }])
+          : Promise.resolve([]),
+      ),
+    });
+    const wm       = makeWorkspaceManager();
+    const notifier = makeInboxNotifier();
+    const reaper   = makeReaper({
+      repo,
+      workspaceManager: wm,
+      inboxNotifier:    notifier,
+    });
+
+    await reaper.sweepNow();
+
+    expect(notifier.notifyWorkspaceReaped).toHaveBeenCalledOnce();
+    expect(notifier.notifyWorkspaceReaped).toHaveBeenCalledWith(
+      expect.objectContaining({ synapsUserId: null }),
+    );
+  });
+});
+
