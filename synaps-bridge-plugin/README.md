@@ -499,10 +499,73 @@ What Phase 1 ships:
 What Phase 1 does NOT ship (planned for later phases):
 - Identity reconciliation across channels (Phase 3)
 - pria-cookie auth on `/vnc/*` (Phase 3)
-- MemoryGateway / axel wiring (Phase 2)
 - Credential broker (Phase 4)
 - Tetragon supervisor + reaper (Phase 5)
 - Scheduler + hooks (Phase 6)
 - MCP wire-compat (Phase 7)
 
 Spec: see [`synaps-skills/docs/plans/PLATFORM.SPEC.md`](../../synaps-skills/docs/plans/PLATFORM.SPEC.md).
+
+---
+
+## Phase 2 — Memory gateway
+
+Per-user persistent memory backed by [`axel-memory-manager`](https://github.com/synaps-ai/axel-memory-manager).
+**Disabled by default** — set `[memory] enabled = true` to opt in.
+
+### How it works
+
+```
+Slack message arrives
+  │
+  ├─ Pre-stream: MemoryGateway.recall(userId, query)
+  │     → axel search  →  top-K results prepended as [memory_recall]…[/memory_recall]
+  │
+  └─ Post-stream: MemoryGateway.store(userId, assistantText)
+        → axel remember  →  response stored in user's .r8 brain file
+```
+
+One `.r8` brain file per `SynapsUser` at `<brain_dir>/u_<synapsUserId>.r8`.
+Namespace isolation is strict — two Slack users never share a brain file.
+
+### Quick start
+
+Add to `~/.synaps-cli/bridge/bridge.toml`:
+
+```toml
+[memory]
+enabled          = true        # opt-in
+transport        = "cli"       # only "cli" is implemented in v0
+cli_path         = "axel"      # binary on PATH
+brain_dir        = "~/.local/share/synaps/memory"
+recall_k         = 8           # top-K search results
+recall_min_score = 0.0         # filter weak matches (0–1)
+recall_max_chars = 2000        # cap on injected text size
+```
+
+### Config keys
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `enabled` | `false` | Opt-in gate — set to `true` to activate |
+| `transport` | `"cli"` | Transport mode: `"cli"` (axel per-call) or `"socket"` (future) |
+| `cli_path` | `"axel"` | Path or name of the `axel` binary |
+| `brain_dir` | `"~/.local/share/synaps/memory"` | Directory holding per-user `.r8` brain files |
+| `recall_k` | `8` | Number of top search results to retrieve (1–50) |
+| `recall_min_score` | `0.0` | Minimum cosine similarity threshold (0.0–1.0) |
+| `recall_max_chars` | `2000` | Maximum characters injected into prompt (100–50 000) |
+| `axel_socket` | `"/run/synaps/axel.sock"` | Forward-looking socket path (unused in v0) |
+| `consolidation_cron` | `"0 3 * * *"` | Nightly consolidation schedule (not wired yet) |
+
+### What Phase 2 ships
+
+- `bridge/core/memory-gateway.js` — `MemoryGateway` + `NoopMemoryGateway`
+- `bridge/core/memory/axel-cli-client.js` — `AxelCliClient` (CLI transport)
+- `[memory]` config section in `bridge/config.js`
+- Pre/post-stream hooks in `bridge/sources/slack/index.js`
+
+### Operator playbook
+
+See `docs/smoke/phase-2-memory.md` for the full smoke test procedure including:
+axel binary sanity, config validation, recall-on-second-thread verification,
+namespace isolation verification, and disabled-mode confirmation.

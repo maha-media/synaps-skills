@@ -60,6 +60,17 @@ export const BRIDGE_CONFIG_DEFAULTS = Object.freeze({
   mongodb: Object.freeze({
     uri: 'mongodb://localhost/priadb',
   }),
+  memory: Object.freeze({
+    enabled: false,
+    transport: 'cli',
+    cli_path: 'axel',
+    brain_dir: '~/.local/share/synaps/memory',
+    recall_k: 8,
+    recall_min_score: 0.0,
+    recall_max_chars: 2000,
+    axel_socket: '/run/synaps/axel.sock',
+    consolidation_cron: '0 3 * * *',
+  }),
 });
 
 /** Default config file path. */
@@ -102,6 +113,7 @@ export function expandHome(p) {
  * @property {{ image: string, docker_socket: string, volume_root: string, default_cpu: number, default_mem_mb: number, default_pids: number, idle_reap_minutes: number }} workspace
  * @property {{ enabled: boolean, http_port: number, bind: string, trust_proxy_header: string, allowed_origin: string }} web
  * @property {{ uri: string }} mongodb
+ * @property {{ enabled: boolean, transport: string, cli_path: string, brain_dir: string, recall_k: number, recall_min_score: number, recall_max_chars: number, axel_socket: string, consolidation_cron: string }} memory
  */
 
 /**
@@ -160,7 +172,7 @@ function _buildConfig(parsed, logger) {
   const D = BRIDGE_CONFIG_DEFAULTS;
 
   // ── warn on unknown top-level keys ────────────────────────────────────────
-  const knownTopLevel = new Set(['bridge', 'rpc', 'sources', 'platform', 'workspace', 'web', 'mongodb']);
+  const knownTopLevel = new Set(['bridge', 'rpc', 'sources', 'platform', 'workspace', 'web', 'mongodb', 'memory']);
   for (const k of Object.keys(parsed)) {
     if (!knownTopLevel.has(k)) {
       logger.warn(`bridge/config: unknown top-level key "${k}" — ignoring`);
@@ -279,6 +291,60 @@ function _buildConfig(parsed, logger) {
     mongodbUri = DMDB.uri;
   }
 
+  // ── [memory] ──────────────────────────────────────────────────────────────
+  const rawMemory = (parsed.memory && typeof parsed.memory === 'object') ? parsed.memory : {};
+  const DMEM = D.memory;
+
+  const memEnabled = rawMemory.enabled !== undefined ? Boolean(rawMemory.enabled) : DMEM.enabled;
+
+  let memTransport = rawMemory.transport !== undefined ? rawMemory.transport : DMEM.transport;
+  if (memTransport !== 'cli' && memTransport !== 'socket') {
+    logger.warn(`bridge/config: invalid memory.transport "${memTransport}" — falling back to "${DMEM.transport}"`);
+    memTransport = DMEM.transport;
+  }
+
+  let memCliPath = rawMemory.cli_path !== undefined ? rawMemory.cli_path : DMEM.cli_path;
+  if (typeof memCliPath !== 'string' || memCliPath.length === 0) {
+    logger.warn(`bridge/config: invalid memory.cli_path — falling back to "${DMEM.cli_path}"`);
+    memCliPath = DMEM.cli_path;
+  }
+
+  let memBrainDir = rawMemory.brain_dir !== undefined ? rawMemory.brain_dir : DMEM.brain_dir;
+  if (typeof memBrainDir !== 'string' || memBrainDir.length === 0) {
+    logger.warn(`bridge/config: invalid memory.brain_dir — falling back to "${DMEM.brain_dir}"`);
+    memBrainDir = DMEM.brain_dir;
+  }
+
+  let memRecallK = rawMemory.recall_k !== undefined ? rawMemory.recall_k : DMEM.recall_k;
+  if (!Number.isInteger(memRecallK) || memRecallK < 1 || memRecallK > 50) {
+    logger.warn(`bridge/config: invalid memory.recall_k "${memRecallK}" — falling back to ${DMEM.recall_k}`);
+    memRecallK = DMEM.recall_k;
+  }
+
+  let memRecallMinScore = rawMemory.recall_min_score !== undefined ? rawMemory.recall_min_score : DMEM.recall_min_score;
+  if (typeof memRecallMinScore !== 'number' || !isFinite(memRecallMinScore) || memRecallMinScore < 0 || memRecallMinScore > 1) {
+    logger.warn(`bridge/config: invalid memory.recall_min_score "${memRecallMinScore}" — falling back to ${DMEM.recall_min_score}`);
+    memRecallMinScore = DMEM.recall_min_score;
+  }
+
+  let memRecallMaxChars = rawMemory.recall_max_chars !== undefined ? rawMemory.recall_max_chars : DMEM.recall_max_chars;
+  if (!Number.isInteger(memRecallMaxChars) || memRecallMaxChars < 100 || memRecallMaxChars > 50000) {
+    logger.warn(`bridge/config: invalid memory.recall_max_chars "${memRecallMaxChars}" — falling back to ${DMEM.recall_max_chars}`);
+    memRecallMaxChars = DMEM.recall_max_chars;
+  }
+
+  let memAxelSocket = rawMemory.axel_socket !== undefined ? rawMemory.axel_socket : DMEM.axel_socket;
+  if (typeof memAxelSocket !== 'string' || memAxelSocket.length === 0) {
+    logger.warn(`bridge/config: invalid memory.axel_socket — falling back to "${DMEM.axel_socket}"`);
+    memAxelSocket = DMEM.axel_socket;
+  }
+
+  let memConsolidationCron = rawMemory.consolidation_cron !== undefined ? rawMemory.consolidation_cron : DMEM.consolidation_cron;
+  if (typeof memConsolidationCron !== 'string' || memConsolidationCron.length === 0) {
+    logger.warn(`bridge/config: invalid memory.consolidation_cron — falling back to "${DMEM.consolidation_cron}"`);
+    memConsolidationCron = DMEM.consolidation_cron;
+  }
+
   return Object.freeze({
     bridge: Object.freeze({
       log_level: logLevel,
@@ -309,5 +375,16 @@ function _buildConfig(parsed, logger) {
       allowed_origin: webAllowedOrigin,
     }),
     mongodb: Object.freeze({ uri: mongodbUri }),
+    memory: Object.freeze({
+      enabled: memEnabled,
+      transport: memTransport,
+      cli_path: memCliPath,
+      brain_dir: memBrainDir,
+      recall_k: memRecallK,
+      recall_min_score: memRecallMinScore,
+      recall_max_chars: memRecallMaxChars,
+      axel_socket: memAxelSocket,
+      consolidation_cron: memConsolidationCron,
+    }),
   });
 }

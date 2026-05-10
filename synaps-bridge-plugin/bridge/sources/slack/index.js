@@ -11,6 +11,8 @@
  *  - Route each user message through the SessionRouter → StreamingProxy →
  *    SynapsRpc pipeline.
  *  - Handle file attachments via the file-store download helper.
+ *  - Optionally call memoryGateway.recall() before prompting and
+ *    memoryGateway.store() on agent_end (Phase 2 memory hooks).
  *  - Enforce §0 #6 (logger injection) and §0 #7 (no tokens in logs).
  *
  * No top-level await.  Bolt is lazy-imported inside _buildApp() so tests that
@@ -42,6 +44,10 @@ export class SlackAdapter extends AdapterInstance {
    * @param {import('./slack-bot-gate.js').SlackBotGate} [opts.botGate]
    * @param {import('./slack-formatter.js').SlackFormatter} [opts.formatter]
    * @param {{ download: Function }} [opts.fileStore]
+   * @param {import('../../core/memory-gateway.js').MemoryGateway|import('../../core/memory-gateway.js').NoopMemoryGateway|null} [opts.memoryGateway]
+   *   Phase 2 memory gateway.  `null` (default) disables all memory hooks —
+   *   zero behaviour change vs Phase 1.  Pass a `NoopMemoryGateway` instance
+   *   when memory is configured but `enabled = false`.
    * @param {object} [opts.logger]
    */
   constructor({
@@ -52,6 +58,7 @@ export class SlackAdapter extends AdapterInstance {
     botGate = new SlackBotGate({ aiAppMode: true }),
     formatter = new SlackFormatter(),
     fileStore = { download: downloadSlackFile },
+    memoryGateway = null,
     logger = console,
   } = {}) {
     super({ source: 'slack', capabilities, logger });
@@ -73,6 +80,9 @@ export class SlackAdapter extends AdapterInstance {
 
     /** @type {{ download: Function }} */
     this._fileStore = fileStore;
+
+    /** @type {import('../../core/memory-gateway.js').MemoryGateway|null} */
+    this._memoryGateway = memoryGateway;
 
     /** @type {object|null} The live Bolt App instance. */
     this._app = null;
@@ -290,6 +300,20 @@ export class SlackAdapter extends AdapterInstance {
   // ── core message flow ─────────────────────────────────────────────────────
 
   /**
+   * Resolve the synapsUserId for memory namespacing.
+   *
+   * Phase 2 v0: use Slack user ID directly.  The IdentityRouter (Phase 3)
+   * will replace this with a cross-source canonical user ID.
+   *
+   * @private
+   * @param {string} slackUser - Slack user ID (e.g. "U123").
+   * @returns {string} The synapsUserId (e.g. "U123").
+   */
+  _resolveSynapsUserId(slackUser) {
+    return slackUser;
+  }
+
+  /**
    * Route a normalised user message through the full pipeline:
    *   parse directive → bot gate → session → file download → stream → prompt
    *
@@ -429,9 +453,50 @@ export class SlackAdapter extends AdapterInstance {
       }
     });
 
+    // ── Memory store on agent_end (best-effort) ────────────────────────────
+    if (this._memoryGateway != null) {
+      proxy.once('agent_end', (payload) => {
+        const finalText = payload?.final_text ?? '';
+        if (finalText.length === 0) return;
+        const synapsUserId = this._resolveSynapsUserId(user);
+        // store() is best-effort and never throws — but guard anyway.
+        Promise.resolve(this._memoryGateway.store(synapsUserId, finalText, {
+          source: 'slack',
+          conversation,
+          thread,
+          category: 'conversation',
+        })).catch((err) => {
+          try {
+            this.logger.warn(
+              `[SlackAdapter] memory store guard hit: ${redactTokens(err.message)}`,
+            );
+          } catch { /* swallow */ }
+        });
+      });
+    }
+
+    // ── Memory recall (best-effort, never blocks) ──────────────────────────
+    let augmentedBody = body;
+    if (this._memoryGateway != null && body && body.length > 0) {
+      try {
+        const synapsUserId = this._resolveSynapsUserId(user);
+        const summary = await this._memoryGateway.recall(synapsUserId, body);
+        if (summary && summary.length > 0) {
+          augmentedBody = `[memory_recall]\n${summary}\n[/memory_recall]\n\n${body}`;
+        }
+      } catch (err) {
+        // recall MUST never throw, but defensive guard for safety.
+        try {
+          this.logger.warn(
+            `[SlackAdapter] memory recall guard hit: ${redactTokens(err.message)}`,
+          );
+        } catch { /* swallow */ }
+      }
+    }
+
     // ── 9. Send the prompt ─────────────────────────────────────────────────
     try {
-      await rpc.prompt(body, attachments);
+      await rpc.prompt(augmentedBody, attachments);
     } catch (err) {
       try {
         this.logger.warn(

@@ -482,3 +482,156 @@ describe('StreamingProxy — query helpers', () => {
     expect(proxy.getPendingSubagentCount()).toBe(1);
   });
 });
+
+// ─── accumulated final text ───────────────────────────────────────────────────
+
+describe('StreamingProxy — getAccumulatedText()', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('returns empty string before any text deltas', async () => {
+    const { proxy } = makeProxy();
+    await proxy.start();
+    expect(proxy.getAccumulatedText()).toBe('');
+  });
+
+  it('accumulates plain text deltas across flushes — _textBuffer cleared but accumulator intact', async () => {
+    // Use a very small flushChars so we can trigger a flush mid-stream.
+    const { proxy, rpc, streamHandle } = makeProxy({ flushChars: 5, flushIntervalMs: 1000 });
+    await proxy.start();
+
+    // 'hello' (5 chars) → hits threshold → immediate flush → _textBuffer reset
+    rpc.emit('message_update', { type: 'text_delta', delta: 'hello' });
+    await proxy.awaitIdle();
+
+    // _textBuffer should have been flushed (empty), but accumulator still has 'hello'
+    expect(proxy.getBufferedTextChars()).toBe(0);
+    expect(streamHandle.appendCalls).toHaveLength(1);
+    expect(proxy.getAccumulatedText()).toBe('hello');
+
+    // More text after flush
+    rpc.emit('message_update', { type: 'text_delta', delta: ' world' });
+    await proxy.awaitIdle();
+
+    // Accumulator now has full combined text despite the intermediate flush
+    expect(proxy.getAccumulatedText()).toBe('hello world');
+  });
+
+  it('accumulator resets to empty on a second start()', async () => {
+    const { proxy, rpc } = makeProxy();
+    await proxy.start();
+
+    rpc.emit('message_update', { type: 'text_delta', delta: 'first stream text' });
+    await proxy.awaitIdle();
+    expect(proxy.getAccumulatedText()).toBe('first stream text');
+
+    // Start a new stream — accumulator must be reset
+    await proxy.start();
+    expect(proxy.getAccumulatedText()).toBe('');
+  });
+
+  it('accumulator survives a force-flush triggered by a non-text event (toolcall_start)', async () => {
+    const { proxy, rpc } = makeProxy({ capabilities: capRich });
+    await proxy.start();
+
+    // Text buffered (below threshold)
+    rpc.emit('message_update', { type: 'text_delta', delta: 'pre-tool text' });
+    await proxy.awaitIdle();
+    expect(proxy.getAccumulatedText()).toBe('pre-tool text');
+
+    // Tool event → force-flush → _textBuffer cleared
+    rpc.emit('message_update', { type: 'toolcall_start', tool_id: 'T1', tool_name: 'search' });
+    await proxy.awaitIdle();
+
+    // _textBuffer was reset by the force-flush, but accumulator survives
+    expect(proxy.getBufferedTextChars()).toBe(0);
+    expect(proxy.getAccumulatedText()).toBe('pre-tool text');
+  });
+
+  it('agent_end payload contains final_text matching getAccumulatedText()', async () => {
+    const { proxy, rpc } = makeProxy();
+    await proxy.start();
+
+    const received = [];
+    proxy.on('agent_end', (p) => received.push(p));
+
+    rpc.emit('message_update', { type: 'text_delta', delta: 'The answer is 42.' });
+    rpc.emit('agent_end', {});
+    await proxy.awaitIdle();
+
+    expect(received).toHaveLength(1);
+    expect(received[0].final_text).toBe('The answer is 42.');
+    expect(received[0].final_text).toBe(proxy.getAccumulatedText());
+  });
+
+  it('agent_end payload preserves caller-supplied fields alongside final_text', async () => {
+    const { proxy, rpc } = makeProxy();
+    await proxy.start();
+
+    const received = [];
+    proxy.on('agent_end', (p) => received.push(p));
+
+    rpc.emit('message_update', { type: 'text_delta', delta: 'done' });
+    rpc.emit('agent_end', { usage: { input_tokens: 10, output_tokens: 5 } });
+    await proxy.awaitIdle();
+
+    expect(received).toHaveLength(1);
+    // Both the original usage field AND final_text must be present
+    expect(received[0]).toMatchObject({
+      usage: { input_tokens: 10, output_tokens: 5 },
+      final_text: 'done',
+    });
+  });
+
+  it('agent_end with null/undefined payload still includes final_text', async () => {
+    const { proxy, rpc } = makeProxy();
+    await proxy.start();
+
+    const received = [];
+    proxy.on('agent_end', (p) => received.push(p));
+
+    rpc.emit('message_update', { type: 'text_delta', delta: 'answer' });
+    rpc.emit('agent_end', null);
+    await proxy.awaitIdle();
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toEqual({ final_text: 'answer' });
+  });
+
+  it('inline tool/subagent text additions accumulate in getAccumulatedText()', async () => {
+    // capInline: no richStreamChunks, no auxBlocks — both tool and subagent text
+    // are directly appended to _textBuffer (and now also _accumulatedText).
+    const { proxy, rpc } = makeProxy({ capabilities: capInline });
+    await proxy.start();
+
+    // Prime with a text delta first
+    rpc.emit('message_update', { type: 'text_delta', delta: 'intro ' });
+    await proxy.awaitIdle();
+
+    // Trigger tool inline path — appends inline text to _textBuffer/_accumulatedText
+    rpc.emit('message_update', { type: 'toolcall_start', tool_id: 'T1', tool_name: 'fetch' });
+    await proxy.awaitIdle();
+
+    const acc = proxy.getAccumulatedText();
+    // Must contain the pre-tool text AND the inline tool label
+    expect(acc).toContain('intro ');
+    expect(acc).toContain('fetch');
+    expect(acc).toContain('_[tool:');
+  });
+
+  it('inline subagent text additions accumulate in getAccumulatedText()', async () => {
+    const { proxy, rpc } = makeProxy({ capabilities: capInline });
+    await proxy.start();
+
+    rpc.emit('message_update', { type: 'text_delta', delta: 'before ' });
+    await proxy.awaitIdle();
+
+    rpc.emit('subagent_start', { subagent_id: 'S1', agent_name: 'helper', task_preview: 't' });
+    await proxy.awaitIdle();
+
+    const acc = proxy.getAccumulatedText();
+    expect(acc).toContain('before ');
+    expect(acc).toContain('helper');
+    expect(acc).toContain('_[subagent:');
+  });
+});

@@ -21,7 +21,14 @@
  * Bridge mode (default, platform.mode === 'bridge'):
  *   Behaviour is unchanged — host-spawn SynapsRpc, no MongoDB, no Docker.
  *
- * Spec reference: PLATFORM.SPEC.md §3.1, §5, §12.5
+ * Memory gateway (both modes):
+ *   Built at start() time based on config.memory.enabled.  When disabled, a
+ *   NoopMemoryGateway is used transparently.  The gateway is exposed to the
+ *   Slack adapter via the slackAdapterFactory opts, and to SCP consumers via
+ *   scpDeps.memoryGateway.  Teardown happens after mongoose disconnect in
+ *   stop() (deepest layer last).
+ *
+ * Spec reference: PLATFORM.SPEC.md §3.1, §5, §6, §12.5
  */
 
 import { EventEmitter }          from 'node:events';
@@ -36,9 +43,52 @@ import { getMongoose, WorkspaceRepo, getSynapsWorkspaceModel } from './core/db/i
 import { WorkspaceManager }      from './core/workspace-manager.js';
 import { VncProxy }              from './core/vnc-proxy.js';
 import { ScpHttpServer }         from './core/scp-http-server.js';
+import { MemoryGateway, NoopMemoryGateway } from './core/memory-gateway.js';
+import { AxelCliClient }         from './core/memory/axel-cli-client.js';
 import Docker                    from 'dockerode';
 
 // ─── default factories ────────────────────────────────────────────────────────
+
+/**
+ * Build the appropriate MemoryGateway based on config.
+ *
+ * - `config.memory.enabled = false` → NoopMemoryGateway (no client needed).
+ * - `config.memory.transport !== 'cli'` → warn + NoopMemoryGateway (v0 only
+ *   implements CLI transport).
+ * - Otherwise → AxelCliClient + MemoryGateway wired from config.
+ *
+ * Exported so tests can exercise the factory branches directly.
+ *
+ * @param {import('./config.js').NormalizedConfig} config
+ * @param {object} logger
+ * @returns {MemoryGateway|NoopMemoryGateway}
+ */
+export function defaultMemoryGatewayFactory(config, logger) {
+  if (!config.memory.enabled) {
+    return new NoopMemoryGateway();
+  }
+
+  if (config.memory.transport !== 'cli') {
+    logger.warn?.(
+      `BridgeDaemon: memory transport "${config.memory.transport}" is not supported in v0 — only "cli" is implemented; falling back to NoopMemoryGateway`,
+    );
+    return new NoopMemoryGateway();
+  }
+
+  const client = new AxelCliClient({
+    cliPath: config.memory.cli_path,
+    logger,
+  });
+
+  return new MemoryGateway({
+    client,
+    brainDir:       config.memory.brain_dir,
+    recallK:        config.memory.recall_k,
+    recallMinScore: config.memory.recall_min_score,
+    recallMaxChars: config.memory.recall_max_chars,
+    logger,
+  });
+}
 
 /**
  * Default SessionRouter factory.
@@ -55,7 +105,7 @@ import Docker                    from 'dockerode';
  *
  * @param {import('./config.js').NormalizedConfig} config
  * @param {object} logger
- * @param {{ workspaceManager: WorkspaceManager, synapsUserIdResolver: Function }|null} scpDeps
+ * @param {{ workspaceManager: WorkspaceManager, synapsUserIdResolver: Function, memoryGateway: MemoryGateway|NoopMemoryGateway }|null} scpDeps
  * @returns {SessionRouter}
  */
 function defaultSessionRouterFactory(config, logger, scpDeps = null) {
@@ -93,11 +143,11 @@ function defaultSessionRouterFactory(config, logger, scpDeps = null) {
 /**
  * Default SlackAdapter factory.
  *
- * @param {{ auth: object, sessionRouter: SessionRouter, logger: object }} opts
+ * @param {{ auth: object, sessionRouter: SessionRouter, memoryGateway: MemoryGateway|NoopMemoryGateway, logger: object }} opts
  * @returns {SlackAdapter}
  */
-function defaultSlackAdapterFactory({ auth, sessionRouter, logger }) {
-  return new SlackAdapter({ sessionRouter, auth, logger });
+function defaultSlackAdapterFactory({ auth, sessionRouter, memoryGateway, logger }) {
+  return new SlackAdapter({ sessionRouter, auth, memoryGateway, logger });
 }
 
 /**
@@ -119,12 +169,13 @@ export class BridgeDaemon extends EventEmitter {
    * @param {object}   [opts.logger]                   - Logger (default: console).
    * @param {NodeJS.ProcessEnv} [opts.env]             - Environment (default: process.env).
    * @param {Function} [opts.sessionRouterFactory]     - (config, logger, scpDeps) => SessionRouter.
-   * @param {Function} [opts.slackAdapterFactory]      - ({ auth, sessionRouter, logger }) => SlackAdapter.
+   * @param {Function} [opts.slackAdapterFactory]      - ({ auth, sessionRouter, memoryGateway, logger }) => SlackAdapter.
    * @param {Function} [opts.controlSocketFactory]     - ({ sessionRouter, logger, version }) => ControlSocket.
    * @param {Function} [opts.onShutdown]               - Called after stop() completes.
    * @param {Function} [opts.mongoConnectFactory]      - (uri) => Promise<mongoose> — injectable for tests.
    * @param {Function} [opts.workspaceManagerFactory]  - (repo, docker, config) => WorkspaceManager — injectable for tests.
    * @param {Function} [opts.scpHttpServerFactory]     - (opts) => ScpHttpServer — injectable for tests.
+   * @param {Function} [opts.memoryGatewayFactory]     - (config, logger) => MemoryGateway|NoopMemoryGateway — injectable for tests.
    */
   constructor({
     config,
@@ -137,6 +188,7 @@ export class BridgeDaemon extends EventEmitter {
     mongoConnectFactory = null,
     workspaceManagerFactory = null,
     scpHttpServerFactory = null,
+    memoryGatewayFactory = null,
   } = {}) {
     super();
 
@@ -153,6 +205,9 @@ export class BridgeDaemon extends EventEmitter {
     this._workspaceManagerFactory  = workspaceManagerFactory  ?? null;  // null → build inline
     this._scpHttpServerFactory     = scpHttpServerFactory     ?? null;  // null → build inline
 
+    // Memory gateway factory (test-injectable).
+    this._memoryGatewayFactory = memoryGatewayFactory ?? defaultMemoryGatewayFactory;
+
     /** @type {SessionRouter|null} */
     this._sessionRouter = null;
     /** @type {SlackAdapter|null} */
@@ -167,6 +222,10 @@ export class BridgeDaemon extends EventEmitter {
     this._workspaceManager = null;
     /** @type {ScpHttpServer|null} */
     this._scpHttpServer = null;
+
+    // Memory gateway (built in start(), available in both bridge and SCP mode).
+    /** @type {MemoryGateway|NoopMemoryGateway|null} */
+    this._memoryGateway = null;
 
     this._started = false;
     this._stopped = false;
@@ -184,6 +243,10 @@ export class BridgeDaemon extends EventEmitter {
 
     const isScp = this._config.platform?.mode === 'scp';
     let scpDeps = null;
+
+    // 0. Memory gateway (always built; Noop when disabled).
+    this._memoryGateway = this._memoryGatewayFactory(this._config, this.logger);
+    await this._memoryGateway.start();
 
     // ── SCP mode bootstrap ────────────────────────────────────────────────
     if (isScp) {
@@ -220,7 +283,11 @@ export class BridgeDaemon extends EventEmitter {
       /** @type {Function} */
       const synapsUserIdResolver = () => defaultUserId;
 
-      scpDeps = { workspaceManager: this._workspaceManager, synapsUserIdResolver };
+      scpDeps = {
+        workspaceManager: this._workspaceManager,
+        synapsUserIdResolver,
+        memoryGateway: this._memoryGateway,
+      };
 
       // 4. Optional HTTP server + VNC proxy.
       if (this._config.web.enabled) {
@@ -246,6 +313,7 @@ export class BridgeDaemon extends EventEmitter {
       this._slackAdapter = this._slackAdapterFactory({
         auth,
         sessionRouter: this._sessionRouter,
+        memoryGateway: this._memoryGateway,
         logger: this.logger,
       });
       await this._slackAdapter.start();
@@ -265,6 +333,10 @@ export class BridgeDaemon extends EventEmitter {
 
   /**
    * Tear down all subsystems in reverse order.  Idempotent.
+   *
+   * Stop order:
+   *   control socket → slack adapter → session router →
+   *   scp http server → mongoose disconnect → memory gateway
    *
    * @param {object} [opts]
    * @param {string} [opts.signal] - The signal that triggered stop (for logging).
@@ -320,6 +392,15 @@ export class BridgeDaemon extends EventEmitter {
         }
       } catch (err) {
         this.logger.warn?.(`BridgeDaemon: mongoose disconnect error: ${err.message}`);
+      }
+    }
+
+    // Memory gateway — stopped last (deepest layer).
+    if (this._memoryGateway) {
+      try {
+        await this._memoryGateway.stop();
+      } catch (err) {
+        this.logger.warn?.(`BridgeDaemon: memory gateway stop error: ${err.message}`);
       }
     }
 

@@ -158,6 +158,18 @@ export function buildDaemon({
         thread_replies: true,
       }),
     }),
+    // Phase 2 — memory gateway disabled in e2e harness (no axel binary in CI)
+    memory: Object.freeze({
+      enabled: false,
+      transport: 'cli',
+      cli_path: 'axel',
+      brain_dir: '~/.local/share/synaps/memory',
+      recall_k: 8,
+      recall_min_score: 0.0,
+      recall_max_chars: 2000,
+      axel_socket: '/run/synaps/axel.sock',
+      consolidation_cron: '0 3 * * *',
+    }),
   });
 
   // Silence logger in tests unless BRIDGE_E2E_VERBOSE is set.

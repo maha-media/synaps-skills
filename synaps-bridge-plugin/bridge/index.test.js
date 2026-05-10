@@ -8,10 +8,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { BridgeDaemon } from './index.js';
+import { BridgeDaemon, defaultMemoryGatewayFactory } from './index.js';
 import { BRIDGE_CONFIG_DEFAULTS } from './config.js';
 import { SynapsRpc } from './core/synaps-rpc.js';
 import { DockerExecSynapsRpc } from './core/synaps-rpc-docker.js';
+import { MemoryGateway, NoopMemoryGateway } from './core/memory-gateway.js';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -435,4 +436,427 @@ describe('BridgeDaemon — SCP mode wiring', () => {
     expect(rpc).not.toBeInstanceOf(DockerExecSynapsRpc);
   });
 
+});
+
+// ─── MemoryGateway wiring ─────────────────────────────────────────────────────
+
+// Helper: make a config with specific memory settings overlaid on defaults.
+function makeMemoryConfig(memoryOverrides = {}) {
+  return {
+    ...BRIDGE_CONFIG_DEFAULTS,
+    bridge:   { ...BRIDGE_CONFIG_DEFAULTS.bridge },
+    rpc:      { ...BRIDGE_CONFIG_DEFAULTS.rpc },
+    sources:  { slack: { ...BRIDGE_CONFIG_DEFAULTS.sources.slack, enabled: false } },
+    memory:   { ...BRIDGE_CONFIG_DEFAULTS.memory, ...memoryOverrides },
+  };
+}
+
+// Minimal lifecycle mock for a memory gateway.
+function makeFakeMemoryGateway({ enabled = false } = {}) {
+  return {
+    start:    vi.fn(async () => {}),
+    stop:     vi.fn(async () => {}),
+    enabled,
+    recall:   vi.fn(async () => null),
+    store:    vi.fn(async () => ({ ok: true })),
+  };
+}
+
+describe('defaultMemoryGatewayFactory — unit tests', () => {
+  it('returns NoopMemoryGateway when memory.enabled = false', () => {
+    const config = makeMemoryConfig({ enabled: false });
+    const logger = makeLogger();
+    const gw = defaultMemoryGatewayFactory(config, logger);
+    expect(gw).toBeInstanceOf(NoopMemoryGateway);
+    expect(gw.enabled).toBe(false);
+  });
+
+  it('returns NoopMemoryGateway + warns when transport is not "cli"', () => {
+    const config = makeMemoryConfig({ enabled: true, transport: 'socket' });
+    const logger = makeLogger();
+    const gw = defaultMemoryGatewayFactory(config, logger);
+    expect(gw).toBeInstanceOf(NoopMemoryGateway);
+    expect(gw.enabled).toBe(false);
+    expect(logger.warn).toHaveBeenCalledOnce();
+    expect(logger.warn.mock.calls[0][0]).toMatch(/cli/);
+  });
+
+  it('returns real MemoryGateway when enabled=true and transport="cli"', () => {
+    const config = makeMemoryConfig({
+      enabled: true,
+      transport: 'cli',
+      cli_path: 'axel',
+      brain_dir: '/tmp/test-brains',
+      recall_k: 5,
+      recall_min_score: 0.1,
+      recall_max_chars: 1000,
+    });
+    const logger = makeLogger();
+    const gw = defaultMemoryGatewayFactory(config, logger);
+    expect(gw).toBeInstanceOf(MemoryGateway);
+    expect(gw.enabled).toBe(true);
+  });
+});
+
+describe('BridgeDaemon — MemoryGateway integration', () => {
+  // Helper: build a daemon with an injected memoryGatewayFactory.
+  function buildMemoryDaemon({
+    memoryGatewayFactory,
+    slackAdapterFactory,
+    sessionRouterFactory,
+    config,
+    logger,
+  } = {}) {
+    const _logger = logger ?? makeLogger();
+    const fakeRouter = makeFakeRouter();
+    const fakeSocket = makeFakeSocket();
+
+    return {
+      daemon: new BridgeDaemon({
+        config: config ?? makeMemoryConfig(),
+        logger: _logger,
+        env: { SLACK_BOT_TOKEN: 'xoxb-fake', SLACK_APP_TOKEN: 'xapp-fake' },
+        sessionRouterFactory: sessionRouterFactory ?? vi.fn(() => fakeRouter),
+        slackAdapterFactory:  slackAdapterFactory  ?? vi.fn(() => makeFakeAdapter()),
+        controlSocketFactory: vi.fn(() => fakeSocket),
+        memoryGatewayFactory,
+      }),
+      fakeRouter,
+      fakeSocket,
+    };
+  }
+
+  it('start() calls memoryGateway.start() before other subsystems', async () => {
+    const callOrder = [];
+    const fakeGateway = {
+      start: vi.fn(async () => callOrder.push('gateway')),
+      stop:  vi.fn(async () => {}),
+      enabled: false,
+    };
+
+    const fakeRouter = {
+      start: vi.fn(async () => callOrder.push('router')),
+      stop:  vi.fn(async () => {}),
+      liveSessions: vi.fn(() => []),
+    };
+
+    const { daemon } = buildMemoryDaemon({
+      memoryGatewayFactory: vi.fn(() => fakeGateway),
+      sessionRouterFactory: vi.fn(() => fakeRouter),
+    });
+
+    await daemon.start();
+    await daemon.stop();
+
+    expect(callOrder[0]).toBe('gateway');
+    expect(callOrder[1]).toBe('router');
+  });
+
+  it('stop() calls memoryGateway.stop() after mongoose disconnect (last)', async () => {
+    const stopOrder = [];
+    const fakeGateway = {
+      start: vi.fn(async () => {}),
+      stop:  vi.fn(async () => stopOrder.push('gateway')),
+      enabled: false,
+    };
+
+    const fakeRouter = {
+      start: vi.fn(async () => {}),
+      stop:  vi.fn(async () => stopOrder.push('router')),
+      liveSessions: vi.fn(() => []),
+    };
+
+    const fakeSocket = {
+      start: vi.fn(async () => {}),
+      stop:  vi.fn(async () => stopOrder.push('socket')),
+    };
+
+    const { daemon } = buildMemoryDaemon({
+      memoryGatewayFactory: vi.fn(() => fakeGateway),
+      sessionRouterFactory: vi.fn(() => fakeRouter),
+    });
+    // Replace the socket factory after construction to use our tracking socket.
+    daemon._controlSocketFactory = vi.fn(() => fakeSocket);
+
+    await daemon.start();
+    await daemon.stop();
+
+    // Gateway must be last.
+    expect(stopOrder[stopOrder.length - 1]).toBe('gateway');
+    // Router must come before gateway.
+    expect(stopOrder.indexOf('router')).toBeLessThan(stopOrder.indexOf('gateway'));
+  });
+
+  it('daemon._memoryGateway is set to the value returned by memoryGatewayFactory', async () => {
+    const fakeGateway = makeFakeMemoryGateway({ enabled: false });
+    const factory = vi.fn(() => fakeGateway);
+    const { daemon } = buildMemoryDaemon({ memoryGatewayFactory: factory });
+
+    await daemon.start();
+    expect(daemon._memoryGateway).toBe(fakeGateway);
+    expect(factory).toHaveBeenCalledOnce();
+    await daemon.stop();
+  });
+
+  it('memoryGatewayFactory is called with (config, logger)', async () => {
+    const logger = makeLogger();
+    const config = makeMemoryConfig({ enabled: false });
+    const factory = vi.fn(() => makeFakeMemoryGateway());
+    const { daemon } = buildMemoryDaemon({ memoryGatewayFactory: factory, config, logger });
+
+    await daemon.start();
+    expect(factory).toHaveBeenCalledWith(config, logger);
+    await daemon.stop();
+  });
+
+  it('slackAdapterFactory receives memoryGateway when slack is enabled', async () => {
+    const fakeGateway = makeFakeMemoryGateway({ enabled: false });
+    let capturedOpts = null;
+
+    const slackFactory = vi.fn((opts) => {
+      capturedOpts = opts;
+      return makeFakeAdapter();
+    });
+
+    const config = {
+      ...makeMemoryConfig(),
+      sources: { slack: { ...BRIDGE_CONFIG_DEFAULTS.sources.slack, enabled: true } },
+    };
+
+    const { daemon } = buildMemoryDaemon({
+      memoryGatewayFactory: vi.fn(() => fakeGateway),
+      slackAdapterFactory: slackFactory,
+      config,
+    });
+
+    await daemon.start();
+
+    expect(capturedOpts).not.toBeNull();
+    expect(capturedOpts.memoryGateway).toBe(fakeGateway);
+
+    await daemon.stop();
+  });
+
+  it('slackAdapterFactory does NOT receive memoryGateway when slack is disabled', async () => {
+    const slackFactory = vi.fn();
+    const fakeGateway = makeFakeMemoryGateway();
+
+    const { daemon } = buildMemoryDaemon({
+      memoryGatewayFactory: vi.fn(() => fakeGateway),
+      slackAdapterFactory: slackFactory,
+      config: makeMemoryConfig({ enabled: false }),  // slack disabled in makeMemoryConfig
+    });
+
+    await daemon.start();
+    expect(slackFactory).not.toHaveBeenCalled();
+    await daemon.stop();
+  });
+
+  it('scpDeps includes memoryGateway in SCP mode', async () => {
+    const fakeGateway = makeFakeMemoryGateway({ enabled: false });
+    let capturedScpDeps = null;
+
+    const routerFactory = vi.fn((config, logger, scpDeps) => {
+      capturedScpDeps = scpDeps;
+      return makeFakeRouter();
+    });
+
+    const fakeMongo = {
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      models: {},
+      model: vi.fn().mockReturnValue({}),
+    };
+
+    const scpConfig = {
+      ...BRIDGE_CONFIG_DEFAULTS,
+      platform: { mode: 'scp' },
+      bridge:   { ...BRIDGE_CONFIG_DEFAULTS.bridge },
+      rpc:      { ...BRIDGE_CONFIG_DEFAULTS.rpc },
+      web:      { ...BRIDGE_CONFIG_DEFAULTS.web, enabled: false },
+      mongodb:  { uri: 'mongodb://localhost/testdb' },
+      workspace: { ...BRIDGE_CONFIG_DEFAULTS.workspace },
+      sources:  { slack: { ...BRIDGE_CONFIG_DEFAULTS.sources.slack, enabled: false } },
+      memory:   { ...BRIDGE_CONFIG_DEFAULTS.memory, enabled: false },
+    };
+
+    const daemon = new BridgeDaemon({
+      config: scpConfig,
+      logger: makeLogger(),
+      env: {},
+      sessionRouterFactory:    routerFactory,
+      slackAdapterFactory:     vi.fn(() => makeFakeAdapter()),
+      controlSocketFactory:    vi.fn(() => makeFakeSocket()),
+      mongoConnectFactory:     vi.fn().mockResolvedValue(fakeMongo),
+      workspaceManagerFactory: vi.fn().mockReturnValue({ ensure: vi.fn(), exec: vi.fn() }),
+      memoryGatewayFactory:    vi.fn(() => fakeGateway),
+    });
+
+    await daemon.start();
+
+    expect(capturedScpDeps).not.toBeNull();
+    expect(capturedScpDeps.memoryGateway).toBe(fakeGateway);
+
+    await daemon.stop();
+  });
+
+  it('bridge mode: sessionRouterFactory receives scpDeps=null but slackAdapter still gets memoryGateway', async () => {
+    const fakeGateway = makeFakeMemoryGateway({ enabled: false });
+    let capturedScpDeps = undefined;
+    let capturedSlackOpts = null;
+
+    const routerFactory = vi.fn((config, logger, scpDeps) => {
+      capturedScpDeps = scpDeps;
+      return makeFakeRouter();
+    });
+
+    const slackFactory = vi.fn((opts) => {
+      capturedSlackOpts = opts;
+      return makeFakeAdapter();
+    });
+
+    const config = {
+      ...makeMemoryConfig(),
+      sources: { slack: { ...BRIDGE_CONFIG_DEFAULTS.sources.slack, enabled: true } },
+    };
+
+    const daemon = new BridgeDaemon({
+      config,
+      logger: makeLogger(),
+      env: { SLACK_BOT_TOKEN: 'xoxb-fake', SLACK_APP_TOKEN: 'xapp-fake' },
+      sessionRouterFactory:    routerFactory,
+      slackAdapterFactory:     slackFactory,
+      controlSocketFactory:    vi.fn(() => makeFakeSocket()),
+      memoryGatewayFactory:    vi.fn(() => fakeGateway),
+    });
+
+    await daemon.start();
+
+    // Bridge mode: scpDeps is null
+    expect(capturedScpDeps).toBeNull();
+    // But slackAdapter still receives memoryGateway
+    expect(capturedSlackOpts).not.toBeNull();
+    expect(capturedSlackOpts.memoryGateway).toBe(fakeGateway);
+
+    await daemon.stop();
+  });
+
+  it('stop() logs a warning when memoryGateway.stop() throws', async () => {
+    const logger = makeLogger();
+    const fakeGateway = {
+      start: vi.fn(async () => {}),
+      stop:  vi.fn(async () => { throw new Error('gateway teardown error'); }),
+      enabled: false,
+    };
+
+    const { daemon } = buildMemoryDaemon({
+      memoryGatewayFactory: vi.fn(() => fakeGateway),
+      logger,
+    });
+
+    await daemon.start();
+    // Should NOT throw.
+    await expect(daemon.stop()).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('gateway teardown error'),
+    );
+  });
+
+  it('full stop order: socket → adapter → router → gateway (last)', async () => {
+    const stopOrder = [];
+
+    const fakeGateway = {
+      start: vi.fn(async () => {}),
+      stop:  vi.fn(async () => stopOrder.push('gateway')),
+      enabled: false,
+    };
+
+    const fakeRouter = {
+      start: vi.fn(async () => {}),
+      stop:  vi.fn(async () => stopOrder.push('router')),
+      liveSessions: vi.fn(() => []),
+    };
+
+    const fakeSocket = {
+      start: vi.fn(async () => {}),
+      stop:  vi.fn(async () => stopOrder.push('socket')),
+    };
+
+    const fakeAdapter = {
+      start: vi.fn(async () => {}),
+      stop:  vi.fn(async () => stopOrder.push('adapter')),
+    };
+
+    const config = {
+      ...makeMemoryConfig(),
+      sources: { slack: { ...BRIDGE_CONFIG_DEFAULTS.sources.slack, enabled: true } },
+    };
+
+    const daemon = new BridgeDaemon({
+      config,
+      logger: makeLogger(),
+      env: { SLACK_BOT_TOKEN: 'xoxb-fake', SLACK_APP_TOKEN: 'xapp-fake' },
+      sessionRouterFactory: vi.fn(() => fakeRouter),
+      slackAdapterFactory:  vi.fn(() => fakeAdapter),
+      controlSocketFactory: vi.fn(() => fakeSocket),
+      memoryGatewayFactory: vi.fn(() => fakeGateway),
+    });
+
+    await daemon.start();
+    await daemon.stop();
+
+    expect(stopOrder).toEqual(['socket', 'adapter', 'router', 'gateway']);
+  });
+
+  it('defaultMemoryGatewayFactory: enabled=false → NoopMemoryGateway exposed via daemon._memoryGateway', async () => {
+    const config = makeMemoryConfig({ enabled: false });
+    const { daemon } = buildMemoryDaemon({ config });
+
+    await daemon.start();
+
+    expect(daemon._memoryGateway).toBeInstanceOf(NoopMemoryGateway);
+    expect(daemon._memoryGateway.enabled).toBe(false);
+
+    await daemon.stop();
+  });
+
+  it('defaultMemoryGatewayFactory: enabled=true, transport=socket → warn + NoopMemoryGateway', async () => {
+    const logger = makeLogger();
+    const config = makeMemoryConfig({ enabled: true, transport: 'socket' });
+
+    const daemon = new BridgeDaemon({
+      config,
+      logger,
+      env: {},
+      sessionRouterFactory: vi.fn(() => makeFakeRouter()),
+      slackAdapterFactory:  vi.fn(() => makeFakeAdapter()),
+      controlSocketFactory: vi.fn(() => makeFakeSocket()),
+      // No memoryGatewayFactory → uses defaultMemoryGatewayFactory
+    });
+
+    await daemon.start();
+
+    expect(daemon._memoryGateway).toBeInstanceOf(NoopMemoryGateway);
+    expect(daemon._memoryGateway.enabled).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('cli'));
+
+    await daemon.stop();
+  });
+
+  it('defaultMemoryGatewayFactory: enabled=true, transport=cli → real MemoryGateway via daemon', async () => {
+    const config = makeMemoryConfig({
+      enabled: true,
+      transport: 'cli',
+      cli_path: 'axel',
+      brain_dir: '/tmp/test-memory-brains',
+    });
+
+    const { daemon } = buildMemoryDaemon({ config });
+
+    await daemon.start();
+
+    expect(daemon._memoryGateway).toBeInstanceOf(MemoryGateway);
+    expect(daemon._memoryGateway.enabled).toBe(true);
+
+    await daemon.stop();
+  });
 });
