@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline';">
+  <title>Authorize {{client_id}}</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 480px;
+      margin: 2em auto;
+      padding: 1em;
+      line-height: 1.5;
+    }
+    h1   { font-size: 1.4em; }
+    .scope {
+      background: #f5f5f5;
+      padding: 0.4em;
+      border-radius: 4px;
+    }
+    button {
+      font-size: 1em;
+      padding: 0.5em 1em;
+      margin-right: 0.5em;
+      cursor: pointer;
+    }
+    .allow {
+      background: #2563eb;
+      color: white;
+      border: 0;
+      border-radius: 4px;
+    }
+    .deny {
+      background: #f3f4f6;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Authorize <strong>{{client_id}}</strong>?</h1>
+  <p>The application <strong>{{client_id}}</strong> is requesting access to your account.</p>
+  <p>Requested scope: <span class="scope">{{scope}}</span></p>
+  <form method="POST" action="{{authorize_path}}">
+    <input type="hidden" name="csrf_token" value="{{csrf_token}}">
+    <input type="hidden" name="state"      value="{{state}}">
+    <button type="submit" name="consent" value="allow" class="allow">Allow</button>
+    <button type="submit" name="consent" value="deny"  class="deny">Deny</button>
+  </form>
+  <p style="margin-top:2em; color:#999; font-size:0.85em;">
+    You are about to grant access to <strong>{{redirect_uri}}</strong>.
+    If this is not your intended client, click Deny.
+  </p>
+</body>
+</html>

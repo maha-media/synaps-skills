@@ -8,6 +8,7 @@ import {
   McpToolInvalidArgsError,
   McpToolTimeoutError,
 } from './mcp-tool-registry.js';
+import { MetricsRegistry } from '../metrics/metrics-registry.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -550,5 +551,588 @@ describe('McpToolRegistry.callTool — Method not found when surfaceRpcTools=fal
     await expect(
       registry.callTool({ name: 'anything', arguments: {}, synaps_user_id: 'u1' }),
     ).rejects.toThrow(McpToolNotFoundError);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 9 Track 1 — _runSerialized helper
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Minimal registry just for _runSerialized tests — we only need the private
+ * helper; sessionRouter must satisfy the constructor guard.
+ */
+function makeSerialRegistry() {
+  const rpc = { prompt: vi.fn(), on: vi.fn(), off: vi.fn() };
+  const sessionRouter = { getOrCreateSession: vi.fn().mockResolvedValue(rpc) };
+  const registry = new McpToolRegistry({
+    sessionRouter,
+    logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+  });
+  return registry;
+}
+
+describe('McpToolRegistry._runSerialized — Track 1 helper', () => {
+
+  // ── T1-1: Serial order ──────────────────────────────────────────────────────
+  it('resolves 5 concurrent calls on the same key in submission order', async () => {
+    const registry = makeSerialRegistry();
+    const order = [];
+    const KEY = 'mcp|u1|default';
+
+    // Each fn records its index and resolves after a tiny await so they truly
+    // interleave if not serialised.
+    const promises = Array.from({ length: 5 }, (_, i) =>
+      registry._runSerialized(KEY, async () => {
+        // Yield to allow later-submitted chains to attempt to start.
+        await new Promise((r) => setImmediate(r));
+        order.push(i);
+        return i;
+      }),
+    );
+
+    const results = await Promise.all(promises);
+
+    // Results must match submission order 0–4.
+    expect(results).toEqual([0, 1, 2, 3, 4]);
+    // The internal order array must also be monotonically increasing.
+    expect(order).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  // ── T1-2: Rejection isolation ───────────────────────────────────────────────
+  it('a mid-chain rejection does not block or corrupt later callers', async () => {
+    const registry = makeSerialRegistry();
+    const KEY = 'mcp|u2|default';
+
+    const p1 = registry._runSerialized(KEY, async () => 'first');
+    const p2 = registry._runSerialized(KEY, async () => { throw new Error('boom'); });
+    const p3 = registry._runSerialized(KEY, async () => 'third');
+
+    const [r1, r3] = await Promise.all([
+      p1,
+      p2.catch(() => 'caught'),
+      p3,
+    ]).then(([a, , c]) => [a, c]);
+
+    expect(r1).toBe('first');
+    expect(r3).toBe('third');
+    // p3 must not have hung — if we get here the chain was not dead-locked.
+  });
+
+  // ── T1-3: Key isolation (different keys run in parallel) ────────────────────
+  it('calls on different keys overlap (parallelism proven by timestamps)', async () => {
+    const registry = makeSerialRegistry();
+
+    // Each fn takes ~20 ms. If keys were also serialised, total would be ≥ 80 ms
+    // (4 calls × 20 ms). With parallel keys, A and B overlap so total ≈ 40 ms.
+    const DELAY = 20;
+    const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    const timestamps = [];
+    const record = (label) => () =>
+      delay(DELAY).then(() => { timestamps.push({ label, t: Date.now() }); return label; });
+
+    const start = Date.now();
+    await Promise.all([
+      registry._runSerialized('mcp|u-a|default', record('A1')),
+      registry._runSerialized('mcp|u-a|default', record('A2')),
+      registry._runSerialized('mcp|u-b|default', record('B1')),
+      registry._runSerialized('mcp|u-b|default', record('B2')),
+    ]);
+    const elapsed = Date.now() - start;
+
+    // If A and B ran completely sequentially the wall time would be ≥ 4×DELAY.
+    // Parallelism means it should be < 3×DELAY (generous bound).
+    expect(elapsed).toBeLessThan(DELAY * 3 + 30); // +30 ms scheduling slack
+
+    // Within key A, A1 must finish before A2 starts → A2.t ≥ A1.t.
+    const A1 = timestamps.find((e) => e.label === 'A1');
+    const A2 = timestamps.find((e) => e.label === 'A2');
+    expect(A2.t).toBeGreaterThanOrEqual(A1.t);
+  });
+
+  // ── T1-4: Map cleanup ───────────────────────────────────────────────────────
+  it('_sessionLocks size is ≤ 1 after 10 sequential calls on one key', async () => {
+    const registry = makeSerialRegistry();
+    const KEY = 'mcp|u3|default';
+
+    for (let i = 0; i < 10; i++) {
+      // Run sequentially (await each call) to ensure clean settling.
+      // eslint-disable-next-line no-await-in-loop
+      await registry._runSerialized(KEY, async () => i);
+    }
+
+    // After all calls have fully settled, the Map should have cleaned up.
+    expect(registry._sessionLocks.size).toBeLessThanOrEqual(1);
+  });
+
+  // ── T1-5: Empty / missing sessionKey throws TypeError ───────────────────────
+  it('throws TypeError for an empty string sessionKey', async () => {
+    const registry = makeSerialRegistry();
+    await expect(
+      registry._runSerialized('', async () => 'x'),
+    ).rejects.toThrow(TypeError);
+    await expect(
+      registry._runSerialized('', async () => 'x'),
+    ).rejects.toThrow('non-empty string');
+  });
+
+  // ── T1-6: Return value passthrough ─────────────────────────────────────────
+  it('resolves to whatever fn returns (object, number, undefined)', async () => {
+    const registry = makeSerialRegistry();
+    const KEY = 'mcp|u4|default';
+
+    const obj    = await registry._runSerialized(KEY, async () => ({ a: 1 }));
+    const num    = await registry._runSerialized(KEY, async () => 42);
+    const undef  = await registry._runSerialized(KEY, async () => undefined);
+    const str    = await registry._runSerialized(KEY, async () => 'hello');
+
+    expect(obj).toEqual({ a: 1 });
+    expect(num).toBe(42);
+    expect(undef).toBeUndefined();
+    expect(str).toBe('hello');
+  });
+
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 9 Track 2 — onDelta callback thread-through in callTool / _invokeChat
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('McpToolRegistry.callTool — onDelta callback (Track 2)', () => {
+
+  // ── T2-1: onDelta invoked for every text_delta event ──────────────────────
+  it('onDelta is called for every text_delta event with the correct text', async () => {
+    const captured = [];
+    const { registry, rpc } = makeRegistry({
+      promptImpl: function () {
+        queueMicrotask(() => {
+          rpc.emit('message_update', { type: 'text_delta', delta: 'alpha' });
+          rpc.emit('message_update', { type: 'text_delta', delta: ' beta' });
+          rpc.emit('message_update', { type: 'text_delta', delta: ' gamma' });
+          rpc.emit('agent_end', {});
+        });
+        return Promise.resolve({ ok: true });
+      },
+    });
+
+    await registry.callTool({
+      name: 'synaps_chat',
+      arguments: { prompt: 'stream me' },
+      synaps_user_id: 'u1',
+      onDelta: (text) => captured.push(text),
+    });
+
+    expect(captured).toEqual(['alpha', ' beta', ' gamma']);
+  });
+
+  // ── T2-2: onDelta invoked in chronological order matching the stream ───────
+  it('onDelta calls arrive in the same order as text_delta events', async () => {
+    const order = [];
+    const TOKENS = ['T1', 'T2', 'T3', 'T4', 'T5'];
+
+    const { registry, rpc } = makeRegistry({
+      promptImpl: function () {
+        queueMicrotask(() => {
+          for (const tok of TOKENS) {
+            rpc.emit('message_update', { type: 'text_delta', delta: tok });
+          }
+          rpc.emit('agent_end', {});
+        });
+        return Promise.resolve({ ok: true });
+      },
+    });
+
+    await registry.callTool({
+      name: 'synaps_chat',
+      arguments: { prompt: 'order test' },
+      synaps_user_id: 'u1',
+      onDelta: (text) => order.push(text),
+    });
+
+    expect(order).toEqual(TOKENS);
+  });
+
+  // ── T2-3: Buffer integrity — final text === concatenation of all deltas ────
+  it('final result text equals the concatenation of all onDelta arguments', async () => {
+    const deltas = [];
+    const TOKENS = ['Hello', ', ', 'world', '!'];
+
+    const { registry, rpc } = makeRegistry({
+      promptImpl: function () {
+        queueMicrotask(() => {
+          for (const tok of TOKENS) {
+            rpc.emit('message_update', { type: 'text_delta', delta: tok });
+          }
+          rpc.emit('agent_end', {});
+        });
+        return Promise.resolve({ ok: true });
+      },
+    });
+
+    const result = await registry.callTool({
+      name: 'synaps_chat',
+      arguments: { prompt: 'integrity' },
+      synaps_user_id: 'u1',
+      onDelta: (text) => deltas.push(text),
+    });
+
+    const concatenated = deltas.join('');
+    expect(result.content[0].text).toBe(concatenated);
+    expect(result.content[0].text).toBe('Hello, world!');
+    expect(result.isError).toBe(false);
+  });
+
+  // ── T2-4: Omitting onDelta works (Phase 8 baseline behaviour) ─────────────
+  it('omitting onDelta causes no error and returns correct result (Phase 8 baseline)', async () => {
+    const { registry, rpc } = makeRegistry({
+      promptImpl: function () {
+        queueMicrotask(() => {
+          rpc.emit('message_update', { type: 'text_delta', delta: 'baseline' });
+          rpc.emit('agent_end', {});
+        });
+        return Promise.resolve({ ok: true });
+      },
+    });
+
+    // No onDelta supplied — must behave identically to Phase 8.
+    const result = await registry.callTool({
+      name: 'synaps_chat',
+      arguments: { prompt: 'no delta cb' },
+      synaps_user_id: 'u1',
+    });
+
+    expect(result).toEqual({
+      content: [{ type: 'text', text: 'baseline' }],
+      isError: false,
+    });
+  });
+
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 9 Wave B — B4: _runSerialized wired into _invokeChat + Track 6 metrics
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── Shared builder for wiring + metrics tests ─────────────────────────────────
+
+/**
+ * Build a fresh EventEmitter-shaped rpc whose `prompt()` implementation
+ * emits one text_delta + agent_end on the next microtask tick.
+ * Returns { rpc, sessionRouter, registry, metrics? }.
+ *
+ * @param {object} [opts]
+ * @param {Function} [opts.promptImpl]   Override prompt mock.
+ * @param {boolean}  [opts.withMetrics]  When true, injects a real MetricsRegistry.
+ * @param {number}   [opts.chatTimeoutMs]
+ */
+function makeWiringSetup(opts = {}) {
+  const listeners = new Map();
+  const rpc = {
+    on(ev, fn) {
+      if (!listeners.has(ev)) listeners.set(ev, new Set());
+      listeners.get(ev).add(fn);
+    },
+    off(ev, fn) { listeners.get(ev)?.delete(fn); },
+    emit(ev, payload) {
+      for (const fn of (listeners.get(ev) ?? [])) fn(payload);
+    },
+    listenerCount(ev) { return listeners.get(ev)?.size ?? 0; },
+    prompt: vi.fn().mockImplementation(
+      opts.promptImpl ?? function defaultPrompt() {
+        queueMicrotask(() => {
+          rpc.emit('message_update', { type: 'text_delta', delta: 'ok' });
+          rpc.emit('agent_end', {});
+        });
+        return Promise.resolve({ ok: true });
+      },
+    ),
+  };
+
+  const sessionRouter = { getOrCreateSession: vi.fn().mockResolvedValue(rpc) };
+
+  const metrics = opts.withMetrics ? new MetricsRegistry() : null;
+
+  const registry = new McpToolRegistry({
+    sessionRouter,
+    chatTimeoutMs: opts.chatTimeoutMs ?? 120_000,
+    logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+    now: Date.now,
+    metrics,
+  });
+
+  return { rpc, sessionRouter, registry, metrics };
+}
+
+/**
+ * Grab the current gauge series value for a given session_key from the rendered
+ * Prometheus text (robust: avoids reaching into MetricsRegistry internals).
+ */
+function gaugeValue(metrics, sessionKey) {
+  const text = metrics.render();
+  const escaped = sessionKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(
+    `synaps_mcp_session_queue_depth\\{session_key="${escaped}"\\} ([-\\d.]+)`,
+  );
+  const m = text.match(re);
+  return m ? Number(m[1]) : undefined;
+}
+
+/**
+ * Grab the current counter value for tool + outcome from the rendered text.
+ */
+function counterValue(metrics, tool, outcome) {
+  const text = metrics.render();
+  // Label order in render() is alphabetical: outcome before tool.
+  const escaped_outcome = outcome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped_tool    = tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(
+    `synaps_mcp_tool_calls_total\\{outcome="${escaped_outcome}",tool="${escaped_tool}"\\} ([\\d.]+)`,
+  );
+  const m = text.match(re);
+  return m ? Number(m[1]) : undefined;
+}
+
+// ─── B4-1: Wiring proof — 5 concurrent callTool on same user ─────────────────
+
+describe('B4-1: _invokeChat wired through _runSerialized — concurrency smoke', () => {
+  it('5 concurrent callTool calls on same user all resolve correctly (no "Internal error")', async () => {
+    const completionOrder = [];
+    let callIndex = 0;
+
+    const { registry, rpc } = makeWiringSetup({
+      promptImpl: function () {
+        const myIndex = callIndex++;
+        // Emit after a tiny async gap so calls truly interleave if not serialised.
+        Promise.resolve().then(() => {
+          rpc.emit('message_update', { type: 'text_delta', delta: `reply-${myIndex}` });
+          rpc.emit('agent_end', {});
+          completionOrder.push(myIndex);
+        });
+        return Promise.resolve({ ok: true });
+      },
+    });
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, (_, i) =>
+        registry.callTool({
+          name: 'synaps_chat',
+          arguments: { prompt: `prompt-${i}` },
+          synaps_user_id: 'user-wiring',
+        }),
+      ),
+    );
+
+    // Every call must produce a valid (non-error) result.
+    for (const r of results) {
+      expect(r.isError).toBe(false);
+      expect(r.content[0].text).toMatch(/^reply-\d+$/);
+    }
+
+    // The rpc mock must have been called exactly 5 times.
+    expect(rpc.prompt).toHaveBeenCalledTimes(5);
+
+    // Completion order must be monotonically increasing (serial execution).
+    for (let i = 1; i < completionOrder.length; i++) {
+      expect(completionOrder[i]).toBeGreaterThan(completionOrder[i - 1]);
+    }
+  });
+});
+
+// ─── B4-2: Cross-user parallelism ─────────────────────────────────────────────
+
+describe('B4-2: cross-user parallelism — intra-user serial, inter-user parallel', () => {
+  it('userA and userB calls overlap; calls within the same user are serialised', async () => {
+    const DELAY = 20;
+    const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    // We need per-user rpc mocks so prompts emit to the right listener set.
+    function makeUserRpc(userId) {
+      const listeners = new Map();
+      const rpc = {
+        on(ev, fn) {
+          if (!listeners.has(ev)) listeners.set(ev, new Set());
+          listeners.get(ev).add(fn);
+        },
+        off(ev, fn) { listeners.get(ev)?.delete(fn); },
+        emit(ev, payload) { for (const fn of (listeners.get(ev) ?? [])) fn(payload); },
+        prompt: vi.fn().mockImplementation(function () {
+          // Slow prompt to force observable serialisation gap.
+          delay(DELAY).then(() => {
+            rpc.emit('message_update', { type: 'text_delta', delta: userId });
+            rpc.emit('agent_end', {});
+          });
+          return Promise.resolve({ ok: true });
+        }),
+      };
+      return rpc;
+    }
+
+    const rpcA = makeUserRpc('A');
+    const rpcB = makeUserRpc('B');
+
+    const sessionRouter = {
+      getOrCreateSession: vi.fn().mockImplementation(({ conversation }) => {
+        return Promise.resolve(conversation === 'userA' ? rpcA : rpcB);
+      }),
+    };
+
+    const registry = new McpToolRegistry({
+      sessionRouter,
+      chatTimeoutMs: 5_000,
+      logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+    });
+
+    const startMs = Date.now();
+    const completions = [];
+
+    await Promise.all([
+      registry.callTool({ name: 'synaps_chat', arguments: { prompt: 'p' }, synaps_user_id: 'userA' })
+        .then(() => completions.push({ user: 'A', t: Date.now() - startMs })),
+      registry.callTool({ name: 'synaps_chat', arguments: { prompt: 'p' }, synaps_user_id: 'userA' })
+        .then(() => completions.push({ user: 'A', t: Date.now() - startMs })),
+      registry.callTool({ name: 'synaps_chat', arguments: { prompt: 'p' }, synaps_user_id: 'userB' })
+        .then(() => completions.push({ user: 'B', t: Date.now() - startMs })),
+      registry.callTool({ name: 'synaps_chat', arguments: { prompt: 'p' }, synaps_user_id: 'userB' })
+        .then(() => completions.push({ user: 'B', t: Date.now() - startMs })),
+    ]);
+
+    const totalElapsed = Date.now() - startMs;
+
+    // If A and B were fully sequential, total ≥ 4 * DELAY.
+    // With cross-user parallelism, total ≈ 2 * DELAY. Allow generous slack.
+    expect(totalElapsed).toBeLessThan(DELAY * 3 + 50);
+
+    // Sanity: all 4 completed.
+    expect(completions).toHaveLength(4);
+  });
+});
+
+// ─── B4-3: Metrics — queueDepth gauge ────────────────────────────────────────
+
+describe('B4-3: Track 6 — queueDepth gauge rises during in-flight and drains to 0', () => {
+  it('gauge peaks ≥ 1 during in-flight and is 0 after all calls complete', async () => {
+    const peakValues = [];
+
+    // We need a slow prompt so we can observe the gauge mid-flight.
+    let resolvePrompt;
+    const { registry, rpc, metrics } = makeWiringSetup({
+      withMetrics: true,
+      promptImpl: function () {
+        // Capture gauge value while in-flight.
+        const KEY = 'mcp|user-gauge|default';
+        peakValues.push(gaugeValue(metrics, KEY) ?? 0);
+        return new Promise((res) => {
+          resolvePrompt = () => {
+            rpc.emit('message_update', { type: 'text_delta', delta: 'x' });
+            rpc.emit('agent_end', {});
+            res({ ok: true });
+          };
+        });
+      },
+    });
+
+    const KEY = 'mcp|user-gauge|default';
+
+    // Launch call but don't await yet.
+    const callPromise = registry.callTool({
+      name: 'synaps_chat',
+      arguments: { prompt: 'gauge test' },
+      synaps_user_id: 'user-gauge',
+    });
+
+    // Allow the call to reach the prompt (i.e. enter _invokeChatOnce) before
+    // we sample the gauge.
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    // Gauge must be ≥ 1 while in-flight.
+    const midFlightValue = gaugeValue(metrics, KEY) ?? 0;
+
+    // Unblock the prompt.
+    resolvePrompt();
+    await callPromise;
+
+    // After settling, gauge must be 0.
+    const finalValue = gaugeValue(metrics, KEY) ?? 0;
+
+    expect(midFlightValue).toBeGreaterThanOrEqual(1);
+    expect(finalValue).toBe(0);
+  });
+});
+
+// ─── B4-4: Metrics — tool-calls counter on success ───────────────────────────
+
+describe('B4-4: Track 6 — tool-calls counter increments on successful callTool', () => {
+  it('synaps_mcp_tool_calls_total{tool="synaps_chat",outcome="ok"} increments by 1 on success', async () => {
+    const { registry, metrics } = makeWiringSetup({ withMetrics: true });
+
+    const before = counterValue(metrics, 'synaps_chat', 'ok') ?? 0;
+
+    await registry.callTool({
+      name: 'synaps_chat',
+      arguments: { prompt: 'counter ok test' },
+      synaps_user_id: 'user-counter-ok',
+    });
+
+    const after = counterValue(metrics, 'synaps_chat', 'ok') ?? 0;
+    expect(after - before).toBe(1);
+  });
+});
+
+// ─── B4-5: Metrics — tool-calls counter on error ─────────────────────────────
+
+describe('B4-5: Track 6 — tool-calls counter increments with outcome="error" on rpc throw', () => {
+  it('synaps_mcp_tool_calls_total{tool="synaps_chat",outcome="error"} increments by 1 on rpc rejection', async () => {
+    const { registry, metrics } = makeWiringSetup({
+      withMetrics: true,
+      promptImpl: () => Promise.reject(new Error('rpc kaboom')),
+    });
+
+    const before = counterValue(metrics, 'synaps_chat', 'error') ?? 0;
+
+    await expect(
+      registry.callTool({
+        name: 'synaps_chat',
+        arguments: { prompt: 'counter error test' },
+        synaps_user_id: 'user-counter-err',
+      }),
+    ).rejects.toThrow('rpc kaboom');
+
+    const after = counterValue(metrics, 'synaps_chat', 'error') ?? 0;
+    expect(after - before).toBe(1);
+  });
+});
+
+// ─── B4-6: No metrics injected = no-op ───────────────────────────────────────
+
+describe('B4-6: no metrics injected — all metric paths are no-op, no errors thrown', () => {
+  it('constructor without metrics option sets _gauges and _counters to null', () => {
+    const { registry } = makeWiringSetup({ withMetrics: false });
+    expect(registry._gauges).toBeNull();
+    expect(registry._counters).toBeNull();
+  });
+
+  it('callTool succeeds normally when metrics=null (no TypeError from optional chaining)', async () => {
+    const { registry } = makeWiringSetup({ withMetrics: false });
+    const result = await registry.callTool({
+      name: 'synaps_chat',
+      arguments: { prompt: 'no metrics' },
+      synaps_user_id: 'user-no-metrics',
+    });
+    expect(result.isError).toBe(false);
+    expect(result.content[0].text).toBe('ok');
+  });
+
+  it('_runSerialized succeeds normally when metrics=null (gauge path skipped)', async () => {
+    const rpc = { prompt: vi.fn(), on: vi.fn(), off: vi.fn() };
+    const sessionRouter = { getOrCreateSession: vi.fn().mockResolvedValue(rpc) };
+    const registry = new McpToolRegistry({
+      sessionRouter,
+      logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+      // no metrics
+    });
+    const result = await registry._runSerialized('test|key', async () => 42);
+    expect(result).toBe(42);
   });
 });

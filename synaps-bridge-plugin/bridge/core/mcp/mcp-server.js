@@ -13,6 +13,13 @@
  *     HTTP layer; we just return statusCode: 401).
  *   - 400 for a structurally invalid JSON-RPC envelope.
  *   - 202 + null body for notifications (no `id` field, or methods/…).
+ *
+ * Phase 9 Wave B additions:
+ *   - Track 2: streamDeltas opt — when true AND wantsSSE, onDelta callback is
+ *     wired through to toolRegistry.callTool so per-token frames stream live.
+ *   - Track 4: aclResolver opt — per-tool ACL check after approvalGate.
+ *     Deny-wins; aclResolver.check() throwing fails-open (logs warn, proceeds).
+ *   - Track 6: metrics opt — counters + histogram recorded on every dispatch.
  */
 
 import {
@@ -82,6 +89,14 @@ export class McpServer {
    *                                          When omitted, rate-limiting is skipped.
    * @param {boolean}  [opts.sseEnabled=false] — When true, tools/call with Accept: text/event-stream
    *                                             returns {sse:true, sseDispatcher} instead of a JSON body.
+   * @param {object}   [opts.aclResolver=null]  — McpToolAclResolver instance or null (Phase 9 Track 4).
+   *                                              When provided, runs after approvalGate and before dispatch.
+   *                                              Deny decision returns METHOD_NOT_FOUND. Throws fail-open.
+   * @param {boolean}  [opts.streamDeltas=false] — Phase 9 Track 2. When true AND wantsSSE, the
+   *                                              onDelta callback is threaded through callTool so
+   *                                              per-token synaps/delta frames stream to the client.
+   * @param {object}   [opts.metrics=null]       — MetricsRegistry instance or null (Phase 9 Track 6).
+   *                                              When provided, counters and histograms are recorded.
    * @param {object}   [opts.logger=console]
    * @param {string}   [opts.serverName='synaps-control-plane']
    * @param {string}   [opts.serverVersion='0.1.0']
@@ -95,6 +110,9 @@ export class McpServer {
     audit         = NO_OP_AUDIT,
     rateLimiter   = null,
     sseEnabled    = false,
+    aclResolver   = null,
+    streamDeltas  = false,
+    metrics       = null,
     logger        = console,
     serverName    = 'synaps-control-plane',
     serverVersion = '0.1.0',
@@ -111,14 +129,39 @@ export class McpServer {
     this._audit         = audit;
     this._rateLimiter   = rateLimiter;
     this._sseEnabled    = Boolean(sseEnabled);
+    this._aclResolver   = aclResolver ?? null;
+    this._streamDeltas  = Boolean(streamDeltas);
     this._logger        = logger;
     this._serverName    = serverName;
     this._serverVersion = serverVersion;
     this._instructions  = instructions;
     this._now           = now;
+
+    // ── Phase 9 Track 6 — Metric handles (lazily initialised when metrics provided) ──
+    this._counters = metrics ? {
+      requests:  metrics.counter('synaps_mcp_requests_total', {
+        help:       'Total MCP tool requests.',
+        labelNames: ['tool', 'outcome'],
+      }),
+      aclDenials: metrics.counter('synaps_mcp_acl_denials_total', {
+        help:       'Total ACL denials.',
+        labelNames: ['tool'],
+      }),
+      sseDeltas: metrics.counter('synaps_mcp_sse_delta_frames_total', {
+        help:       'Total SSE synaps/delta frames emitted.',
+        labelNames: [],
+      }),
+    } : null;
+
+    this._histograms = metrics ? {
+      duration: metrics.histogram('synaps_mcp_request_duration_seconds', {
+        help:       'MCP request duration.',
+        labelNames: ['tool'],
+      }),
+    } : null;
   }
 
-  // ── Public API ────────────────────────────────────────────────────────────
+  // ── Public API ─────────────────────────────────────────────────────────────
 
   /**
    * Handle a single JSON-RPC request body.
@@ -260,6 +303,7 @@ export class McpServer {
     let tool_name   = null;
     let outcome     = 'ok';
     let error_code  = null;
+    let acl_outcome; // undefined unless ACL gate ran (Phase 9 Track 4)
 
     try {
       switch (method) {
@@ -352,56 +396,127 @@ export class McpServer {
             break;
           }
 
-          // Dispatch to tool registry
-          try {
-            // ── SSE streaming branch ────────────────────────────────────────
-            // When the client sends Accept: text/event-stream AND sse is enabled,
-            // signal to the HTTP layer that it should stream the response.
-            // The sseDispatcher fn receives a McpSseTransport instance and is
-            // responsible for calling transport.notify() / transport.result().
-            const wantsSSE =
-              this._sseEnabled &&
-              typeof accept === 'string' &&
-              accept.includes('text/event-stream');
+          // ── Phase 9 Track 4 — ACL gate ─────────────────────────────────
+          // Runs after approvalGate and before dispatch.
+          // Deny-wins; resolver throwing fails-open.
+          if (this._aclResolver) {
+            try {
+              const aclDecision = await this._aclResolver.check({
+                synaps_user_id,
+                tool_name: callName,
+              });
+              if (aclDecision && aclDecision.allowed === false) {
+                outcome     = 'denied';
+                error_code  = MCP_ERROR_CODES.METHOD_NOT_FOUND;
+                acl_outcome = 'deny';
+                responseBody = errResponse(
+                  id,
+                  MCP_ERROR_CODES.METHOD_NOT_FOUND,
+                  `Tool denied by ACL: ${aclDecision.reason || 'no reason'}`,
+                );
+                this._counters?.aclDenials?.inc({ tool: callName });
+                break;
+              }
+            } catch (err) {
+              this._logger.warn?.(
+                '[McpServer] aclResolver.check threw — failing open:',
+                err?.message,
+              );
+            }
+          }
 
+          // ── SSE streaming branch ────────────────────────────────────────
+          // When the client sends Accept: text/event-stream AND sse is enabled,
+          // signal to the HTTP layer that it should stream the response.
+          const wantsSSE =
+            this._sseEnabled &&
+            typeof accept === 'string' &&
+            accept.includes('text/event-stream');
+
+          if (wantsSSE) {
+            // Capture all per-request state for the async dispatcher closure.
+            const capturedId             = id;
+            const capturedToolName       = tool_name;
+            const capturedArgs           = callArgs;
+            const capturedCallName       = callName;
+            const capturedSynapsUserId   = synaps_user_id;
+            const capturedInstitutionId  = institution_id;
+            const capturedClientInfo     = client_info;
+            const capturedStartTs        = startTs;
+            const recordAudit            = (p) => this._recordAudit(p);
+            const counters               = this._counters;
+            const histograms             = this._histograms;
+            const streamDeltasEnabled    = this._streamDeltas;
+
+            return {
+              statusCode:    200,
+              sse:           true,
+              sseDispatcher: async (transport) => {
+                let dispatchOutcome   = 'ok';
+                let dispatchErrorCode = null;
+                try {
+                  const result = await this._toolRegistry.callTool({
+                    name:           capturedCallName,
+                    arguments:      capturedArgs,
+                    synaps_user_id: capturedSynapsUserId,
+                    institution_id: capturedInstitutionId,
+                    onDelta: streamDeltasEnabled
+                      ? (text) => {
+                          try {
+                            transport.delta(capturedId, text);
+                            counters?.sseDeltas?.inc();
+                          } catch (_e) {
+                            // Ignore write-after-close errors
+                          }
+                        }
+                      : undefined,
+                  });
+                  // Backward-compat: still emit the legacy notify + result pair
+                  transport.notify('synaps/result', result);
+                  transport.result(capturedId, result);
+                } catch (err) {
+                  dispatchOutcome = 'error';
+                  if (err?.name === 'McpToolNotFoundError' || err instanceof McpToolNotFoundError) {
+                    dispatchErrorCode = MCP_ERROR_CODES.METHOD_NOT_FOUND;
+                  } else if (err?.name === 'McpToolInvalidArgsError' || err instanceof McpToolInvalidArgsError) {
+                    dispatchErrorCode = MCP_ERROR_CODES.INVALID_PARAMS;
+                  } else if (err?.name === 'McpToolTimeoutError' || err instanceof McpToolTimeoutError) {
+                    dispatchErrorCode = MCP_ERROR_CODES.TOOL_TIMEOUT;
+                  } else {
+                    dispatchErrorCode = MCP_ERROR_CODES.INTERNAL_ERROR;
+                  }
+                  transport.error(capturedId, {
+                    code:    dispatchErrorCode,
+                    message: err?.message || 'tool error',
+                  });
+                } finally {
+                  const dur = (this._now() - capturedStartTs) / 1000;
+                  histograms?.duration?.observe({ tool: capturedToolName }, dur);
+                  counters?.requests?.inc({ tool: capturedToolName, outcome: dispatchOutcome });
+                  await recordAudit({
+                    ts:             capturedStartTs,
+                    synaps_user_id: capturedSynapsUserId,
+                    institution_id: capturedInstitutionId,
+                    method:         'tools/call',
+                    tool_name:      capturedToolName,
+                    outcome:        dispatchOutcome,
+                    duration_ms:    this._now() - capturedStartTs,
+                    error_code:     dispatchErrorCode,
+                    client_info:    capturedClientInfo,
+                  });
+                }
+              },
+            };
+          }
+
+          // ── Non-SSE (synchronous) dispatch ─────────────────────────────
+          try {
             const result = await this._toolRegistry.callTool({
-              name:            callName,
-              arguments:       callArgs,
+              name:           callName,
+              arguments:      callArgs,
               synaps_user_id,
               institution_id,
             });
-
-            if (wantsSSE) {
-              // Record audit before returning the streaming marker so
-              // the dispatcher result is captured asynchronously.
-              await this._recordAudit({
-                ts:              startTs,
-                synaps_user_id,
-                institution_id,
-                method,
-                tool_name,
-                outcome:         'ok',
-                duration_ms:     this._now() - startTs,
-                error_code:      null,
-                client_info,
-              });
-
-              // sseDispatcher is called by ScpHttpServer with a McpSseTransport
-              // instance after it has set up the SSE response.
-              const capturedResult = result;
-              const capturedId     = id;
-              return {
-                statusCode:    200,
-                sse:           true,
-                sseDispatcher: async (transport) => {
-                  // Emit a single notification then the final result frame.
-                  // (Chunk-by-chunk streaming from synaps_chat is a future TODO —
-                  //  Phase 8 exercises the SSE framing path end-to-end.)
-                  transport.notify('synaps/result', capturedResult);
-                  transport.result(capturedId, capturedResult);
-                },
-              };
-            }
 
             // result is the MCP {content, isError} shape — wrap in JSON-RPC result
             responseBody = okResponse(id, result);
@@ -449,7 +564,16 @@ export class McpServer {
       responseBody = errResponse(id, MCP_ERROR_CODES.INTERNAL_ERROR, 'Internal error');
     }
 
-    // ── 5. Audit ──────────────────────────────────────────────────────────────
+    // ── 5. Metrics (non-SSE path) — Track 6 ──────────────────────────────────
+    // SSE path records metrics inside the dispatcher (finally block above).
+    // Non-SSE path records here, alongside audit.
+    if (method === 'tools/call' && tool_name) {
+      const dur = (this._now() - startTs) / 1000;
+      this._histograms?.duration?.observe({ tool: tool_name }, dur);
+      this._counters?.requests?.inc({ tool: tool_name, outcome });
+    }
+
+    // ── 6. Audit ──────────────────────────────────────────────────────────────
 
     await this._recordAudit({
       ts:              startTs,
@@ -461,6 +585,7 @@ export class McpServer {
       duration_ms:     this._now() - startTs,
       error_code,
       client_info,
+      acl_outcome,
     });
 
     return { statusCode, body: responseBody };
@@ -470,6 +595,9 @@ export class McpServer {
 
   /**
    * Fire-and-forget audit record. Audit failures must never propagate.
+   *
+   * @param {object}           entry
+   * @param {string|undefined} [entry.acl_outcome] — 'deny' when ACL gate fired (Phase 9 Track 4).
    * @private
    */
   async _recordAudit(entry) {

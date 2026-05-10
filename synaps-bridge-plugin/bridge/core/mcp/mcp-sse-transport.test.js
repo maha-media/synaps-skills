@@ -299,4 +299,104 @@ describe('McpSseTransport', () => {
     expect(res.on).toHaveBeenCalledWith('close', expect.any(Function));
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Phase 9 Track 2 — delta() helper
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // 18 ── delta() writes one synaps/delta notification frame ─────────────────
+  it('delta(id, text) writes a synaps/delta notification frame with correct shape', () => {
+    const res = fakeRes();
+    const t = new McpSseTransport({ res, heartbeatMs: 60_000 });
+    t.start();
+    t.delta('req-99', 'Hello');
+
+    const dataWrites = res._writes.filter(
+      (w) => typeof w === 'string' && w.startsWith('data:'),
+    );
+    expect(dataWrites).toHaveLength(1);
+
+    const parsed = JSON.parse(dataWrites[0].replace(/^data: /, ''));
+    expect(parsed).toMatchObject({
+      jsonrpc: '2.0',
+      method:  'synaps/delta',
+      params:  { id: 'req-99', text: 'Hello' },
+    });
+    // Notification frames must NOT have a top-level id field.
+    expect(parsed).not.toHaveProperty('id');
+    t.close();
+  });
+
+  // 19 ── multiple delta() calls write multiple frames in order ──────────────
+  it('multiple delta() calls write multiple frames in chronological order', () => {
+    const res = fakeRes();
+    const t = new McpSseTransport({ res, heartbeatMs: 60_000 });
+    t.start();
+
+    const tokens = ['To', ' be', ' or', ' not'];
+    for (const tok of tokens) t.delta('r1', tok);
+
+    const dataWrites = res._writes
+      .filter((w) => typeof w === 'string' && w.startsWith('data:'))
+      .map((w) => JSON.parse(w.replace(/^data: /, '')));
+
+    expect(dataWrites).toHaveLength(tokens.length);
+    const texts = dataWrites.map((f) => f.params.text);
+    expect(texts).toEqual(tokens);
+    t.close();
+  });
+
+  // 20 ── delta() after close() is a no-op ───────────────────────────────────
+  it('delta() after close() is a no-op — no write occurs', () => {
+    const res = fakeRes();
+    const t = new McpSseTransport({ res, heartbeatMs: 60_000 });
+    t.start();
+    t.close();
+
+    const writesBeforeDelta = res.write.mock.calls.length;
+    t.delta('r2', 'ignored');
+
+    expect(res.write.mock.calls.length).toBe(writesBeforeDelta);
+  });
+
+  // 21 ── delta() auto-starts the stream ─────────────────────────────────────
+  it('delta() auto-starts the stream if start() was not called first', () => {
+    const res = fakeRes();
+    const t = new McpSseTransport({ res, heartbeatMs: 60_000 });
+
+    // Should NOT throw; should trigger start() internally via notify().
+    t.delta('r3', 'auto-start token');
+
+    expect(res.writeHead).toHaveBeenCalledWith(200, expect.any(Object));
+    expect(res.write).toHaveBeenCalledWith('retry: 1500\n\n');
+
+    const dataWrites = res._writes.filter(
+      (w) => typeof w === 'string' && w.startsWith('data:'),
+    );
+    expect(dataWrites).toHaveLength(1);
+    t.close();
+  });
+
+  // 22 ── exact wire-format contract ─────────────────────────────────────────
+  it('delta() emits the exact SSE wire format specified in Track 2', () => {
+    const res = fakeRes();
+    const t = new McpSseTransport({ res, heartbeatMs: 60_000 });
+    t.start();
+    t.delta('123', 'To be');
+
+    const dataWrites = res._writes.filter(
+      (w) => typeof w === 'string' && w.startsWith('data:'),
+    );
+    expect(dataWrites).toHaveLength(1);
+
+    // Exact frame per spec:
+    //   data: {"jsonrpc":"2.0","method":"synaps/delta","params":{"id":"123","text":"To be"}}\n\n
+    const raw = dataWrites[0];
+    expect(raw).toBe(
+      'data: ' +
+      JSON.stringify({ jsonrpc: '2.0', method: 'synaps/delta', params: { id: '123', text: 'To be' } }) +
+      '\n\n',
+    );
+    t.close();
+  });
+
 });

@@ -42,6 +42,9 @@ const BAD_JSON       = Symbol('bad_json');
  *                                          tools/call responses that carry sse:true.
  * @property {object}   [dcrHandler]      - McpDcrHandler instance; when present,
  *                                          POST /mcp/v1/register is handled.
+ * @property {object}   [oauthServer]     - OauthServer instance; when present, OAuth 2.1
+ *                                          routes are handled (requires [mcp.oauth] enabled).
+ *                                          When null, OAuth paths return 404.
  */
 
 /**
@@ -68,6 +71,9 @@ export class ScpHttpServer {
     rateLimiter    = null,
     sseEnabled     = false,
     dcrHandler     = null,
+    metricsRegistry = null,
+    metricsConfig  = null,
+    oauthServer    = null,
   }) {
     if (!config)   throw new TypeError('ScpHttpServer: opts.config is required');
     if (!vncProxy) throw new TypeError('ScpHttpServer: opts.vncProxy is required');
@@ -82,6 +88,9 @@ export class ScpHttpServer {
     this._rateLimiter      = rateLimiter;
     this._sseEnabled       = Boolean(sseEnabled);
     this._dcrHandler       = dcrHandler;
+    this._metricsRegistry  = metricsRegistry;
+    this._metricsConfig    = metricsConfig;
+    this._oauthServer      = oauthServer;
 
     /** @type {import('node:http').Server | null} */
     this._server = null;
@@ -124,6 +133,9 @@ export class ScpHttpServer {
     const rateLimiter      = this._rateLimiter;
     const sseEnabled       = this._sseEnabled;
     const dcrHandler       = this._dcrHandler;
+    const metricsRegistry  = this._metricsRegistry;
+    const metricsConfig    = this._metricsConfig;
+    const oauthServer      = this._oauthServer;
     const self             = this;
 
     // ── request handler ───────────────────────────────────────────────────────
@@ -195,6 +207,34 @@ export class ScpHttpServer {
           }
 
           _sendJson(res, httpStatus, { status, mode, ts, components });
+          return;
+        }
+
+        // ── /metrics → Prometheus text (Phase 9 Wave C Track 6) ─────────────
+        const metricsPath = metricsConfig?.path ?? '/metrics';
+        if (url === metricsPath || url.startsWith(metricsPath + '?')) {
+          if (!metricsRegistry || !metricsConfig?.enabled) {
+            return _send404(res);
+          }
+          // Bind guard: only respond to localhost or the configured bind address.
+          const remoteAddr = req.socket?.remoteAddress ?? '';
+          const LOCALHOST_ADDRS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+          const allowedBind     = metricsConfig?.bind ?? '127.0.0.1';
+          if (!LOCALHOST_ADDRS.has(remoteAddr) && remoteAddr !== allowedBind) {
+            if (!res.headersSent) {
+              res.writeHead(403, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'forbidden' }));
+            }
+            return;
+          }
+          const body = metricsRegistry.render();
+          if (!res.headersSent) {
+            res.writeHead(200, {
+              'Content-Type':   'text/plain; version=0.0.4; charset=utf-8',
+              'Content-Length': Buffer.byteLength(body),
+            });
+            res.end(body);
+          }
           return;
         }
 
@@ -296,6 +336,15 @@ export class ScpHttpServer {
             _send404(res);
           });
           return;
+        }
+
+        // ── OAuth 2.1 endpoints (opt-in via [mcp.oauth] enabled) ──────────
+        if (oauthServer) {
+          const parsedUrl  = new URL(url, 'http://x');
+          const pathname   = parsedUrl.pathname;
+          const query      = parsedUrl.searchParams;
+          const handled    = await oauthServer.handle(req, res, pathname, query);
+          if (handled) return;
         }
 
         // ── catch-all 404 ────────────────────────────────────────────────

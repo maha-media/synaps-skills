@@ -81,6 +81,11 @@ export class McpToolRegistry {
    * @param {number}   [opts.chatTimeoutMs=120_000]
    * @param {object}   [opts.logger=console]
    * @param {Function} [opts.now=Date.now]  — for tests
+   * @param {object}   [opts.metrics=null]
+   *   Optional MetricsRegistry instance (Track 6).  When provided, the
+   *   registry registers and populates:
+   *     • synaps_mcp_session_queue_depth  (gauge,   label: session_key)
+   *     • synaps_mcp_tool_calls_total     (counter, labels: tool, outcome)
    */
   constructor({
     sessionRouter,
@@ -90,6 +95,7 @@ export class McpToolRegistry {
     chatTimeoutMs = 120_000,
     logger = console,
     now = Date.now,
+    metrics = null,
   }) {
     if (!sessionRouter && typeof getSessionRouter !== 'function') {
       throw new TypeError('McpToolRegistry: sessionRouter or getSessionRouter required');
@@ -101,6 +107,29 @@ export class McpToolRegistry {
     this._chatTimeoutMs = chatTimeoutMs;
     this._logger = logger;
     this._now = now;
+    /** @type {Map<string, Promise<void>>} Per-session promise chains (Track 1). */
+    this._sessionLocks = new Map();
+
+    // ── Track 6: optional metrics ──────────────────────────────────────────
+    this._metrics = metrics ?? null;
+    this._gauges = metrics ? {
+      queueDepth: metrics.gauge('synaps_mcp_session_queue_depth', {
+        help: 'Active per-session prompt queue depth.',
+        labelNames: ['session_key'],
+      }),
+    } : null;
+    this._counters = metrics ? {
+      toolCalls: metrics.counter('synaps_mcp_tool_calls_total', {
+        help: 'Total tool calls dispatched.',
+        labelNames: ['tool', 'outcome'],
+      }),
+    } : null;
+    /**
+     * Track in-flight + queued count per sessionKey so we can drive the gauge
+     * without reading back from the MetricsRegistry.
+     * @type {Map<string, number>}
+     */
+    this._queueDepths = new Map();
   }
 
   /**
@@ -111,6 +140,76 @@ export class McpToolRegistry {
     if (this._sessionRouter) return this._sessionRouter;
     if (this._getSessionRouter) return this._getSessionRouter();
     return null;
+  }
+
+  /**
+   * Run `fn` serially relative to all other calls sharing the same
+   * `sessionKey`.  Different keys execute in parallel.
+   *
+   * Concurrency contract:
+   *   - Calls on the same key are chained so each waits for the prior one
+   *     to settle (resolve OR reject) before starting.
+   *   - A rejection in one call does NOT block later callers on the same
+   *     key — `prev.catch(() => {})` absorbs it before chaining the next fn.
+   *   - The `_sessionLocks` Map entry is pruned (best-effort) once the
+   *     chain settles, preventing unbounded Map growth after idle periods.
+   *
+   * Track 6 gauge instrumentation:
+   *   When `this._gauges.queueDepth` exists, a per-sessionKey in-flight+queued
+   *   counter (`this._queueDepths`) is bumped on enqueue and dropped in the
+   *   finally block.  The gauge is driven from that counter so observers see
+   *   the exact depth at all times and a final `set(0)` is emitted when the
+   *   chain drains to zero (for clear drain visibility).
+   *
+   * @param {string}   sessionKey  — opaque key, e.g. `mcp|<synaps_user_id>|default`
+   * @param {Function} fn          — async () => T; called when it is this call's turn
+   * @returns {Promise<T>}         — resolves/rejects with whatever `fn` returns
+   * @throws {TypeError} if `sessionKey` is not a non-empty string
+   */
+  async _runSerialized(sessionKey, fn) {
+    if (typeof sessionKey !== 'string' || sessionKey.length === 0) {
+      throw new TypeError('_runSerialized: sessionKey must be a non-empty string');
+    }
+
+    // ── Track 6: bump queue depth on enqueue ────────────────────────────────
+    if (this._gauges?.queueDepth) {
+      const depth = (this._queueDepths.get(sessionKey) ?? 0) + 1;
+      this._queueDepths.set(sessionKey, depth);
+      this._gauges.queueDepth.set({ session_key: sessionKey }, depth);
+    }
+
+    const prev = this._sessionLocks.get(sessionKey) ?? Promise.resolve();
+
+    // Chain this call after prev; absorb prev's rejection so it never
+    // propagates into fn's execution or our own await below.
+    const next = prev.catch(() => {}).then(fn);
+
+    // Store a rejection-safe handle so the *next* waiter can chain onto us
+    // without seeing our own failure.
+    const stored = next.catch(() => {});
+    this._sessionLocks.set(sessionKey, stored);
+
+    try {
+      return await next;
+    } finally {
+      // Prune the Map entry when nothing else has overwritten it, i.e.
+      // we are the last link in the chain for this key right now.
+      if (this._sessionLocks.get(sessionKey) === stored) {
+        this._sessionLocks.delete(sessionKey);
+      }
+
+      // ── Track 6: decrement queue depth on settle (success OR failure) ────
+      if (this._gauges?.queueDepth) {
+        const newDepth = Math.max(0, (this._queueDepths.get(sessionKey) ?? 1) - 1);
+        if (newDepth === 0) {
+          this._queueDepths.delete(sessionKey);
+          this._gauges.queueDepth.set({ session_key: sessionKey }, 0);
+        } else {
+          this._queueDepths.set(sessionKey, newDepth);
+          this._gauges.queueDepth.set({ session_key: sessionKey }, newDepth);
+        }
+      }
+    }
   }
 
   // ── Public API ────────────────────────────────────────────────────────────
@@ -151,35 +250,56 @@ export class McpToolRegistry {
    * Invoke a tool by name. Returns the MCP-shape `{content, isError}` result.
    *
    * Routing:
-   *   - name === 'synaps_chat' → existing sessionRouter path
+   *   - name === 'synaps_chat' → existing sessionRouter path (serialised via _runSerialized)
    *   - else, surfaceRpcTools && rpcRouter → rpcRouter.callTool(...)
    *   - else → throw McpToolNotFoundError (JSON-RPC -32601)
    *
-   * @param {object} call
-   * @param {string} call.name
-   * @param {object} call.arguments
-   * @param {string} call.synaps_user_id
-   * @param {string} [call.institution_id]
+   * Track 6: increments `synaps_mcp_tool_calls_total{tool, outcome}` after each
+   * dispatch attempt (success → 'ok'; thrown error → 'error').
+   *
+   * @param {object}   call
+   * @param {string}   call.name
+   * @param {object}   call.arguments
+   * @param {string}   call.synaps_user_id
+   * @param {string}   [call.institution_id]
+   * @param {Function} [call.onDelta]  — optional callback invoked synchronously
+   *   for every `text_delta` event as it arrives: `onDelta(deltaString)`.
+   *   Omitting it preserves Phase 8 behaviour (buffer-only, no streaming).
    * @returns {Promise<{content: Array, isError: boolean}>}
    * @throws {McpToolNotFoundError|McpToolInvalidArgsError}
    */
-  async callTool({ name, arguments: args, synaps_user_id, institution_id }) {
+  async callTool({ name, arguments: args, synaps_user_id, institution_id, onDelta }) {
     // ── synaps_chat: existing path ─────────────────────────────────────────
     if (name === SYNAPS_CHAT_TOOL_DESCRIPTOR.name) {
       const v = validateArgs(args ?? {}, SYNAPS_CHAT_TOOL_DESCRIPTOR.inputSchema);
       if (!v.valid) {
         throw new McpToolInvalidArgsError(name, v.error);
       }
-      return this._invokeChat({ args, synaps_user_id });
+      let result;
+      try {
+        result = await this._invokeChat({ args, synaps_user_id, onDelta });
+        this._counters?.toolCalls.inc({ tool: name, outcome: 'ok' });
+        return result;
+      } catch (err) {
+        this._counters?.toolCalls.inc({ tool: name, outcome: 'error' });
+        throw err;
+      }
     }
 
     // ── unknown tool: forward to rpcRouter when surfacing is on ───────────
     if (this._surfaceRpcTools && this._rpcRouter) {
-      return this._rpcRouter.callTool({
-        synapsUserId: synaps_user_id,
-        name,
-        args: args ?? {},
-      });
+      try {
+        const result = await this._rpcRouter.callTool({
+          synapsUserId: synaps_user_id,
+          name,
+          args: args ?? {},
+        });
+        this._counters?.toolCalls.inc({ tool: name, outcome: 'ok' });
+        return result;
+      } catch (err) {
+        this._counters?.toolCalls.inc({ tool: name, outcome: 'error' });
+        throw err;
+      }
     }
 
     // ── surfacing off (or no rpcRouter): Method not found ─────────────────
@@ -189,14 +309,38 @@ export class McpToolRegistry {
   // ── Internal ──────────────────────────────────────────────────────────────
 
   /**
-   * Route a validated synaps_chat call through the session router.
+   * Route a validated synaps_chat call through the session router,
+   * serialising concurrent calls that share the same user session
+   * (Track 1 — fixes Phase 8 smoke #19).
    *
-   * @param {object} opts
-   * @param {object} opts.args             — validated call arguments
-   * @param {string} opts.synaps_user_id
+   * @param {object}   opts
+   * @param {object}   opts.args             — validated call arguments
+   * @param {string}   opts.synaps_user_id
+   * @param {Function} [opts.onDelta]        — optional per-delta callback
    * @returns {Promise<{content: Array, isError: boolean}>}
    */
-  async _invokeChat({ args, synaps_user_id }) {
+  async _invokeChat({ args, synaps_user_id, onDelta }) {
+    const sessionKey = `mcp|${synaps_user_id}|default`;
+    return this._runSerialized(sessionKey, () =>
+      this._invokeChatOnce({ args, synaps_user_id, onDelta }),
+    );
+  }
+
+  /**
+   * Core synaps_chat invocation body (moved verbatim from the pre-Track-1
+   * `_invokeChat`).  Called by `_invokeChat` once it is this call's turn in
+   * the per-session serialisation chain.
+   *
+   * @param {object}   opts
+   * @param {object}   opts.args             — validated call arguments
+   * @param {string}   opts.synaps_user_id
+   * @param {Function} [opts.onDelta]        — optional per-delta callback;
+   *   called synchronously as `onDelta(deltaString)` for every `text_delta`
+   *   event BEFORE the delta is appended to the internal buffer.
+   *   Omitting it leaves Phase 8 behaviour unchanged (buffer-only).
+   * @returns {Promise<{content: Array, isError: boolean}>}
+   */
+  async _invokeChatOnce({ args, synaps_user_id, onDelta }) {
     const router = this._resolveSessionRouter();
     if (!router) {
       throw new Error('McpToolRegistry: sessionRouter unavailable (lazy thunk returned null)');
@@ -221,6 +365,10 @@ export class McpToolRegistry {
       let buf = '';
       const onMessage = (event) => {
         if (event?.type === 'text_delta' && typeof event.delta === 'string') {
+          // Track 2: forward each delta to the optional callback BEFORE
+          // appending to the buffer.  onDelta is undefined when the caller
+          // does not supply it (Phase 8 baseline behaviour unchanged).
+          onDelta?.(event.delta);
           buf += event.delta;
         }
       };

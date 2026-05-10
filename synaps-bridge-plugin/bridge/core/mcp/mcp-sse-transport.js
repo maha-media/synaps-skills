@@ -80,6 +80,28 @@ export class McpSseTransport {
   }
 
   /**
+   * Send a `synaps/delta` JSON-RPC 2.0 notification frame carrying one
+   * token of streamed text.  Auto-starts the stream if not yet started.
+   * After `close()` this is a no-op.
+   *
+   * API design note: `id` is passed explicitly (matching the `result(id, …)`
+   * and `error(id, …)` sibling methods) rather than stored on the instance,
+   * because `McpSseTransport` is constructed before the request `id` is known
+   * and the same transport instance could theoretically be reused across
+   * different logical streams.  Passing `id` per-call keeps the transport
+   * stateless with respect to the JSON-RPC request identity.
+   *
+   * Wire format:
+   *   `data: {"jsonrpc":"2.0","method":"synaps/delta","params":{"id":"<id>","text":"<text>"}}\n\n`
+   *
+   * @param {string|number|null} id   — JSON-RPC request id echoed in params
+   * @param {string}             text — one token / chunk of streamed text
+   */
+  delta(id, text) {
+    this.notify('synaps/delta', { id: id ?? null, text });
+  }
+
+  /**
    * Send a JSON-RPC 2.0 notification frame (no `id`; method + params).
    * Auto-starts the stream if `start()` has not been called yet.
    *
