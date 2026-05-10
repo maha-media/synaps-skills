@@ -1,0 +1,73 @@
+# bridge.toml.example
+#
+# Copy to ~/.synaps-cli/bridge/bridge.toml and edit as needed.
+# The install script (scripts/install-systemd.sh) does this automatically.
+#
+# NO secrets belong in this file.  Token values are read from the environment
+# variables named below; the *_env keys reference the variable name, not the
+# token itself.
+
+# ─── Bridge daemon settings ────────────────────────────────────────────────────
+
+[bridge]
+# Log verbosity: debug | info | warn | error
+log_level = "info"
+
+# Idle session TTL in seconds.  Sessions inactive longer than this are reaped;
+# the next message in that thread resumes the session via synaps rpc --continue.
+# Default: 86400 (24 h)
+session_idle_timeout_secs = 86400
+
+# Directory for runtime files (sessions.json, control.sock, downloaded files).
+# Tilde expansion is supported.
+session_dir = "~/.synaps-cli/bridge"
+
+# ─── RPC child process settings ───────────────────────────────────────────────
+
+[rpc]
+# Path (or name) of the synaps binary; resolved via PATH if not absolute.
+binary = "synaps"
+
+# Default model for new sessions.  Can be overridden per-thread via the
+# set-model: directive or the /bridge model slash command.
+default_model = "claude-sonnet-4-6"
+
+# Named profile to pass to synaps rpc --profile.  Empty string = no profile.
+default_profile = ""
+
+# ─── Sources ──────────────────────────────────────────────────────────────────
+
+[sources.slack]
+# Set to false to disable the Slack adapter entirely.
+enabled = true
+
+# Environment variable that holds the Slack bot token (xoxb-...).
+# The variable is read at daemon start; its value is NEVER logged.
+bot_token_env = "SLACK_BOT_TOKEN"
+
+# Environment variable that holds the Slack app-level token (xapp-...).
+# Required for Socket Mode.
+app_token_env = "SLACK_APP_TOKEN"
+
+# Trigger word for legacy @-mention mode.  Used only when AI-app mode is
+# disabled in the workspace.
+trigger_word = "@synaps"
+
+# Respond to direct messages sent to the bot.
+respond_to_dms = true
+
+# Respond when the bot is @-mentioned in a channel.
+respond_to_mentions = true
+
+# Participate in threads the bot is already part of.
+thread_replies = true
+
+# ─── Future sources (commented out in v0) ─────────────────────────────────────
+
+# [sources.discord]
+# enabled = false
+# bot_token_env = "DISCORD_BOT_TOKEN"
+#
+# [sources.webhook]
+# enabled = false
+# listen_port = 8765

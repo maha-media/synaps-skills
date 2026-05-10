@@ -162,6 +162,48 @@ export class SessionRouter extends EventEmitter {
   }
 
   /**
+   * Return enriched metadata for all currently-live sessions by merging the
+   * live map with persisted store records.  Used by the control socket `threads`
+   * op and any observer that needs more than just the rpc handle.
+   *
+   * Fields returned per entry:
+   *   key, source, conversation, thread, model, sessionId,
+   *   lastActiveAt (epoch ms), inFlight (boolean)
+   *
+   * @returns {Promise<Array<{
+   *   key: string,
+   *   source: string,
+   *   conversation: string,
+   *   thread: string,
+   *   model: string|null,
+   *   sessionId: string|null,
+   *   lastActiveAt: number,
+   *   inFlight: boolean,
+   * }>>}
+   */
+  async listSessions() {
+    const storeMap = await this._store.load();
+    const results = [];
+
+    for (const [key, rpc] of this._live.entries()) {
+      const rec = storeMap.get(key);
+      const inFlight = typeof rpc.inFlight === 'boolean' ? rpc.inFlight : false;
+      results.push({
+        key,
+        source:       rec?.source       ?? '',
+        conversation: rec?.conversation ?? '',
+        thread:       rec?.thread       ?? '',
+        model:        rec?.model        ?? null,
+        sessionId:    rec?.sessionId    ?? null,
+        lastActiveAt: this._lastActive.get(key) ?? rec?.lastActiveAt ?? 0,
+        inFlight,
+      });
+    }
+
+    return results;
+  }
+
+  /**
    * Close any live rpcs that have been idle for longer than idleTtlMs.
    * Reaped sessions stay in the store; next access spawns with --continue.
    *

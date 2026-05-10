@@ -481,3 +481,39 @@ describe("SessionRouter", () => {
     await router.stop();
   });
 });
+
+// ── listSessions ─────────────────────────────────────────────────────────────
+
+describe("SessionRouter.listSessions", () => {
+  it("returns empty array when no live sessions", async () => {
+    const { router } = makeRouter();
+    await router.start();
+    const list = await router.listSessions();
+    expect(list).toEqual([]);
+    await router.stop();
+  });
+
+  it("returns enriched metadata for a live session", async () => {
+    const { router } = makeRouter();
+    await router.start();
+
+    await router.getOrCreateSession({
+      source: "slack",
+      conversation: "C99",
+      thread: "T99",
+    });
+
+    const list = await router.listSessions();
+    expect(list).toHaveLength(1);
+
+    const entry = list[0];
+    expect(entry.key).toBe(sessionKey({ source: "slack", conversation: "C99", thread: "T99" }));
+    expect(entry.source).toBe("slack");
+    expect(entry.conversation).toBe("C99");
+    expect(entry.thread).toBe("T99");
+    expect(typeof entry.lastActiveAt).toBe("number");
+    expect(typeof entry.inFlight).toBe("boolean");
+
+    await router.stop();
+  });
+});
