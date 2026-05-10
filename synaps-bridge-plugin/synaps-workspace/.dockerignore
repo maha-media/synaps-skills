@@ -1,0 +1,31 @@
+# Patterns to exclude from the Docker build context
+# Keep this file lean — the context is small (no node_modules reach here)
+
+# Git internals
+.git
+.gitignore
+
+# Markdown files (README.md is intentionally kept for LABEL / docs reference)
+*.md
+!README.md
+
+# macOS noise
+.DS_Store
+**/.DS_Store
+
+# Node (should never be in this directory but listed for safety)
+node_modules
+npm-debug.log*
+
+# Editor / IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Local secrets / env files
+.env
+.env.*
+*.pem
+*.key
