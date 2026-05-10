@@ -417,7 +417,7 @@ export class McpServer {
               error_code   = MCP_ERROR_CODES.TOOL_TIMEOUT;
               responseBody = errResponse(id, MCP_ERROR_CODES.TOOL_TIMEOUT, err.message);
             } else {
-              this._logger.error('[McpServer] toolRegistry.callTool threw:', err.message);
+              this._logger.error('[McpServer] toolRegistry.callTool threw:', err);
               error_code   = MCP_ERROR_CODES.INTERNAL_ERROR;
               responseBody = errResponse(id, MCP_ERROR_CODES.INTERNAL_ERROR, 'Internal error');
             }

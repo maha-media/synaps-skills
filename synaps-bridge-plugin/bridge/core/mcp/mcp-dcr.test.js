@@ -49,6 +49,7 @@ function validBody(overrides = {}) {
     client_name:                 'Test Client',
     registration_secret:         'super-secret',
     synaps_user_id:              'user-abc-123',
+    institution_id:              'inst-xyz-789',
     grant_types:                 ['client_credentials'],
     token_endpoint_auth_method:  'none',
     ...overrides,
@@ -170,6 +171,25 @@ describe('McpDcrHandler', () => {
     expect(result.body.error_description).toMatch(/synaps_user_id required/i);
   });
 
+  // ── 6b. institution_id checks ─────────────────────────────────────────────
+
+  it('returns 400 when institution_id is missing', async () => {
+    const h = new McpDcrHandler(makeOpts());
+    const body = validBody();
+    delete body.institution_id;
+    const result = await h.register(body);
+    expect(result.statusCode).toBe(400);
+    expect(result.body.error).toBe('invalid_request');
+    expect(result.body.error_description).toMatch(/institution_id required/i);
+  });
+
+  it('returns 400 when institution_id is an empty string', async () => {
+    const h = new McpDcrHandler(makeOpts());
+    const result = await h.register(validBody({ institution_id: '' }));
+    expect(result.statusCode).toBe(400);
+    expect(result.body.error_description).toMatch(/institution_id required/i);
+  });
+
   // ── 7. identityRepo checks ────────────────────────────────────────────────
 
   it('returns 400 when identityRepo.findById returns falsy', async () => {
@@ -248,6 +268,7 @@ describe('McpDcrHandler', () => {
 
     expect(arg).toHaveProperty('token_hash', 'hash-of-' + 'a'.repeat(64));
     expect(arg).toHaveProperty('synaps_user_id', 'user-abc-123');
+    expect(arg).toHaveProperty('institution_id', 'inst-xyz-789');
     expect(arg).toHaveProperty('name', 'My App');
     expect(arg).toHaveProperty('expires_at');
     expect(arg.expires_at).toBeInstanceOf(Date);

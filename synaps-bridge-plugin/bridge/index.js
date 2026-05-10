@@ -404,8 +404,12 @@ export async function defaultIdentityRouterFactory({ config, logger }) {
 function defaultSessionRouterFactory(config, logger, scpDeps = null) {
   const store = new SessionStore({ logger });
   const isScp = config.platform.mode === 'scp';
+  // Even in SCP mode, allow opt-out of Docker workspace orchestration via
+  // [rpc] host_mode = true.  Useful for development / smoke without an
+  // installed synaps/workspace image.  The MCP wire protocol is unaffected.
+  const useDockerWorkspace = isScp && !config.rpc.host_mode;
 
-  const rpcFactory = isScp
+  const rpcFactory = useDockerWorkspace
     ? ({ sessionId = null, model = null } = {}) =>
         new DockerExecSynapsRpc({
           workspaceManager: scpDeps.workspaceManager,
@@ -709,10 +713,18 @@ export class BridgeDaemon extends EventEmitter {
           const { McpTokenRepo }        = await import('./core/db/repositories/mcp-token-repo.js');
           const { McpServerRepo }       = await import('./core/db/repositories/mcp-server-repo.js');
           const { McpAuditRepo }        = await import('./core/db/repositories/mcp-audit-repo.js');
+          const { getSynapsMcpTokenModel } = await import('./core/db/models/synaps-mcp-token.js');
+          const { getSynapsMcpAuditModel } = await import('./core/db/models/synaps-mcp-audit.js');
 
-          const db            = this._mongoose;
-          const tokenRepo     = new McpTokenRepo({ db });
-          const mcpServerRepo = new McpServerRepo({ db });
+          // Three repos, three injection shapes:
+          //   - McpTokenRepo:  { db: Model }      (Mongoose model)
+          //   - McpAuditRepo:  { model: Model }   (Mongoose model)
+          //   - McpServerRepo: { db: Connection } (raw connection — read-only adapter
+          //                                         over pria's mcpservers collection)
+          const tokenModel    = getSynapsMcpTokenModel(this._mongoose);
+          const auditModel    = getSynapsMcpAuditModel(this._mongoose);
+          const tokenRepo     = new McpTokenRepo({ db: tokenModel });
+          const mcpServerRepo = new McpServerRepo({ db: this._mongoose.connection });
           const tokenResolver = new McpTokenResolver({ tokenRepo, logger: this.logger });
 
           // ── Phase 8 Track 1: Rate limiter ────────────────────────────────
@@ -767,7 +779,7 @@ export class BridgeDaemon extends EventEmitter {
           }
 
           const toolRegistry  = new McpToolRegistry({
-            sessionRouter:   this._sessionRouter,   // may be null at this point; set later
+            getSessionRouter: () => this._sessionRouter,   // lazy: built after MCP
             rpcRouter,
             surfaceRpcTools: this._config.mcp.surface_rpc_tools,
             chatTimeoutMs:   this._config.mcp.chat_timeout_ms,
@@ -779,7 +791,7 @@ export class BridgeDaemon extends EventEmitter {
             logger:     this.logger,
           });
           const audit = this._config.mcp.audit
-            ? { record: (entry) => new McpAuditRepo({ db }).record(entry) }
+            ? { record: (entry) => new McpAuditRepo({ model: auditModel, logger: this.logger }).record(entry) }
             : { record: async () => {} };
 
           // Store tokenRepo so ControlSocket can use it for mcp_token_* ops.

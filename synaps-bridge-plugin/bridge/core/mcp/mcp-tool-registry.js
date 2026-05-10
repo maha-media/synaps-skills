@@ -62,8 +62,14 @@ export class McpToolTimeoutError extends Error {
 export class McpToolRegistry {
   /**
    * @param {object}   opts
-   * @param {object}   opts.sessionRouter
+   * @param {object}   [opts.sessionRouter]
    *   Has .getOrCreate({ synaps_user_id }) → Promise<SynapsRpc>.
+   *   Either `sessionRouter` (eager) or `getSessionRouter` (lazy thunk) is required.
+   * @param {Function} [opts.getSessionRouter]
+   *   Lazy thunk: () => sessionRouter|null. Used when the sessionRouter is built
+   *   after the McpToolRegistry (e.g. wiring order in BridgeDaemon.start).
+   *   Resolved on each callTool() invocation. If the thunk returns falsy at
+   *   call time, the tool call surfaces an `isError: true` MCP result.
    * @param {object}   [opts.rpcRouter]
    *   Optional. SynapsRpcSessionRouter (or compatible) with:
    *     listTools(synapsUserId) → Promise<Array>
@@ -78,19 +84,33 @@ export class McpToolRegistry {
    */
   constructor({
     sessionRouter,
+    getSessionRouter = null,
     rpcRouter = null,
     surfaceRpcTools = false,
     chatTimeoutMs = 120_000,
     logger = console,
     now = Date.now,
   }) {
-    if (!sessionRouter) throw new TypeError('McpToolRegistry: sessionRouter required');
-    this._sessionRouter = sessionRouter;
+    if (!sessionRouter && typeof getSessionRouter !== 'function') {
+      throw new TypeError('McpToolRegistry: sessionRouter or getSessionRouter required');
+    }
+    this._sessionRouter    = sessionRouter ?? null;
+    this._getSessionRouter = typeof getSessionRouter === 'function' ? getSessionRouter : null;
     this._rpcRouter = rpcRouter;
     this._surfaceRpcTools = Boolean(surfaceRpcTools);
     this._chatTimeoutMs = chatTimeoutMs;
     this._logger = logger;
     this._now = now;
+  }
+
+  /**
+   * Resolve the active sessionRouter. Eager wins; falls back to thunk.
+   * @private
+   */
+  _resolveSessionRouter() {
+    if (this._sessionRouter) return this._sessionRouter;
+    if (this._getSessionRouter) return this._getSessionRouter();
+    return null;
   }
 
   // ── Public API ────────────────────────────────────────────────────────────
@@ -177,12 +197,51 @@ export class McpToolRegistry {
    * @returns {Promise<{content: Array, isError: boolean}>}
    */
   async _invokeChat({ args, synaps_user_id }) {
-    const rpc = await this._sessionRouter.getOrCreate({ synaps_user_id });
+    const router = this._resolveSessionRouter();
+    if (!router) {
+      throw new Error('McpToolRegistry: sessionRouter unavailable (lazy thunk returned null)');
+    }
+    // The MCP entrypoint is a virtual "source" with one conversation per
+    // synaps user and a single default thread. SessionRouter caches by
+    // (source, conversation, thread) so per-user MCP sessions are isolated.
+    const rpc = await router.getOrCreateSession({
+      source:       'mcp',
+      conversation: synaps_user_id,
+      thread:       'default',
+    });
     const fullPrompt = args.context
       ? `${args.context}\n\n${args.prompt}`
       : args.prompt;
 
-    // Race rpc.prompt() against a timeout that doesn't keep the event loop alive.
+    // rpc.prompt() resolves on the immediate ack frame, NOT on the agent's
+    // final reply. The actual reply arrives as a stream of `text_delta`
+    // message_update events and terminates with `agent_end`. Collect the
+    // deltas, then resolve when agent_end fires (or timeout).
+    const collectPromise = new Promise((resolve, reject) => {
+      let buf = '';
+      const onMessage = (event) => {
+        if (event?.type === 'text_delta' && typeof event.delta === 'string') {
+          buf += event.delta;
+        }
+      };
+      const onAgentEnd = () => {
+        cleanup();
+        resolve(buf);
+      };
+      const onError = (err) => {
+        cleanup();
+        reject(err instanceof Error ? err : new Error(String(err)));
+      };
+      const cleanup = () => {
+        rpc.off?.('message_update', onMessage);
+        rpc.off?.('agent_end', onAgentEnd);
+        rpc.off?.('error', onError);
+      };
+      rpc.on?.('message_update', onMessage);
+      rpc.on?.('agent_end', onAgentEnd);
+      rpc.on?.('error', onError);
+    });
+
     const timeoutPromise = new Promise((_resolve, reject) => {
       const t = setTimeout(
         () => reject(new McpToolTimeoutError(SYNAPS_CHAT_TOOL_DESCRIPTOR.name, this._chatTimeoutMs)),
@@ -192,17 +251,14 @@ export class McpToolRegistry {
     });
 
     try {
-      const result = await Promise.race([rpc.prompt(fullPrompt), timeoutPromise]);
+      // Send the prompt — promptAck resolves immediately on the ack frame.
+      const promptAck = await Promise.race([rpc.prompt(fullPrompt), timeoutPromise]);
+      if (promptAck && promptAck.ok === false) {
+        throw new Error(promptAck.error ?? 'prompt failed');
+      }
 
-      // Normalise the result to a plain string.
-      // rpc.prompt() resolves to the flattened frame body which typically has
-      // a `message` field; handle bare strings and fallback to JSON.
-      const text =
-        typeof result === 'string'
-          ? result
-          : result?.message != null
-            ? result.message
-            : JSON.stringify(result);
+      // Now wait for the agent's full reply via streamed deltas.
+      const text = await Promise.race([collectPromise, timeoutPromise]);
 
       return {
         content: [{ type: 'text', text }],

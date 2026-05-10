@@ -157,6 +157,18 @@ export class McpDcrHandler {
       });
     }
 
+    // ── Guard: institution_id presence ──────────────────────────────────────
+    // The shared synaps_mcp_tokens schema requires institution_id (mirrors the
+    // ControlSocket `mcp_token_issue` op which also requires it). Without this,
+    // token creation fails at the Mongoose validation layer with a 500.
+    const institution_id = body.institution_id;
+    if (!institution_id || typeof institution_id !== 'string') {
+      return _res(400, {
+        error: 'invalid_request',
+        error_description: 'institution_id required',
+      });
+    }
+
     // ── Guard: synaps_user_id existence (optional repo check) ─────────────────
     if (this._identityRepo) {
       let found;
@@ -194,6 +206,7 @@ export class McpDcrHandler {
       row = await this._tokenRepo.create({
         token_hash,
         synaps_user_id,
+        institution_id,
         name:       label,
         expires_at: expiresAt,
       });

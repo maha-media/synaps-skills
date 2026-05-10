@@ -13,13 +13,31 @@ import {
 
 /** Build a fresh mock sessionRouter + rpc for each test. */
 function makeRouter(promptImpl) {
+  // Minimal EventEmitter-shaped rpc so the McpToolRegistry's listener-based
+  // collection logic (text_delta → agent_end) can be exercised in tests.
+  const listeners = new Map();
   const rpc = {
+    on(ev, fn) {
+      if (!listeners.has(ev)) listeners.set(ev, new Set());
+      listeners.get(ev).add(fn);
+    },
+    off(ev, fn) { listeners.get(ev)?.delete(fn); },
+    emit(ev, payload) {
+      for (const fn of (listeners.get(ev) ?? [])) fn(payload);
+    },
     prompt: vi.fn().mockImplementation(
-      promptImpl ?? (() => Promise.resolve({ message: 'hi' })),
+      // Default: ack ok:true then emit a text_delta + agent_end on next tick.
+      promptImpl ?? (function defaultPrompt() {
+        queueMicrotask(() => {
+          rpc.emit('message_update', { type: 'text_delta', delta: 'hi' });
+          rpc.emit('agent_end', { usage: {} });
+        });
+        return Promise.resolve({ ok: true, command: 'prompt' });
+      }),
     ),
   };
   const sessionRouter = {
-    getOrCreate: vi.fn().mockResolvedValue(rpc),
+    getOrCreateSession: vi.fn().mockResolvedValue(rpc),
   };
   return { sessionRouter, rpc };
 }
@@ -40,7 +58,7 @@ function makeRegistry(overrides = {}) {
 describe('McpToolRegistry constructor', () => {
   it('throws TypeError when sessionRouter is missing', () => {
     expect(() => new McpToolRegistry({})).toThrow(TypeError);
-    expect(() => new McpToolRegistry({})).toThrow('sessionRouter required');
+    expect(() => new McpToolRegistry({})).toThrow('sessionRouter');
   });
 
   it('throws TypeError when sessionRouter is null', () => {
@@ -134,14 +152,14 @@ describe('McpToolRegistry.callTool — routing and validation', () => {
 // ─── callTool — successful dispatch ──────────────────────────────────────────
 
 describe('McpToolRegistry.callTool — successful dispatch', () => {
-  it('calls sessionRouter.getOrCreate with {synaps_user_id}', async () => {
+  it('calls sessionRouter.getOrCreateSession with {synaps_user_id}', async () => {
     const { registry, sessionRouter } = makeRegistry();
     await registry.callTool({
       name: 'synaps_chat',
       arguments: { prompt: 'hello' },
       synaps_user_id: 'user-42',
     });
-    expect(sessionRouter.getOrCreate).toHaveBeenCalledWith({ synaps_user_id: 'user-42' });
+    expect(sessionRouter.getOrCreateSession).toHaveBeenCalledWith({ source: 'mcp', conversation: 'user-42', thread: 'default' });
   });
 
   it('returns {content:[{type:"text",text:"hi"}], isError:false} on success', async () => {
@@ -177,26 +195,45 @@ describe('McpToolRegistry.callTool — successful dispatch', () => {
     expect(rpc.prompt).toHaveBeenCalledWith('bare prompt');
   });
 
-  it('handles bare string result from rpc.prompt', async () => {
-    const { registry } = makeRegistry({ promptImpl: () => Promise.resolve('plain string') });
+  it('assembles text from streamed text_delta events terminated by agent_end', async () => {
+    const { registry, rpc } = makeRegistry({
+      promptImpl: function () {
+        queueMicrotask(() => {
+          rpc.emit('message_update', { type: 'text_delta', delta: 'Hello ' });
+          rpc.emit('message_update', { type: 'text_delta', delta: 'world' });
+          rpc.emit('message_update', { type: 'text_delta', delta: '!' });
+          rpc.emit('agent_end', { usage: {} });
+        });
+        return Promise.resolve({ ok: true });
+      },
+    });
     const result = await registry.callTool({
       name: 'synaps_chat',
       arguments: { prompt: 'q' },
       synaps_user_id: 'u1',
     });
-    expect(result.content[0].text).toBe('plain string');
+    expect(result.content[0].text).toBe('Hello world!');
     expect(result.isError).toBe(false);
   });
 
-  it('handles weird shape from rpc.prompt → JSON.stringify fallback', async () => {
-    const weirdShape = { unexpected: true, value: 99 };
-    const { registry } = makeRegistry({ promptImpl: () => Promise.resolve(weirdShape) });
+  it('ignores non-text_delta message_update events (thinking, toolcalls)', async () => {
+    const { registry, rpc } = makeRegistry({
+      promptImpl: function () {
+        queueMicrotask(() => {
+          rpc.emit('message_update', { type: 'thinking_delta', delta: 'hmm' });
+          rpc.emit('message_update', { type: 'text_delta', delta: 'answer' });
+          rpc.emit('message_update', { type: 'toolcall_start', tool_name: 'web_fetch' });
+          rpc.emit('agent_end', { usage: {} });
+        });
+        return Promise.resolve({ ok: true });
+      },
+    });
     const result = await registry.callTool({
       name: 'synaps_chat',
       arguments: { prompt: 'q' },
       synaps_user_id: 'u1',
     });
-    expect(result.content[0].text).toBe(JSON.stringify(weirdShape));
+    expect(result.content[0].text).toBe('answer');
     expect(result.isError).toBe(false);
   });
 });
@@ -288,12 +325,27 @@ function makeRpcRouter(overrides = {}) {
  * Build a McpToolRegistry with rpcRouter and surfaceRpcTools opt-in.
  */
 function makeRegistryWithRpc({ surfaceRpcTools = true, rpcRouter, rpcTools, promptImpl } = {}) {
+  // Same EventEmitter-shaped rpc as makeRouter so synaps_chat path tests
+  // get an agent_end signal.
+  const listeners = new Map();
   const rpc = {
+    on(ev, fn) {
+      if (!listeners.has(ev)) listeners.set(ev, new Set());
+      listeners.get(ev).add(fn);
+    },
+    off(ev, fn) { listeners.get(ev)?.delete(fn); },
+    emit(ev, payload) { for (const fn of (listeners.get(ev) ?? [])) fn(payload); },
     prompt: vi.fn().mockImplementation(
-      promptImpl ?? (() => Promise.resolve({ message: 'hi' })),
+      promptImpl ?? (function defaultPrompt() {
+        queueMicrotask(() => {
+          rpc.emit('message_update', { type: 'text_delta', delta: 'hi' });
+          rpc.emit('agent_end', { usage: {} });
+        });
+        return Promise.resolve({ ok: true });
+      }),
     ),
   };
-  const sessionRouter = { getOrCreate: vi.fn().mockResolvedValue(rpc) };
+  const sessionRouter = { getOrCreateSession: vi.fn().mockResolvedValue(rpc) };
   const resolvedRpcRouter = rpcRouter ?? makeRpcRouter({ tools: rpcTools ?? FAKE_RPC_TOOLS });
 
   const registry = new McpToolRegistry({
@@ -318,7 +370,7 @@ describe('McpToolRegistry constructor — Phase 8 rpcRouter slot', () => {
 
   it('accepts rpcRouter=null (surfaceRpcTools off is valid)', () => {
     const rpc = { prompt: vi.fn() };
-    const sessionRouter = { getOrCreate: vi.fn().mockResolvedValue(rpc) };
+    const sessionRouter = { getOrCreateSession: vi.fn().mockResolvedValue(rpc) };
     expect(() => new McpToolRegistry({ sessionRouter, rpcRouter: null })).not.toThrow();
   });
 });
@@ -395,7 +447,7 @@ describe('McpToolRegistry.callTool — synaps_chat path unchanged', () => {
       arguments: { prompt: 'hello' },
       synaps_user_id: 'u1',
     });
-    expect(sessionRouter.getOrCreate).toHaveBeenCalledWith({ synaps_user_id: 'u1' });
+    expect(sessionRouter.getOrCreateSession).toHaveBeenCalledWith({ source: 'mcp', conversation: 'u1', thread: 'default' });
   });
 
   it('does NOT call rpcRouter.callTool for synaps_chat', async () => {
@@ -487,7 +539,7 @@ describe('McpToolRegistry.callTool — Method not found when surfaceRpcTools=fal
 
   it('throws McpToolNotFoundError for unknown name when rpcRouter is null', async () => {
     const rpc = { prompt: vi.fn() };
-    const sessionRouter = { getOrCreate: vi.fn().mockResolvedValue(rpc) };
+    const sessionRouter = { getOrCreateSession: vi.fn().mockResolvedValue(rpc) };
     const registry = new McpToolRegistry({
       sessionRouter,
       rpcRouter: null,
