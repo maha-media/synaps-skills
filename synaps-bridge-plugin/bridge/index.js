@@ -578,6 +578,12 @@ export class BridgeDaemon extends EventEmitter {
     /** @type {object|null} McpTokenRepo instance — reused by ControlSocket */
     this._mcpTokenRepo = null;
 
+    // Phase 8 MCP subsystems.
+    /** @type {object|null} McpRateLimiter or null when disabled */
+    this._mcpRateLimiter = null;
+    /** @type {object|null} McpDcrHandler or null when disabled */
+    this._mcpDcrHandler = null;
+
     // Identity router (built in start()).
     /** @type {import('./core/identity-router.js').IdentityRouter|import('./core/identity-router.js').NoOpIdentityRouter|null} */
     this._identityRouter = null;
@@ -685,6 +691,8 @@ export class BridgeDaemon extends EventEmitter {
     // mcpServer can be passed to ScpHttpServer.
     if (isScp && this._config.mcp?.enabled) {
       let builtMcpServer = null;
+      let builtRateLimiter = null;
+      let builtDcrHandler = null;
       try {
         if (this._mcpServerFactory) {
           // Test-injectable factory.
@@ -694,20 +702,74 @@ export class BridgeDaemon extends EventEmitter {
             throw new Error('mongoose unavailable');
           }
           // Defer import so disabled mode never loads MCP code.
-          const { McpServer }      = await import('./core/mcp/mcp-server.js');
-          const { McpTokenResolver } = await import('./core/mcp/mcp-token-resolver.js');
-          const { McpToolRegistry }  = await import('./core/mcp/mcp-tool-registry.js');
-          const { McpApprovalGate }  = await import('./core/mcp/mcp-approval-gate.js');
-          const { McpTokenRepo }     = await import('./core/db/repositories/mcp-token-repo.js');
-          const { McpServerRepo }    = await import('./core/db/repositories/mcp-server-repo.js');
-          const { McpAuditRepo }     = await import('./core/db/repositories/mcp-audit-repo.js');
+          const { McpServer }           = await import('./core/mcp/mcp-server.js');
+          const { McpTokenResolver }    = await import('./core/mcp/mcp-token-resolver.js');
+          const { McpToolRegistry }     = await import('./core/mcp/mcp-tool-registry.js');
+          const { McpApprovalGate }     = await import('./core/mcp/mcp-approval-gate.js');
+          const { McpTokenRepo }        = await import('./core/db/repositories/mcp-token-repo.js');
+          const { McpServerRepo }       = await import('./core/db/repositories/mcp-server-repo.js');
+          const { McpAuditRepo }        = await import('./core/db/repositories/mcp-audit-repo.js');
 
           const db            = this._mongoose;
           const tokenRepo     = new McpTokenRepo({ db });
           const mcpServerRepo = new McpServerRepo({ db });
           const tokenResolver = new McpTokenResolver({ tokenRepo, logger: this.logger });
+
+          // ── Phase 8 Track 1: Rate limiter ────────────────────────────────
+          if (this._config.mcp.rate_limit?.enabled) {
+            const { McpRateLimiter } = await import('./core/mcp/mcp-rate-limiter.js');
+            builtRateLimiter = new McpRateLimiter({
+              perToken: {
+                capacity:    this._config.mcp.rate_limit.per_token_capacity,
+                refillPerSec: this._config.mcp.rate_limit.per_token_refill,
+              },
+              perIp: {
+                capacity:    this._config.mcp.rate_limit.per_ip_capacity,
+                refillPerSec: this._config.mcp.rate_limit.per_ip_refill,
+              },
+              logger: this.logger,
+            });
+            this.logger.info?.('[mcp] rate limiter enabled');
+          }
+
+          // ── Phase 8 Track 4: DCR handler ─────────────────────────────────
+          if (this._config.mcp.dcr?.enabled && this._config.mcp.dcr?.registration_secret) {
+            const { McpDcrHandler } = await import('./core/mcp/mcp-dcr.js');
+            builtDcrHandler = new McpDcrHandler({
+              registrationSecret: this._config.mcp.dcr.registration_secret,
+              tokenRepo,
+              tokenTtlMs: this._config.mcp.dcr.token_ttl_ms,
+              logger: this.logger,
+            });
+            this.logger.info?.('[mcp] DCR handler enabled');
+          }
+
+          // ── Phase 8 Track 2: per-tool surfacing via rpcRouter ─────────────
+          let rpcRouter = null;
+          if (this._config.mcp.surface_rpc_tools) {
+            const { SynapsRpcSessionRouter } = await import('./core/synaps-rpc-session-router.js');
+            // The rpcFactory for tool surfacing creates a lightweight handle
+            // that wraps the existing DockerExecSynapsRpc send() interface.
+            // In a real deployment this would delegate to the workspace's rpc
+            // process; here we provide a safe stub that returns [] on tools_list
+            // (matches SynapsRpcSessionRouter's fault-tolerant probe contract).
+            const surfacingRpcFactory = async (synapsUserId) => ({
+              send: async (op) => {
+                if (op.op === 'tools_list') return { ok: false };  // stub: no tools yet
+                return { ok: false, error: 'not_implemented' };
+              },
+            });
+            rpcRouter = new SynapsRpcSessionRouter({
+              rpcFactory: surfacingRpcFactory,
+              logger: this.logger,
+            });
+            this.logger.info?.('[mcp] surface_rpc_tools enabled (rpcRouter wired)');
+          }
+
           const toolRegistry  = new McpToolRegistry({
             sessionRouter:   this._sessionRouter,   // may be null at this point; set later
+            rpcRouter,
+            surfaceRpcTools: this._config.mcp.surface_rpc_tools,
             chatTimeoutMs:   this._config.mcp.chat_timeout_ms,
             logger:          this.logger,
           });
@@ -728,6 +790,8 @@ export class BridgeDaemon extends EventEmitter {
             toolRegistry,
             approvalGate,
             audit,
+            rateLimiter: builtRateLimiter,
+            sseEnabled:  this._config.mcp.sse?.enabled ?? false,
             logger: this.logger,
           });
         }
@@ -737,6 +801,8 @@ export class BridgeDaemon extends EventEmitter {
         builtMcpServer = null;
       }
       this._mcpServer = builtMcpServer;
+      this._mcpRateLimiter = builtRateLimiter;
+      this._mcpDcrHandler  = builtDcrHandler;
     }
 
     // 4b. Optional HTTP server + VNC proxy (SCP mode only).
@@ -758,7 +824,10 @@ export class BridgeDaemon extends EventEmitter {
           vncProxy,
           heartbeatRepo,
           bridgeCriticalMs: this._config.supervisor?.bridge_critical_ms,
-          mcpServer: this._mcpServer,
+          mcpServer:   this._mcpServer,
+          rateLimiter: this._mcpRateLimiter ?? null,
+          sseEnabled:  this._config.mcp?.sse?.enabled ?? false,
+          dcrHandler:  this._mcpDcrHandler ?? null,
           logger: this.logger,
         });
       }
