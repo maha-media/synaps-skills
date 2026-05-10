@@ -628,3 +628,191 @@ describe('McpServer — audit', () => {
     expect(entry.institution_id).toBe(VALID_IDENTITY.institution_id);
   });
 });
+
+// ─── Rate-limit (Wave B1) ──────────────────────────────────────────────────────
+
+describe('McpServer — rate-limit gate', () => {
+  it('rateLimiter returning allowed=false → 429 + RATE_LIMITED + scope + retryAfterMs', async () => {
+    const fakes = makeFakes();
+    const rateLimiter = {
+      check: vi.fn().mockReturnValue({ allowed: false, scope: 'token', retryAfterMs: 2000 }),
+    };
+    const server = makeServer(fakes, { rateLimiter });
+
+    const res = await server.handle({
+      token:     'tok',
+      tokenHash: 'deadbeef',
+      ip:        '1.2.3.4',
+      body:      rpcBody('ping', 1),
+    });
+
+    expect(res.statusCode).toBe(429);
+    expect(res.body.error.code).toBe(MCP_ERROR_CODES.RATE_LIMITED);
+    expect(res.body.error.data.scope).toBe('token');
+    expect(res.body.error.data.retry_after_ms).toBe(2000);
+    expect(res.retryAfterMs).toBe(2000);
+    expect(rateLimiter.check).toHaveBeenCalledWith({ tokenHash: 'deadbeef', ip: '1.2.3.4' });
+  });
+
+  it('rateLimiter returning allowed=false with ip scope → 429 scope=ip', async () => {
+    const fakes = makeFakes();
+    const rateLimiter = {
+      check: vi.fn().mockReturnValue({ allowed: false, scope: 'ip', retryAfterMs: 500 }),
+    };
+    const server = makeServer(fakes, { rateLimiter });
+
+    const res = await server.handle({
+      tokenHash: null,
+      ip:        '10.0.0.1',
+      body:      rpcBody('ping', 2),
+    });
+
+    expect(res.statusCode).toBe(429);
+    expect(res.body.error.data.scope).toBe('ip');
+  });
+
+  it('rateLimiter returning allowed=true → request proceeds normally', async () => {
+    const fakes = makeFakes();
+    fakes.fakeTokenResolver.resolve.mockResolvedValue(VALID_IDENTITY);
+    const rateLimiter = {
+      check: vi.fn().mockReturnValue({ allowed: true }),
+    };
+    const server = makeServer(fakes, { rateLimiter });
+
+    const res = await server.handle({
+      token:     'valid',
+      tokenHash: 'abc',
+      ip:        '1.2.3.4',
+      body:      rpcBody('ping', 3),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.result).toBeDefined();
+  });
+
+  it('no rateLimiter injected → request always proceeds (no check called)', async () => {
+    const fakes = makeFakes();
+    fakes.fakeTokenResolver.resolve.mockResolvedValue(VALID_IDENTITY);
+    const server = makeServer(fakes); // no rateLimiter
+
+    const res = await server.handle({
+      token: 'valid',
+      body:  rpcBody('ping', 4),
+    });
+
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('rate-limit fires BEFORE body validation (null body still gets 429)', async () => {
+    const fakes = makeFakes();
+    const rateLimiter = {
+      check: vi.fn().mockReturnValue({ allowed: false, scope: 'token', retryAfterMs: 1000 }),
+    };
+    const server = makeServer(fakes, { rateLimiter });
+
+    const res = await server.handle({ tokenHash: 'x', ip: '1.2.3.4', body: null });
+    // Should be 429, not 400 — rate-limit is evaluated first.
+    expect(res.statusCode).toBe(429);
+  });
+});
+
+// ─── SSE branch (Wave B1) ─────────────────────────────────────────────────────
+
+describe('McpServer — SSE branch', () => {
+  it('tools/call with Accept:text/event-stream + sseEnabled=true → sse:true marker + sseDispatcher fn', async () => {
+    const fakes = makeFakes();
+    fakes.fakeTokenResolver.resolve.mockResolvedValue(VALID_IDENTITY);
+    fakes.fakeApprovalGate.isToolAllowed.mockResolvedValue(true);
+    fakes.fakeToolRegistry.callTool.mockResolvedValue({
+      content: [{ type: 'text', text: 'hello from tool' }],
+      isError: false,
+    });
+
+    const server = makeServer(fakes, { sseEnabled: true });
+
+    const res = await server.handle({
+      token:  'valid',
+      body:   rpcBody('tools/call', 7, { name: 'synaps_chat', arguments: { prompt: 'hi' } }),
+      accept: 'text/event-stream',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.sse).toBe(true);
+    expect(typeof res.sseDispatcher).toBe('function');
+    // body should NOT be present on SSE path
+    expect(res.body).toBeUndefined();
+  });
+
+  it('sseDispatcher, when called, emits notify then result on the transport', async () => {
+    const fakes = makeFakes();
+    fakes.fakeTokenResolver.resolve.mockResolvedValue(VALID_IDENTITY);
+    fakes.fakeApprovalGate.isToolAllowed.mockResolvedValue(true);
+    const toolResult = { content: [{ type: 'text', text: 'streamed' }], isError: false };
+    fakes.fakeToolRegistry.callTool.mockResolvedValue(toolResult);
+
+    const server = makeServer(fakes, { sseEnabled: true });
+
+    const res = await server.handle({
+      token:  'valid',
+      body:   rpcBody('tools/call', 8, { name: 'synaps_chat', arguments: { prompt: 'test' } }),
+      accept: 'text/event-stream',
+    });
+
+    const transport = {
+      notify: vi.fn(),
+      result: vi.fn(),
+      close:  vi.fn(),
+    };
+
+    await res.sseDispatcher(transport);
+
+    expect(transport.notify).toHaveBeenCalledWith('synaps/result', toolResult);
+    expect(transport.result).toHaveBeenCalledWith(8, toolResult);
+  });
+
+  it('tools/call with Accept:text/event-stream but sseEnabled=false → normal JSON path', async () => {
+    const fakes = makeFakes();
+    fakes.fakeTokenResolver.resolve.mockResolvedValue(VALID_IDENTITY);
+    fakes.fakeApprovalGate.isToolAllowed.mockResolvedValue(true);
+    fakes.fakeToolRegistry.callTool.mockResolvedValue({
+      content: [{ type: 'text', text: 'ok' }],
+      isError: false,
+    });
+
+    const server = makeServer(fakes, { sseEnabled: false }); // SSE off
+
+    const res = await server.handle({
+      token:  'valid',
+      body:   rpcBody('tools/call', 9, { name: 'synaps_chat', arguments: { prompt: 'hi' } }),
+      accept: 'text/event-stream',
+    });
+
+    // Should fall through to normal JSON response
+    expect(res.statusCode).toBe(200);
+    expect(res.sse).toBeUndefined();
+    expect(res.body).toBeDefined();
+    expect(res.body.result).toBeDefined();
+  });
+
+  it('tools/call WITHOUT Accept header + sseEnabled=true → normal JSON path', async () => {
+    const fakes = makeFakes();
+    fakes.fakeTokenResolver.resolve.mockResolvedValue(VALID_IDENTITY);
+    fakes.fakeApprovalGate.isToolAllowed.mockResolvedValue(true);
+    fakes.fakeToolRegistry.callTool.mockResolvedValue({
+      content: [{ type: 'text', text: 'ok' }],
+      isError: false,
+    });
+
+    const server = makeServer(fakes, { sseEnabled: true });
+
+    const res = await server.handle({
+      token: 'valid',
+      body:  rpcBody('tools/call', 10, { name: 'synaps_chat', arguments: { prompt: 'hi' } }),
+      // no accept field
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.sse).toBeUndefined();
+    expect(res.body.result).toBeDefined();
+  });
+});
