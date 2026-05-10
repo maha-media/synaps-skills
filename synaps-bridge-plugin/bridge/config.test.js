@@ -2177,3 +2177,55 @@ describe('loadBridgeConfig — acl/metrics not treated as unknown mcp or top-lev
     expect(warnCalls.some(m => m.includes('unknown top-level key "metrics"'))).toBe(false);
   });
 });
+
+describe('loadBridgeConfig — [mcp.oauth] (Phase 9 Wave C)', () => {
+  it('BRIDGE_CONFIG_DEFAULTS.mcp.oauth has correct defaults', () => {
+    const oauth = BRIDGE_CONFIG_DEFAULTS.mcp.oauth;
+    expect(Object.isFrozen(oauth)).toBe(true);
+    expect(oauth.enabled).toBe(false);
+    expect(oauth.issuer).toBe('http://localhost:18080');
+    expect(oauth.authorize_path).toBe('/mcp/v1/authorize');
+    expect(oauth.token_path).toBe('/mcp/v1/token');
+    expect(oauth.code_ttl_ms).toBe(600_000);
+    expect(oauth.token_ttl_ms).toBe(2_592_000_000);
+    expect(oauth.max_body_bytes).toBe(16_384);
+    expect(oauth.require_pkce).toBe(true);
+    expect(Array.isArray(oauth.allowed_redirect_uri_prefixes)).toBe(true);
+    expect(oauth.test_auth_header_enabled).toBe(false);
+  });
+
+  it('mcp.oauth overrides parse correctly', async () => {
+    const toml = `[mcp.oauth]
+enabled = true
+issuer = "https://my.synaps.internal"
+authorize_path = "/oauth/authorize"
+token_path = "/oauth/token"
+code_ttl_ms = 120000
+token_ttl_ms = 86400000
+`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    const config = await loadBridgeConfig({ path: '/cfg.toml', fsImpl });
+    expect(config.mcp.oauth.enabled).toBe(true);
+    expect(config.mcp.oauth.issuer).toBe('https://my.synaps.internal');
+    expect(config.mcp.oauth.authorize_path).toBe('/oauth/authorize');
+    expect(config.mcp.oauth.token_path).toBe('/oauth/token');
+    expect(config.mcp.oauth.code_ttl_ms).toBe(120_000);
+    expect(config.mcp.oauth.token_ttl_ms).toBe(86_400_000);
+  });
+
+  it('mcp.oauth.require_pkce = false → throws validation error', async () => {
+    const toml = `[mcp.oauth]\nrequire_pkce = false\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    await expect(loadBridgeConfig({ path: '/cfg.toml', fsImpl })).rejects.toThrow(
+      /require_pkce/,
+    );
+  });
+
+  it('mcp.oauth.allowed_redirect_uri_prefixes must be array — non-array throws', async () => {
+    const toml = `[mcp.oauth]\nallowed_redirect_uri_prefixes = "https://"\n`;
+    const fsImpl = makeFsImpl({ '/cfg.toml': toml });
+    await expect(loadBridgeConfig({ path: '/cfg.toml', fsImpl })).rejects.toThrow(
+      /allowed_redirect_uri_prefixes/,
+    );
+  });
+});

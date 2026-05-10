@@ -135,6 +135,37 @@ export const BRIDGE_CONFIG_DEFAULTS = Object.freeze({
       registration_secret: '',
       token_ttl_ms:        365 * 24 * 60 * 60 * 1_000,
     }),
+    /**
+     * [mcp.oauth] — OAuth 2.1 Authorization Code flow with PKCE.
+     *
+     * enabled                        – Feature flag; default false (opt-in).
+     * issuer                         – Canonical issuer URL returned in RFC 8414 metadata.
+     * authorize_path                 – Path for the authorization endpoint.
+     * token_path                     – Path for the token endpoint.
+     * code_ttl_ms                    – Authorization code lifetime in ms (default 10 min).
+     *                                  Must be >= 60 000.
+     * token_ttl_ms                   – Bearer token lifetime in ms (default 30 days).
+     *                                  Must be >= 60 000.
+     * max_body_bytes                 – Maximum POST body size for OAuth endpoints (default 16 384).
+     * require_pkce                   – MUST stay true; setting false throws at startup.
+     * allowed_redirect_uri_prefixes  – Array of allowed redirect_uri prefixes.
+     *                                  Must be a non-empty array of strings.
+     * test_auth_header_enabled       – Dev/smoke only; allow X-Synaps-Test-Auth header
+     *                                  to bypass session resolution.  Never set true
+     *                                  in production.
+     */
+    oauth: Object.freeze({
+      enabled:                       false,
+      issuer:                        'http://localhost:18080',
+      authorize_path:                '/mcp/v1/authorize',
+      token_path:                    '/mcp/v1/token',
+      code_ttl_ms:                   600_000,         // 10 min
+      token_ttl_ms:                  2_592_000_000,   // 30 days
+      max_body_bytes:                16_384,
+      require_pkce:                  true,
+      allowed_redirect_uri_prefixes: ['http://localhost:', 'https://'],
+      test_auth_header_enabled:      false,
+    }),
   }),
   metrics: Object.freeze({
     enabled: false,
@@ -760,10 +791,99 @@ function _buildConfig(parsed, logger) {
     }
   }
 
+  // ── [mcp.oauth] ───────────────────────────────────────────────────────────
+  const rawOauth   = (rawMcp.oauth && typeof rawMcp.oauth === 'object') ? rawMcp.oauth : {};
+  const DMCP_OAUTH = DMCP.oauth;
+
+  const oauthEnabled = rawOauth.enabled !== undefined ? Boolean(rawOauth.enabled) : DMCP_OAUTH.enabled;
+
+  // require_pkce MUST stay true — throw if explicitly set to false.
+  if (rawOauth.require_pkce !== undefined && rawOauth.require_pkce !== true) {
+    throw new Error(
+      'bridge/config: mcp.oauth.require_pkce must be true — disabling PKCE is not allowed',
+    );
+  }
+
+  const oauthIssuer = rawOauth.issuer !== undefined
+    ? String(rawOauth.issuer)
+    : DMCP_OAUTH.issuer;
+  if (!oauthIssuer || oauthIssuer.length === 0) {
+    throw new Error('bridge/config: mcp.oauth.issuer must be a non-empty string');
+  }
+
+  const oauthAuthorizePath = rawOauth.authorize_path !== undefined
+    ? String(rawOauth.authorize_path)
+    : DMCP_OAUTH.authorize_path;
+  if (!oauthAuthorizePath.startsWith('/')) {
+    throw new Error(`bridge/config: mcp.oauth.authorize_path "${oauthAuthorizePath}" must start with "/"`);
+  }
+
+  const oauthTokenPath = rawOauth.token_path !== undefined
+    ? String(rawOauth.token_path)
+    : DMCP_OAUTH.token_path;
+  if (!oauthTokenPath.startsWith('/')) {
+    throw new Error(`bridge/config: mcp.oauth.token_path "${oauthTokenPath}" must start with "/"`);
+  }
+
+  let oauthCodeTtlMs = rawOauth.code_ttl_ms !== undefined ? rawOauth.code_ttl_ms : DMCP_OAUTH.code_ttl_ms;
+  if (!Number.isInteger(oauthCodeTtlMs) || oauthCodeTtlMs < 60_000) {
+    throw new Error(
+      `bridge/config: invalid mcp.oauth.code_ttl_ms "${oauthCodeTtlMs}" — must be integer >= 60000`,
+    );
+  }
+
+  let oauthTokenTtlMs = rawOauth.token_ttl_ms !== undefined ? rawOauth.token_ttl_ms : DMCP_OAUTH.token_ttl_ms;
+  if (!Number.isInteger(oauthTokenTtlMs) || oauthTokenTtlMs < 60_000) {
+    throw new Error(
+      `bridge/config: invalid mcp.oauth.token_ttl_ms "${oauthTokenTtlMs}" — must be integer >= 60000`,
+    );
+  }
+
+  let oauthMaxBodyBytes = rawOauth.max_body_bytes !== undefined
+    ? rawOauth.max_body_bytes
+    : DMCP_OAUTH.max_body_bytes;
+  if (!Number.isInteger(oauthMaxBodyBytes) || oauthMaxBodyBytes < 512) {
+    logger.warn(
+      `bridge/config: invalid mcp.oauth.max_body_bytes "${oauthMaxBodyBytes}" — falling back to ${DMCP_OAUTH.max_body_bytes}`,
+    );
+    oauthMaxBodyBytes = DMCP_OAUTH.max_body_bytes;
+  }
+
+  // allowed_redirect_uri_prefixes must be an array of strings.
+  let oauthAllowedPrefixes = rawOauth.allowed_redirect_uri_prefixes !== undefined
+    ? rawOauth.allowed_redirect_uri_prefixes
+    : DMCP_OAUTH.allowed_redirect_uri_prefixes;
+  if (!Array.isArray(oauthAllowedPrefixes)) {
+    throw new Error(
+      'bridge/config: mcp.oauth.allowed_redirect_uri_prefixes must be an array of strings',
+    );
+  }
+  if (!oauthAllowedPrefixes.every((p) => typeof p === 'string')) {
+    throw new Error(
+      'bridge/config: mcp.oauth.allowed_redirect_uri_prefixes must be an array of strings',
+    );
+  }
+
+  const oauthTestAuthHeaderEnabled = rawOauth.test_auth_header_enabled !== undefined
+    ? Boolean(rawOauth.test_auth_header_enabled)
+    : DMCP_OAUTH.test_auth_header_enabled;
+
+  // Warn on unknown keys inside [mcp.oauth].
+  const knownOauthKeys = new Set([
+    'enabled', 'issuer', 'authorize_path', 'token_path', 'code_ttl_ms',
+    'token_ttl_ms', 'max_body_bytes', 'require_pkce',
+    'allowed_redirect_uri_prefixes', 'test_auth_header_enabled',
+  ]);
+  for (const k of Object.keys(rawOauth)) {
+    if (!knownOauthKeys.has(k)) {
+      logger.warn(`bridge/config: unknown mcp.oauth key "${k}" — ignoring`);
+    }
+  }
+
   // Warn on unknown keys inside [mcp].
   const knownMcpKeys = new Set([
     'enabled', 'audit', 'chat_timeout_ms', 'max_body_bytes', 'policy_name',
-    'surface_rpc_tools', 'rate_limit', 'sse', 'acl', 'dcr',
+    'surface_rpc_tools', 'rate_limit', 'sse', 'acl', 'dcr', 'oauth',
   ]);
   for (const k of Object.keys(rawMcp)) {
     if (!knownMcpKeys.has(k)) {
@@ -903,6 +1023,18 @@ function _buildConfig(parsed, logger) {
         enabled:             dcrEnabled,
         registration_secret: dcrRegistrationSecret,
         token_ttl_ms:        dcrTokenTtlMs,
+      }),
+      oauth: Object.freeze({
+        enabled:                       oauthEnabled,
+        issuer:                        oauthIssuer,
+        authorize_path:                oauthAuthorizePath,
+        token_path:                    oauthTokenPath,
+        code_ttl_ms:                   oauthCodeTtlMs,
+        token_ttl_ms:                  oauthTokenTtlMs,
+        max_body_bytes:                oauthMaxBodyBytes,
+        require_pkce:                  true,
+        allowed_redirect_uri_prefixes: Object.freeze(oauthAllowedPrefixes.slice()),
+        test_auth_header_enabled:      oauthTestAuthHeaderEnabled,
       }),
     }),
     metrics: Object.freeze({
