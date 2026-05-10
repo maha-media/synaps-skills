@@ -693,3 +693,118 @@ describe('McpToolRegistry._runSerialized — Track 1 helper', () => {
   });
 
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 9 Track 2 — onDelta callback thread-through in callTool / _invokeChat
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('McpToolRegistry.callTool — onDelta callback (Track 2)', () => {
+
+  // ── T2-1: onDelta invoked for every text_delta event ──────────────────────
+  it('onDelta is called for every text_delta event with the correct text', async () => {
+    const captured = [];
+    const { registry, rpc } = makeRegistry({
+      promptImpl: function () {
+        queueMicrotask(() => {
+          rpc.emit('message_update', { type: 'text_delta', delta: 'alpha' });
+          rpc.emit('message_update', { type: 'text_delta', delta: ' beta' });
+          rpc.emit('message_update', { type: 'text_delta', delta: ' gamma' });
+          rpc.emit('agent_end', {});
+        });
+        return Promise.resolve({ ok: true });
+      },
+    });
+
+    await registry.callTool({
+      name: 'synaps_chat',
+      arguments: { prompt: 'stream me' },
+      synaps_user_id: 'u1',
+      onDelta: (text) => captured.push(text),
+    });
+
+    expect(captured).toEqual(['alpha', ' beta', ' gamma']);
+  });
+
+  // ── T2-2: onDelta invoked in chronological order matching the stream ───────
+  it('onDelta calls arrive in the same order as text_delta events', async () => {
+    const order = [];
+    const TOKENS = ['T1', 'T2', 'T3', 'T4', 'T5'];
+
+    const { registry, rpc } = makeRegistry({
+      promptImpl: function () {
+        queueMicrotask(() => {
+          for (const tok of TOKENS) {
+            rpc.emit('message_update', { type: 'text_delta', delta: tok });
+          }
+          rpc.emit('agent_end', {});
+        });
+        return Promise.resolve({ ok: true });
+      },
+    });
+
+    await registry.callTool({
+      name: 'synaps_chat',
+      arguments: { prompt: 'order test' },
+      synaps_user_id: 'u1',
+      onDelta: (text) => order.push(text),
+    });
+
+    expect(order).toEqual(TOKENS);
+  });
+
+  // ── T2-3: Buffer integrity — final text === concatenation of all deltas ────
+  it('final result text equals the concatenation of all onDelta arguments', async () => {
+    const deltas = [];
+    const TOKENS = ['Hello', ', ', 'world', '!'];
+
+    const { registry, rpc } = makeRegistry({
+      promptImpl: function () {
+        queueMicrotask(() => {
+          for (const tok of TOKENS) {
+            rpc.emit('message_update', { type: 'text_delta', delta: tok });
+          }
+          rpc.emit('agent_end', {});
+        });
+        return Promise.resolve({ ok: true });
+      },
+    });
+
+    const result = await registry.callTool({
+      name: 'synaps_chat',
+      arguments: { prompt: 'integrity' },
+      synaps_user_id: 'u1',
+      onDelta: (text) => deltas.push(text),
+    });
+
+    const concatenated = deltas.join('');
+    expect(result.content[0].text).toBe(concatenated);
+    expect(result.content[0].text).toBe('Hello, world!');
+    expect(result.isError).toBe(false);
+  });
+
+  // ── T2-4: Omitting onDelta works (Phase 8 baseline behaviour) ─────────────
+  it('omitting onDelta causes no error and returns correct result (Phase 8 baseline)', async () => {
+    const { registry, rpc } = makeRegistry({
+      promptImpl: function () {
+        queueMicrotask(() => {
+          rpc.emit('message_update', { type: 'text_delta', delta: 'baseline' });
+          rpc.emit('agent_end', {});
+        });
+        return Promise.resolve({ ok: true });
+      },
+    });
+
+    // No onDelta supplied — must behave identically to Phase 8.
+    const result = await registry.callTool({
+      name: 'synaps_chat',
+      arguments: { prompt: 'no delta cb' },
+      synaps_user_id: 'u1',
+    });
+
+    expect(result).toEqual({
+      content: [{ type: 'text', text: 'baseline' }],
+      isError: false,
+    });
+  });
+
+});

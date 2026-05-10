@@ -203,22 +203,25 @@ export class McpToolRegistry {
    *   - else, surfaceRpcTools && rpcRouter → rpcRouter.callTool(...)
    *   - else → throw McpToolNotFoundError (JSON-RPC -32601)
    *
-   * @param {object} call
-   * @param {string} call.name
-   * @param {object} call.arguments
-   * @param {string} call.synaps_user_id
-   * @param {string} [call.institution_id]
+   * @param {object}   call
+   * @param {string}   call.name
+   * @param {object}   call.arguments
+   * @param {string}   call.synaps_user_id
+   * @param {string}   [call.institution_id]
+   * @param {Function} [call.onDelta]  — optional callback invoked synchronously
+   *   for every `text_delta` event as it arrives: `onDelta(deltaString)`.
+   *   Omitting it preserves Phase 8 behaviour (buffer-only, no streaming).
    * @returns {Promise<{content: Array, isError: boolean}>}
    * @throws {McpToolNotFoundError|McpToolInvalidArgsError}
    */
-  async callTool({ name, arguments: args, synaps_user_id, institution_id }) {
+  async callTool({ name, arguments: args, synaps_user_id, institution_id, onDelta }) {
     // ── synaps_chat: existing path ─────────────────────────────────────────
     if (name === SYNAPS_CHAT_TOOL_DESCRIPTOR.name) {
       const v = validateArgs(args ?? {}, SYNAPS_CHAT_TOOL_DESCRIPTOR.inputSchema);
       if (!v.valid) {
         throw new McpToolInvalidArgsError(name, v.error);
       }
-      return this._invokeChat({ args, synaps_user_id });
+      return this._invokeChat({ args, synaps_user_id, onDelta });
     }
 
     // ── unknown tool: forward to rpcRouter when surfacing is on ───────────
@@ -239,12 +242,16 @@ export class McpToolRegistry {
   /**
    * Route a validated synaps_chat call through the session router.
    *
-   * @param {object} opts
-   * @param {object} opts.args             — validated call arguments
-   * @param {string} opts.synaps_user_id
+   * @param {object}   opts
+   * @param {object}   opts.args             — validated call arguments
+   * @param {string}   opts.synaps_user_id
+   * @param {Function} [opts.onDelta]        — optional per-delta callback;
+   *   called synchronously as `onDelta(deltaString)` for every `text_delta`
+   *   event BEFORE the delta is appended to the internal buffer.
+   *   Omitting it leaves Phase 8 behaviour unchanged (buffer-only).
    * @returns {Promise<{content: Array, isError: boolean}>}
    */
-  async _invokeChat({ args, synaps_user_id }) {
+  async _invokeChat({ args, synaps_user_id, onDelta }) {
     const router = this._resolveSessionRouter();
     if (!router) {
       throw new Error('McpToolRegistry: sessionRouter unavailable (lazy thunk returned null)');
@@ -269,6 +276,10 @@ export class McpToolRegistry {
       let buf = '';
       const onMessage = (event) => {
         if (event?.type === 'text_delta' && typeof event.delta === 'string') {
+          // Track 2: forward each delta to the optional callback BEFORE
+          // appending to the buffer.  onDelta is undefined when the caller
+          // does not supply it (Phase 8 baseline behaviour unchanged).
+          onDelta?.(event.delta);
           buf += event.delta;
         }
       };
