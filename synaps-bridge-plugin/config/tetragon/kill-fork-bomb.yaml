@@ -1,3 +1,35 @@
+# ⚠️ KNOWN GAP — Tetragon stable has no per-PID rate-limit primitive (2026-05)
+#
+# This policy FAILS TO LOAD on Tetragon v1.7.0 (current stable) with:
+#   unknown field "matchRateLimit"
+#
+# Root cause: The original design used `matchRateLimit` as a first-class
+# selector — this was either an internal/unmerged feature or has been removed
+# from the Tetragon stable API by v1.7.0.  It does not exist in v1.7's CRD.
+#
+# The `rateLimit` field that DOES exist (on `matchActions[]`) limits only
+# the EVENT EMISSION RATE — i.e., how often Tetragon logs/posts an event.
+# It cannot count per-process trigger invocations, so it cannot detect
+# fork-bombs (which need "PID X called wake_up_new_task > N times/sec").
+#
+# PRIMARY FORK-BOMB DEFENCE in SCP: the workspace container's pids.max
+# cgroup limit, set at container-creation time via --pids-limit (Docker) or
+# the cgroup v2 pids.max interface.  This is the OS-native fork-bomb defence
+# and is layer-appropriate per PHASE_6_SPEC_ADDENDUM.md §9.x:
+#   • cgroup pids.max  → hard cap enforced by the kernel, no BPF required
+#   • JS Reaper        → graceful workspace cleanup at application layer
+#   • Tetragon         → cross-container kernel kill-switch for OTHER policies
+#                        (egress block, module load, etc.)
+#
+# When/if Tetragon ships a per-PID counting primitive (e.g. a BPF map-backed
+# per-process counter selector), this YAML should be revisited and redesigned
+# against the new stable API.
+#
+# This file intentionally CONTINUES TO FAIL to load — that is the expected
+# behaviour, documented in the smoke playbook (phase-5-supervisor.md Step 2).
+# The spec content below is preserved as a readable record of the original
+# design intent, analogous to kill-cpu-runaway.yaml's "documented stub" status.
+#
 # kill-fork-bomb.yaml
 #
 # Purpose
