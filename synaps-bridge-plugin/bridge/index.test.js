@@ -1796,6 +1796,93 @@ describe('BridgeDaemon — heartbeatRepo threaded into ScpHttpServer', () => {
 
     await daemon.stop();
   });
+
+  // Item 9 — watcher heartbeat-mirror wiring regression guard.
+  //
+  // The watcher (SynapsCLI PR #44) sends `heartbeat_emit` ops over the bridge
+  // UDS. The receiver is ControlSocket._opHeartbeatEmit, which silently noops
+  // when `_heartbeatRepo` is null. Before this fix the daemon built the repo
+  // but never passed it to the ControlSocket factory, so every watcher tick
+  // landed as `{ok:true, supervisor:"noop"}` instead of persisting to Mongo.
+  it('controlSocketFactory receives non-null heartbeatRepo + workspaceRepo when supervisor.enabled=true (Item 9)', async () => {
+    const fakeRepo = { _isFakeHeartbeatRepo: true };
+    const fakeSup  = {
+      repo:    fakeRepo,
+      emitter: { start: vi.fn(), stop: vi.fn(async () => {}) },
+      reaper:  { start: vi.fn(), stop: vi.fn() },
+    };
+    const heartbeatFactory = vi.fn(async () => fakeSup);
+
+    let capturedCsArgs = null;
+    const controlSocketFactory = vi.fn((args) => {
+      capturedCsArgs = args;
+      return makeFakeSocket();
+    });
+
+    const fakeMongo = makeScpMongo();
+    const config    = makeScpSupervisorConfig({ supervisorEnabled: true });
+
+    const daemon = new BridgeDaemon({
+      config,
+      logger:  makeLogger(),
+      env:     {},
+      sessionRouterFactory:    vi.fn(() => makeFakeRouter()),
+      slackAdapterFactory:     vi.fn(() => makeFakeAdapter()),
+      controlSocketFactory,
+      memoryGatewayFactory:    vi.fn(() => ({ start: vi.fn(async () => {}), stop: vi.fn(async () => {}), enabled: false })),
+      mongoConnectFactory:     vi.fn().mockResolvedValue(fakeMongo),
+      workspaceManagerFactory: vi.fn().mockReturnValue({}),
+      heartbeatFactory,
+      scpHttpServerFactory:    vi.fn(() => ({ start: vi.fn(async () => ({ port: 0 })), stop: vi.fn(async () => {}) })),
+    });
+
+    await daemon.start();
+
+    expect(controlSocketFactory).toHaveBeenCalledTimes(1);
+    expect(capturedCsArgs).not.toBeNull();
+    // heartbeat_emit op needs both — repo to record, workspaceRepo for
+    // ownership check on workspace-component heartbeats.
+    expect(capturedCsArgs.heartbeatRepo).toBe(fakeRepo);
+    expect(capturedCsArgs.workspaceRepo).not.toBeNull();
+
+    await daemon.stop();
+  });
+
+  it('controlSocketFactory receives null heartbeatRepo when supervisor.enabled=false (Item 9)', async () => {
+    const heartbeatFactory = vi.fn(async () => null);
+
+    let capturedCsArgs = null;
+    const controlSocketFactory = vi.fn((args) => {
+      capturedCsArgs = args;
+      return makeFakeSocket();
+    });
+
+    const fakeMongo = makeScpMongo();
+    const config    = makeScpSupervisorConfig({ supervisorEnabled: false });
+
+    const daemon = new BridgeDaemon({
+      config,
+      logger:  makeLogger(),
+      env:     {},
+      sessionRouterFactory:    vi.fn(() => makeFakeRouter()),
+      slackAdapterFactory:     vi.fn(() => makeFakeAdapter()),
+      controlSocketFactory,
+      memoryGatewayFactory:    vi.fn(() => ({ start: vi.fn(async () => {}), stop: vi.fn(async () => {}), enabled: false })),
+      mongoConnectFactory:     vi.fn().mockResolvedValue(fakeMongo),
+      workspaceManagerFactory: vi.fn().mockReturnValue({}),
+      heartbeatFactory,
+      scpHttpServerFactory:    vi.fn(() => ({ start: vi.fn(async () => ({ port: 0 })), stop: vi.fn(async () => {}) })),
+    });
+
+    await daemon.start();
+
+    expect(controlSocketFactory).toHaveBeenCalledTimes(1);
+    expect(capturedCsArgs).not.toBeNull();
+    // With supervisor disabled heartbeat_emit silently noops — back-compat.
+    expect(capturedCsArgs.heartbeatRepo).toBeNull();
+
+    await daemon.stop();
+  });
 });
 
 

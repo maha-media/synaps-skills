@@ -485,8 +485,8 @@ function defaultSlackAdapterFactory({ auth, sessionRouter, memoryGateway, identi
  * @param {{ sessionRouter: SessionRouter, identityRouter: object, logger: object, version: string }} opts
  * @returns {ControlSocket}
  */
-function defaultControlSocketFactory({ sessionRouter, identityRouter, credBroker, hookBus, mcpTokenRepo, mcpToolAclRepo, mcpToolAclResolver, logger, version }) { // eslint-disable-line no-unused-vars
-  return new ControlSocket({ sessionRouter, identityRouter, credBroker, hookBus, mcpTokenRepo, mcpToolAclRepo, mcpToolAclResolver, logger, version });
+function defaultControlSocketFactory({ sessionRouter, identityRouter, credBroker, hookBus, mcpTokenRepo, mcpToolAclRepo, mcpToolAclResolver, heartbeatRepo, workspaceRepo, logger, version }) { // eslint-disable-line no-unused-vars
+  return new ControlSocket({ sessionRouter, identityRouter, credBroker, hookBus, mcpTokenRepo, mcpToolAclRepo, mcpToolAclResolver, heartbeatRepo, workspaceRepo, logger, version });
 }
 
 // ─── BridgeDaemon ─────────────────────────────────────────────────────────────
@@ -1047,6 +1047,8 @@ export class BridgeDaemon extends EventEmitter {
       mcpTokenRepo:        this._mcpTokenRepo,
       mcpToolAclRepo:      this._mcpToolAclRepo      ?? null,
       mcpToolAclResolver:  this._mcpToolAclResolver  ?? null,
+      heartbeatRepo:       this.supervisor ? this.supervisor.repo : null,
+      workspaceRepo:       this._workspaceRepo ?? null,
       logger: this.logger,
       version: '0.1.0',
     });
