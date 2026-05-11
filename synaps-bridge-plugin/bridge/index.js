@@ -751,6 +751,7 @@ export class BridgeDaemon extends EventEmitter {
       let builtMcpServer = null;
       let builtRateLimiter = null;
       let builtDcrHandler = null;
+      let builtOauthServer = null;
       try {
         if (this._mcpServerFactory) {
           // Test-injectable factory.
@@ -814,22 +815,74 @@ export class BridgeDaemon extends EventEmitter {
           let rpcRouter = null;
           if (this._config.mcp.surface_rpc_tools) {
             const { SynapsRpcSessionRouter } = await import('./core/synaps-rpc-session-router.js');
-            // The rpcFactory for tool surfacing creates a lightweight handle
-            // that wraps the existing DockerExecSynapsRpc send() interface.
-            // In a real deployment this would delegate to the workspace's rpc
-            // process; here we provide a safe stub that returns [] on tools_list
-            // (matches SynapsRpcSessionRouter's fault-tolerant probe contract).
-            const surfacingRpcFactory = async (synapsUserId) => ({
+            const { spawn } = await import('node:child_process');
+            // Real rpcFactory: spawn `synaps rpc` per probe, write the
+            // requested op (translating router's `op:` → binary's `type:`),
+            // and resolve with the parsed response frame.  Short-lived per
+            // probe; SynapsRpcSessionRouter caches results for 60s by default.
+            //
+            // Phase 9 Track 5 promotion: requires `synaps` binary ≥ v0.1.6
+            // which ships the `tools_list` rpc op (SynapsCLI PR #44).
+            const binPath = this._config.rpc.binary || 'synaps';
+            const surfacingLogger = this.logger;
+            const surfacingRpcFactory = async (_synapsUserId) => ({
               send: async (op) => {
-                if (op.op === 'tools_list') return { ok: false };  // stub: no tools yet
-                return { ok: false, error: 'not_implemented' };
+                return await new Promise((resolve) => {
+                  const child = spawn(binPath, ['rpc'], {
+                    stdio: ['pipe', 'pipe', 'pipe'],
+                  });
+                  let buf = '';
+                  let settled = false;
+                  const settle = (v) => {
+                    if (settled) return;
+                    settled = true;
+                    try { child.kill('SIGTERM'); } catch (_e) {}
+                    resolve(v);
+                  };
+                  const timer = setTimeout(() => settle({ ok: false, error: 'probe_timeout' }), 8000);
+                  if (typeof timer.unref === 'function') timer.unref();
+
+                  child.on('error', (err) => {
+                    surfacingLogger?.warn?.(`[mcp] surface probe spawn error: ${err.message}`);
+                    clearTimeout(timer);
+                    settle({ ok: false, error: 'spawn_error' });
+                  });
+                  child.stderr?.on('data', () => {});
+
+                  child.stdout.on('data', (chunk) => {
+                    buf += chunk.toString();
+                    let idx;
+                    while ((idx = buf.indexOf('\n')) !== -1) {
+                      const line = buf.slice(0, idx).trim();
+                      buf = buf.slice(idx + 1);
+                      if (!line) continue;
+                      let frame;
+                      try { frame = JSON.parse(line); } catch { continue; }
+                      if (frame.type === 'ready') {
+                        // Translate `op:` (router) → `type:` (binary).
+                        try {
+                          child.stdin.write(JSON.stringify({ ...op, type: op.op }) + '\n');
+                        } catch (_e) {
+                          clearTimeout(timer);
+                          settle({ ok: false, error: 'stdin_write_failed' });
+                        }
+                      } else if (frame.type === 'response' && frame.command === op.op) {
+                        clearTimeout(timer);
+                        settle({ ok: frame.ok === true, tools: frame.tools, error: frame.error });
+                      } else if (frame.type === 'error') {
+                        clearTimeout(timer);
+                        settle({ ok: false, error: frame.message || 'rpc_error' });
+                      }
+                    }
+                  });
+                });
               },
             });
             rpcRouter = new SynapsRpcSessionRouter({
               rpcFactory: surfacingRpcFactory,
               logger: this.logger,
             });
-            this.logger.info?.('[mcp] surface_rpc_tools enabled (rpcRouter wired)');
+            this.logger.info?.('[mcp] surface_rpc_tools enabled (rpcRouter wired — real spawn)');
           }
 
           // ── Phase 9 Wave C: ACL resolver ─────────────────────────────────
@@ -873,11 +926,52 @@ export class BridgeDaemon extends EventEmitter {
             approvalGate,
             audit,
             rateLimiter: builtRateLimiter,
-            sseEnabled:  this._config.mcp.sse?.enabled ?? false,
+            sseEnabled:    this._config.mcp.sse?.enabled ?? false,
+            streamDeltas:  this._config.mcp.sse?.stream_deltas ?? false,
             aclResolver: aclResolver ?? null,
             metrics:     this._metricsRegistry ?? null,
             logger: this.logger,
           });
+
+          // ── Phase 9 Track 3: OAuth 2.1 + PKCE ────────────────────────────
+          if (this._config.mcp.oauth?.enabled) {
+            try {
+              const { getSynapsOauthCodeModel } = await import('./core/db/models/synaps-oauth-code.js');
+              const { OauthCodeRepo }           = await import('./core/mcp/oauth/oauth-code-repo.js');
+              const { OauthMetadataHandler }    = await import('./core/mcp/oauth/oauth-metadata-handler.js');
+              const { OauthAuthorizeHandler }   = await import('./core/mcp/oauth/oauth-authorize-handler.js');
+              const { OauthTokenHandler }       = await import('./core/mcp/oauth/oauth-token-handler.js');
+              const { OauthServer }             = await import('./core/mcp/oauth/oauth-server.js');
+
+              const codeModel       = getSynapsOauthCodeModel(this._mongoose);
+              const codeRepo        = new OauthCodeRepo({ model: codeModel, logger: this.logger });
+              const metadataHandler = new OauthMetadataHandler({ config: this._config.mcp.oauth, logger: this.logger });
+              const authorizeHandler = new OauthAuthorizeHandler({
+                config:         this._config.mcp.oauth,
+                codeRepo,
+                tokenRepo,
+                identityRouter: this._identityRouter,
+                logger:         this.logger,
+              });
+              const tokenHandler = new OauthTokenHandler({
+                config:   this._config.mcp.oauth,
+                codeRepo,
+                tokenRepo,
+                logger:   this.logger,
+              });
+              builtOauthServer = new OauthServer({
+                config:           this._config.mcp.oauth,
+                authorizeHandler,
+                tokenHandler,
+                metadataHandler,
+                logger:           this.logger,
+              });
+              this.logger.info?.('[mcp] OAuth 2.1 server enabled');
+            } catch (err) {
+              this.logger.warn?.(`[mcp] OAuth init failed — disabling OAuth: ${err.message}`);
+              builtOauthServer = null;
+            }
+          }
         }
         this.logger.info?.('[mcp] enabled');
       } catch (err) {
@@ -887,6 +981,7 @@ export class BridgeDaemon extends EventEmitter {
       this._mcpServer = builtMcpServer;
       this._mcpRateLimiter = builtRateLimiter;
       this._mcpDcrHandler  = builtDcrHandler;
+      this._oauthServer    = builtOauthServer;
     }
 
     // 4b. Optional HTTP server + VNC proxy (SCP mode only).
@@ -912,6 +1007,7 @@ export class BridgeDaemon extends EventEmitter {
           rateLimiter:     this._mcpRateLimiter ?? null,
           sseEnabled:      this._config.mcp?.sse?.enabled ?? false,
           dcrHandler:      this._mcpDcrHandler ?? null,
+          oauthServer:     this._oauthServer ?? null,
           metricsRegistry: this._metricsRegistry ?? null,
           metricsConfig:   this._config.metrics ?? null,
           logger: this.logger,
