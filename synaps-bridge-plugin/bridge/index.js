@@ -751,6 +751,7 @@ export class BridgeDaemon extends EventEmitter {
       let builtMcpServer = null;
       let builtRateLimiter = null;
       let builtDcrHandler = null;
+      let builtOauthServer = null;
       try {
         if (this._mcpServerFactory) {
           // Test-injectable factory.
@@ -873,11 +874,52 @@ export class BridgeDaemon extends EventEmitter {
             approvalGate,
             audit,
             rateLimiter: builtRateLimiter,
-            sseEnabled:  this._config.mcp.sse?.enabled ?? false,
+            sseEnabled:    this._config.mcp.sse?.enabled ?? false,
+            streamDeltas:  this._config.mcp.sse?.stream_deltas ?? false,
             aclResolver: aclResolver ?? null,
             metrics:     this._metricsRegistry ?? null,
             logger: this.logger,
           });
+
+          // ── Phase 9 Track 3: OAuth 2.1 + PKCE ────────────────────────────
+          if (this._config.mcp.oauth?.enabled) {
+            try {
+              const { getSynapsOauthCodeModel } = await import('./core/db/models/synaps-oauth-code.js');
+              const { OauthCodeRepo }           = await import('./core/mcp/oauth/oauth-code-repo.js');
+              const { OauthMetadataHandler }    = await import('./core/mcp/oauth/oauth-metadata-handler.js');
+              const { OauthAuthorizeHandler }   = await import('./core/mcp/oauth/oauth-authorize-handler.js');
+              const { OauthTokenHandler }       = await import('./core/mcp/oauth/oauth-token-handler.js');
+              const { OauthServer }             = await import('./core/mcp/oauth/oauth-server.js');
+
+              const codeModel       = getSynapsOauthCodeModel(this._mongoose);
+              const codeRepo        = new OauthCodeRepo({ model: codeModel, logger: this.logger });
+              const metadataHandler = new OauthMetadataHandler({ config: this._config.mcp.oauth, logger: this.logger });
+              const authorizeHandler = new OauthAuthorizeHandler({
+                config:         this._config.mcp.oauth,
+                codeRepo,
+                tokenRepo,
+                identityRouter: this._identityRouter,
+                logger:         this.logger,
+              });
+              const tokenHandler = new OauthTokenHandler({
+                config:   this._config.mcp.oauth,
+                codeRepo,
+                tokenRepo,
+                logger:   this.logger,
+              });
+              builtOauthServer = new OauthServer({
+                config:           this._config.mcp.oauth,
+                authorizeHandler,
+                tokenHandler,
+                metadataHandler,
+                logger:           this.logger,
+              });
+              this.logger.info?.('[mcp] OAuth 2.1 server enabled');
+            } catch (err) {
+              this.logger.warn?.(`[mcp] OAuth init failed — disabling OAuth: ${err.message}`);
+              builtOauthServer = null;
+            }
+          }
         }
         this.logger.info?.('[mcp] enabled');
       } catch (err) {
@@ -887,6 +929,7 @@ export class BridgeDaemon extends EventEmitter {
       this._mcpServer = builtMcpServer;
       this._mcpRateLimiter = builtRateLimiter;
       this._mcpDcrHandler  = builtDcrHandler;
+      this._oauthServer    = builtOauthServer;
     }
 
     // 4b. Optional HTTP server + VNC proxy (SCP mode only).
@@ -912,6 +955,7 @@ export class BridgeDaemon extends EventEmitter {
           rateLimiter:     this._mcpRateLimiter ?? null,
           sseEnabled:      this._config.mcp?.sse?.enabled ?? false,
           dcrHandler:      this._mcpDcrHandler ?? null,
+          oauthServer:     this._oauthServer ?? null,
           metricsRegistry: this._metricsRegistry ?? null,
           metricsConfig:   this._config.metrics ?? null,
           logger: this.logger,
