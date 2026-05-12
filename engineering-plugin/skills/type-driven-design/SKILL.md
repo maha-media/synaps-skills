@@ -1,6 +1,6 @@
 ---
 name: type-driven-design
-description: Use when designing Rust APIs, protocol/config boundaries, domain models, or refactors where invariants should be encoded in types instead of comments or runtime conventions.
+description: Use when designing typed APIs, protocol/config boundaries, domain models, or refactors where invariants should be encoded in types instead of comments or runtime conventions.
 ---
 
 # Type-Driven Design
@@ -13,16 +13,16 @@ This skill is not a license to build type machinery for its own sake. Abstract f
 
 Use this when touching:
 
-- Rust APIs and module boundaries
+- Typed APIs and module boundaries in Rust, TypeScript, or any language with enforceable type boundaries
 - Plugin manifests, settings, config, or protocol frames
 - IDs, paths, permissions, request IDs, command names, model/provider names
 - Numeric conversions, lengths, indexes, sample rates, terminal coordinates, timestamps
-- Any `serde_json::Value`, raw `String`, raw integer, or untrusted filesystem/network input crossing into core logic
+- Any raw JSON/`unknown`/`serde_json::Value`, raw `String`, raw number/integer, or untrusted filesystem/network input crossing into core logic
 
 ## Core Pattern
 
 ```text
-External input -> Raw type -> Validated type -> Runtime type
+External input -> Raw/unknown type -> Validated domain type -> Runtime type
 ```
 
 Examples:
@@ -33,12 +33,16 @@ struct ValidatedManifest { id: PluginId, commands: Vec<CommandSpec> }
 struct LoadedPlugin { manifest: ValidatedManifest, trust: TrustDecision }
 ```
 
-```rust
-struct PluginId(String);
-struct ProviderId(String);
-struct RequestId(String);
-struct SampleRateHz(u32);
-struct FrameCount(usize);
+```ts
+type RawManifest = unknown;
+type ValidatedManifest = {
+  id: PluginId;
+  commands: readonly CommandSpec[];
+};
+type LoadedPlugin = {
+  manifest: ValidatedManifest;
+  trust: TrustDecision;
+};
 ```
 
 Parse and validate at the boundary. After that, internal code should accept the validated type, not the raw representation.
@@ -47,12 +51,12 @@ Parse and validate at the boundary. After that, internal code should accept the 
 
 Before adding or changing an API, ask:
 
-- **Concept:** What domain concept is this value? If the name is only `String`, `usize`, or `Value`, is that hiding meaning?
-- **Invariant:** What must always be true? Can the type constructor enforce it?
+- **Concept:** What domain concept is this value? If the name is only `String`, `string`, `number`, `usize`, `Value`, or `unknown`, is that hiding meaning?
+- **Invariant:** What must always be true? Can the constructor/parser/schema enforce it?
 - **Boundary:** Where does untrusted input become trusted internal data?
-- **Conversion:** Should this be `TryFrom`/`FromStr` instead of ad-hoc validation?
-- **Closed set:** Should this string be an enum?
-- **Numeric safety:** Are casts checked with `try_from`, `checked_*`, or explicitly justified `saturating_*`/`wrapping_*` semantics?
+- **Conversion:** Should this be `TryFrom`/`FromStr`, a parser function, or a schema parse instead of ad-hoc validation?
+- **Closed set:** Should this string be an enum, string-literal union, or discriminated union?
+- **Numeric safety:** Are casts/conversions checked with `try_from`, `checked_*`, `Number.isSafeInteger`, or explicit range checks?
 - **Call-site simplicity:** Does the safe API read like ordinary code?
 - **Cost:** Is the new type preventing a real bug class or repeated validation?
 
@@ -110,6 +114,103 @@ struct ShellCommand { program: OsString, args: Vec<OsString> }
 
 Do not let raw protocol values, user paths, or plugin-controlled commands flow directly into execution.
 
+## TypeScript Patterns
+
+### Branded types for semantic IDs
+
+```ts
+type Brand<T, Name extends string> = T & { readonly __brand: Name };
+
+type PluginId = Brand<string, "PluginId">;
+
+function parsePluginId(value: unknown): PluginId {
+  if (typeof value !== "string" || value.length === 0 || value.includes("/")) {
+    throw new Error("invalid plugin id");
+  }
+  return value as PluginId;
+}
+```
+
+A brand does not validate by itself. Only create branded values in parser/constructor functions that enforce the invariant.
+
+### Schema validation from `unknown`
+
+Use schema validation at boundaries when JSON, config, or RPC frames enter the system. Zod example:
+
+```ts
+import { z } from "zod";
+
+const ManifestSchema = z.object({
+  name: z.string().min(1),
+  version: z.string().min(1),
+  permissions: z.array(z.string()).default([]),
+});
+
+type ValidatedManifest = z.infer<typeof ManifestSchema>;
+
+function parseManifest(input: unknown): ValidatedManifest {
+  return ManifestSchema.parse(input);
+}
+```
+
+After `parseManifest`, pass `ValidatedManifest` through core logic instead of raw `unknown` or untyped JSON.
+
+### String-literal unions and discriminated unions
+
+For small closed sets:
+
+```ts
+const PERMISSIONS = ["shell.exec", "file.read", "file.write"] as const;
+type Permission = (typeof PERMISSIONS)[number];
+```
+
+For events or protocol variants, prefer discriminated unions:
+
+```ts
+type RpcEvent =
+  | { kind: "started"; id: RequestId }
+  | { kind: "finished"; id: RequestId; code: number }
+  | { kind: "failed"; id: RequestId; error: string };
+```
+
+Use exhaustive switches so new variants do not silently fall through:
+
+```ts
+function renderEvent(event: RpcEvent): string {
+  switch (event.kind) {
+    case "started":
+      return `started ${event.id}`;
+    case "finished":
+      return `finished ${event.id}`;
+    case "failed":
+      return `failed ${event.id}`;
+    default: {
+      const exhaustive: never = event;
+      return exhaustive;
+    }
+  }
+}
+```
+
+### Safe numbers and ranges
+
+TypeScript numbers are floating-point values. Validate integers and ranges explicitly before using them as ports, lengths, indexes, durations, or protocol sizes.
+
+```ts
+type Port = Brand<number, "Port">;
+
+function parsePort(value: unknown): Port {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 65_535) {
+    throw new Error("invalid port");
+  }
+  return value as Port;
+}
+```
+
+### Avoid unsafe `as` assertions
+
+`as SomeType` is not validation. Treat assertions like a cast at a trust boundary: acceptable only immediately after a check/schema parse, or inside a narrow constructor that enforces the invariant.
+
 ## Abstraction Test
 
 Before accepting a new abstraction:
@@ -124,12 +225,15 @@ If not, prefer straightforward code and revisit after the second or third real u
 
 ## Red Flags
 
-- `String` used for several different IDs in one API
-- `serde_json::Value` passed deep into core logic
+- `String`/`string` used for several different IDs in one API
+- `serde_json::Value`, `unknown`, or `any` passed deep into core logic
 - Manual validation repeated in multiple call sites
 - Boolean parameters whose meaning is unclear (`true, false, true`)
-- Unchecked `as` casts on lengths, indexes, timestamps, or protocol values
-- Comments saying "must be valid" but no type or constructor enforcing it
+- Unchecked numeric casts/conversions on lengths, indexes, timestamps, or protocol values
+- TypeScript `number` accepted for ports, sizes, or indexes without `Number.isSafeInteger` and range checks
+- TypeScript `as SomeType` used without nearby validation
+- Non-exhaustive switch over a discriminated union
+- Comments saying "must be valid" but no constructor, parser, schema, or type enforcing it
 - Generic abstractions introduced before concrete duplication exists
 - Safe usage requires callers to remember a separate validation step
 
@@ -139,7 +243,7 @@ Before considering the design ready:
 
 - [ ] Raw external input is converted at a clear boundary
 - [ ] Core logic accepts validated/domain types, not raw data
-- [ ] Important invariants are enforced by constructors or enum variants
+- [ ] Important invariants are enforced by constructors, parsers, schemas, or enum/union variants
 - [ ] Numeric conversions are checked or explicitly justified
 - [ ] Dangerous operations are isolated behind visibly named types/functions
 - [ ] The safe path is the easiest path at the call site
