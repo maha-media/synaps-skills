@@ -32,32 +32,19 @@ Why: the convergence loop depends on controlled context. Async overlap causes st
 
 ## Authorization
 
-This pattern is **invoked by the orchestrator only when the plan
-explicitly declares `convergence: informed` or `convergence: holdout`**.
-The decision is owned by the human during
-**planning-and-task-breakdown**, not by the agent at runtime.
+Run this pattern only when the plan explicitly declares `convergence: informed` or `convergence: holdout`. The decision is made during **planning-and-task-breakdown**, before implementation starts.
 
-Why the human owns it:
+Why it must be fixed up front:
 
-- **Cost** — ~4× single-agent model spend. Budget is a human decision.
-- **Stakes** — "is this consequential enough for bias elimination?"
-  requires context the agent doesn't always have (security posture,
-  blast radius, whether a human will review the output).
-- **Policy** — threshold, axis weights, and loop bounds are policy
-  choices, not preferences. They must be fixed before the first score is
-  seen, otherwise the loop becomes goalpost-moving theatre.
+- **Cost** — ~4× single-agent model spend.
+- **Stakes** — use it only when the blast radius, security posture, or review needs justify bias elimination.
+- **Policy** — threshold, axis weights, and loop bounds must be fixed before the first score is seen; changing them later is goalpost-moving.
 
-If the plan says `convergence: none`, **do not run this loop** even if
-the work feels risky mid-implementation. Surface the risk to the human
-and request a plan amendment. Unilaterally escalating to convergence is
-unauthorized; unilaterally skipping it when the plan demanded it is also
-unauthorized.
+If the plan says `convergence: none`, do not run this loop mid-implementation. In autonomous mode, record the risk in the final report and continue with normal verification unless the user explicitly asked to pause. If a required safety decision cannot be inferred, stop with a clear blocked-state report.
 
 ## When to Use
 
-Use the criteria below during **planning-and-task-breakdown** to choose
-between `convergence: none`, `informed`, or `holdout`. These are
-human-evaluated checks, not agent-runtime decisions.
+Use the criteria below during **planning-and-task-breakdown** to choose between `convergence: none`, `informed`, or `holdout`. In autonomous mode, choose from the provided spec/task context and record the rationale.
 
 Choose **`informed`** or **`holdout`** when any of these hold:
 
@@ -73,7 +60,7 @@ Choose **`holdout`** specifically when:
 
 - Security-critical code where the author marking their own homework is
   unacceptable
-- The output will ship without human review
+- The output has high blast radius or low tolerance for review bias
 - Bias elimination matters more than speed
 
 Choose **`none`** for:
@@ -81,8 +68,7 @@ Choose **`none`** for:
 - Trivial changes, refactors confined to one file
 - Exploratory work where the spec doesn't yet exist (convergence needs a
   target — without one, the loop has nothing to converge to)
-- Anything where human review at the end will catch the same issues
-  convergence would catch
+- Anything where normal code review and verification will catch the same issues convergence would catch
 
 
 ## The Pattern
@@ -179,7 +165,7 @@ Tester NEVER sees the design rationale (only scenarios + code).
 Judge NEVER sees the source code (only spec + test report).
 ```
 
-Use for: high-stakes work where bias elimination matters more than speed. Security-critical code, work being shipped without human review, anything where "the author would mark their own homework favourably."
+Use for: high-stakes work where bias elimination matters more than speed. Security-critical code, high-blast-radius work, anything where "the author would mark their own homework favourably."
 
 The walls only hold if **you** enforce them at dispatch time. The orchestrator controls what each role sees by controlling its task input. Double-check before every dispatch. Conversation history is also context: do not pass it unless the role is explicitly allowed to see it.
 
@@ -202,7 +188,7 @@ Weights sum to 1.0. Adjust per project, but keep spec compliance dominant — it
 | Score | Verdict | Action |
 |---|---|---|
 | ≥ threshold (default 0.8) | **PROCEED** | Ship |
-| 0.7 – threshold | **REVIEW** | Human decides — automation cannot adjudicate this band |
+| 0.7 – threshold | **REVIEW** | Needs explicit escalation report; do not auto-ship |
 | < 0.7 | **REWORK** | Fix loop |
 
 Two-stage gate: if spec_compliance < 0.7, stop scoring further axes. Build the right thing before optimising for the right way.
@@ -226,11 +212,11 @@ Feedback describes **behaviour**, not test internals. The Builder fixes the beha
 
 | Limit | Default | Why it exists |
 |---|---|---|
-| `max_fix_iterations` | 2 | If two attempts at structured feedback don't converge, the loop won't. Stop and escalate. |
+| `max_fix_iterations` | 2 | If two attempts at structured feedback don't converge, the loop won't. Stop and report the bound clearly. |
 | `max_total_calls` | 10 | Hard cap across all fresh role calls to prevent runaway cost. |
-| Stagnation detection | Last 3 scores within 0.05 | If the score isn't moving, more iterations won't help. Try a fundamentally different approach or escalate. |
+| Stagnation detection | Last 3 scores within 0.05 | If the score isn't moving, more iterations won't help. Try a fundamentally different approach or report the bound clearly. |
 
-When any limit trips: produce an escalation report (current score, structured feedback, stagnation status) and **stop**. Do not silently continue.
+When any limit trips: produce an escalation report (current score, structured feedback, stagnation status) and **stop with a documented blocked-state report**. Do not silently continue.
 
 ## Common Rationalizations
 

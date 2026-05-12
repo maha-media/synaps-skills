@@ -36,6 +36,16 @@ Does the change fit the system's design?
 - Dependencies flowing in the right direction (no circular deps)?
 - Abstraction level appropriate (not over-engineered, not too coupled)?
 
+### 3.5 Type/Invariants
+Are important domain rules represented in code rather than comments?
+- Raw external input converted to validated/domain types at the boundary?
+- Important IDs, paths, permissions, and protocol frames represented by newtypes/enums instead of raw strings?
+- Impossible states made impossible where practical?
+- Numeric conversions checked or explicitly justified?
+- Dangerous boundaries visible in names and module structure?
+
+For deeper API/model design, see the **type-driven-design** skill.
+
 ### 4. Security
 - User input validated and sanitized?
 - Secrets kept out of code, logs, and version control?
@@ -119,14 +129,16 @@ Categorize ALL findings with severity:
 - Magic numbers without explanation
 - Dead code committed alongside new code
 - Overly complex solution for a simple problem
+- Stringly typed or integerly typed domain concepts with repeated validation
+- Unchecked numeric casts on lengths, indexes, protocol values, or timestamps
 - API changes without documentation updates
 
 ## Verification
 
 Before approving:
-- [ ] All five axes evaluated
+- [ ] All review axes evaluated
 - [ ] All Critical issues resolved
 - [ ] Tests pass and cover new behavior
-- [ ] Build is clean (`cargo build`, `cargo clippy`)
+- [ ] Build/lint checks are clean for the project type
 - [ ] Change is appropriately sized
 - [ ] No secrets, credentials, or sensitive data in the diff

@@ -63,7 +63,7 @@ Bug report → Write test that demonstrates bug → Test FAILS (bug confirmed)
  ╱──────────────────╲
 ```
 
-**The Beyonce Rule:** If you liked it, you should have put a test on it.
+**The durability rule:** behavior worth keeping is behavior worth testing.
 
 ### Test Sizes
 
@@ -142,7 +142,7 @@ mod complete_task {
 
 | Rationalization | Reality |
 |---|---|
-| "I'll write tests after the code works" | You won't. Tests written after test implementation, not behavior. |
+| "I'll write tests after the code works" | You won't. Tests written after the fact often mirror the implementation instead of specifying behavior. |
 | "This is too simple to test" | Simple code gets complicated. The test documents expected behavior. |
 | "Tests slow me down" | Tests slow you down now. They speed you up every time you change code later. |
 | "I tested it manually" | Manual testing doesn't persist. Tomorrow's change might break it with no warning. |
@@ -161,7 +161,7 @@ mod complete_task {
 
 After completing any implementation:
 - [ ] Every new behavior has a corresponding test
-- [ ] All tests pass: `cargo test`
+- [ ] Relevant tests pass with the project's test command
 - [ ] Bug fixes include a reproduction test that failed before the fix
 - [ ] Test names describe the behavior being verified
 - [ ] No tests were skipped or disabled

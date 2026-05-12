@@ -7,7 +7,7 @@ description: Use before claiming work is complete, fixed, or passing, or before 
 
 ## Overview
 
-Claiming work is complete without verification is dishonesty, not efficiency.
+Claiming work is complete without fresh verification evidence is invalid. Evidence before claims.
 
 **Core principle:** Evidence before claims, always.
 
@@ -34,8 +34,22 @@ BEFORE claiming any status or expressing satisfaction:
    - If YES: State claim WITH evidence
 5. ONLY THEN: Make the claim
 
-Skip any step = lying, not verifying
+Skip any step = unverified. Report actual uncertainty instead of claiming success
 ```
+
+## Verification Command Selection
+
+Choose commands that match the project. Run the strongest configured checks available; if a tool is missing, report that explicitly instead of pretending it passed.
+
+| Project type | Minimum useful verification |
+|---|---|
+| Rust | `cargo fmt --check`, `cargo test`, `cargo clippy --all-targets --all-features -- -D warnings` when clippy is available |
+| Node/JS | `npm test`; `npm run lint` or `npm run typecheck` if defined |
+| Python | `pytest`; `ruff`, `mypy`, or project-configured checks if present |
+| Shell | `bash -n script.sh`; `shellcheck` if available |
+| Docs/skills | frontmatter/manifest validation, link/path sanity, grep for corrupted characters |
+| Synaps plugin | manifest validation plus plugin setup/test scripts when present |
+| Mixed repo | run checks for every touched subsystem, not just the easiest one |
 
 ## Common Failures
 
@@ -73,7 +87,7 @@ Skip any step = lying, not verifying
 | "Agent said success" | Verify independently |
 | "I'm tired" | Exhaustion ≠ excuse |
 | "Partial check is enough" | Partial proves nothing |
-| "Different words so rule doesn't apply" | Spirit over letter |
+| "Different words so rule doesn't apply" | If it implies success, it needs evidence. |
 
 ## Key Patterns
 
@@ -110,11 +124,11 @@ Skip any step = lying, not verifying
 ## Why This Matters
 
 From 24 failure memories:
-- your human partner said "I don't believe you" - trust broken
+- unverified success claims broke trust
 - Undefined functions shipped - would crash
 - Missing requirements shipped - incomplete features
 - Time wasted on false completion → redirect → rework
-- Violates: "Honesty is a core value. If you lie, you'll be replaced."
+- Trust depends on precise status reporting.
 
 ## When To Apply
 

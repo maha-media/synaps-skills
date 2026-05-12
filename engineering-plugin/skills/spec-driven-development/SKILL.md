@@ -21,13 +21,13 @@ Write a structured specification before writing any code. The spec is the shared
 SPECIFY ──→ PLAN ──→ [WORKTREE] ──→ TASKS ──→ IMPLEMENT
    │          │           │            │          │
    ▼          ▼           ▼            ▼          ▼
- Human      Human    Worktree       Human      Human
- reviews    reviews   created       reviews    reviews
+ Spec      Plan     Worktree       Tasks     Implement
+ written   written  created        written   verified
 ```
 
-Do not advance to the next phase until the current one is validated.
+Do not advance to the next phase until the current one has a durable artifact and clear verification. In autonomous mode, do not pause for approval at phase boundaries unless the user explicitly requested it.
 
-**The worktree gate is non-negotiable.** SPECIFY and PLAN may happen on the primary checkout. Once the plan is approved — before writing tasks or any code — switch to a dedicated worktree. See **worktrees-by-default**.
+**The worktree gate is non-negotiable.** SPECIFY and PLAN may happen on the primary checkout. Once the plan exists — before writing tasks or any code — switch to a dedicated worktree. See **worktrees-by-default**.
 
 ## Phase 1: Specify
 
@@ -38,7 +38,7 @@ ASSUMPTIONS I'M MAKING:
 1. This is a CLI application (not a web service)
 2. Persistence uses JSON on disk (not SQLite)
 3. We're targeting Linux primarily
-→ Correct me now or I'll proceed with these.
+→ I will proceed with these unless the task/spec contradicts them.
 ```
 
 Don't silently fill in ambiguous requirements. Assumptions are the most dangerous form of misunderstanding.
@@ -64,7 +64,7 @@ REFRAMED SUCCESS CRITERIA:
 - Startup time < 50ms
 - Response to input < 16ms (60fps)
 - Binary size < 10MB
-→ Are these the right targets?
+→ I will use these targets unless the task/spec sets different ones.
 ```
 
 ## Phase 2: Plan
@@ -79,7 +79,7 @@ With the validated spec, generate a technical implementation plan:
 > **Surface stakes for the convergence decision.** The spec should call
 > out anything that affects the convergence-mode choice: security-critical
 > paths, autonomous-merge expectations, blast radius, bias-sensitive
-> review needs. The human uses this in **planning-and-task-breakdown**
+> review needs. Use this in **planning-and-task-breakdown**
 > Step 1.5 to choose `convergence: none` | `informed` | `holdout`. See
 > **convergence-loop** for the pattern itself.
 
@@ -122,7 +122,6 @@ Execute tasks using the **incremental-implementation** and **test-driven-develop
 
 Before proceeding to implementation:
 - [ ] Spec covers all six core areas
-- [ ] Human has reviewed and approved
 - [ ] Success criteria are specific and testable
 - [ ] Boundaries (Always/Ask/Never) are defined
 - [ ] Spec is saved to a file in the repository

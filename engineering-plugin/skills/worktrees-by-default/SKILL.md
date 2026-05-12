@@ -1,6 +1,6 @@
 ---
 name: worktrees-by-default
-description: Isolates every implementation in a dedicated git worktree. Use when an implementation plan is approved, code is about to be written, or a bug fix is starting. Never implement on the primary checkout.
+description: Isolates every implementation in a dedicated git worktree. Use when an implementation plan exists, code is about to be written, or a bug fix is starting. Never implement on the primary checkout.
 ---
 
 # Worktrees By Default
@@ -12,7 +12,7 @@ Every implementation, fix, or refactor happens inside a dedicated `git worktree`
 ```
 THE MOMENT EITHER OF THESE IS TRUE → YOU MUST BE IN A WORKTREE
 
-1. An implementation plan has been written (and approved)
+1. An implementation plan has been written
 2. You are about to write or modify code, configs, or specs that ship
 ```
 
@@ -183,7 +183,7 @@ When multiple agents (or processes) operate on the same repo:
 | "Branches are good enough" | Until another process switches branches mid-edit. |
 | "This is just a quick fix" | Quick fixes are how broken main happens. Worktree it. |
 | "Setting up a worktree is overhead" | `git worktree add` is one command. The overhead is the rule, not the tooling. |
-| "Plans don't need worktrees" | Correct — but the moment the plan is *approved*, you do. |
+| "Plans don't need worktrees" | Correct — but the moment the plan exists and implementation is next, you do. |
 | "I'll clean up the worktree later" | Later is when collisions happen. Cleanup is part of merge, not a future task. |
 | "The branch will get auto-deleted on the remote" | Remote auto-delete doesn't touch your local worktree, local branch, or disk. |
 

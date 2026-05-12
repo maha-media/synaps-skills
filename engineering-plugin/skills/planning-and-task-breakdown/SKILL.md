@@ -19,18 +19,9 @@ Before writing any code:
 
 **Do NOT write code during planning.** Output is a plan document, not implementation.
 
-### Step 1.5: Convergence Decision (Human-owned)
+### Step 1.5: Convergence Decision
 
-Before decomposing tasks, the human must answer: does this work warrant a
-multi-agent convergence loop? See **convergence-loop** for the pattern.
-
-**This decision is owned by the human, not the agent.** Two reasons:
-
-- **Cost** — convergence is ~4× single-agent model spend. The human owns
-  the budget.
-- **Stakes** — "is this consequential enough for bias elimination?"
-  requires context the agent doesn't always have (security posture,
-  blast radius, whether a human will review the output).
+Before decomposing tasks, decide whether the work warrants a multi-agent convergence loop. See **convergence-loop** for the pattern. In autonomous mode, make the smallest safe choice from the available task/spec context; do not pause for approval unless the user explicitly asked for a checkpoint.
 
 The plan must commit to one of:
 
@@ -38,7 +29,7 @@ The plan must commit to one of:
 |---|---|---|
 | `convergence: none` | Trivial, exploratory, low-stakes work | 1× |
 | `convergence: informed` | Medium/large feature work, bias matters but speed dominates | ~4× |
-| `convergence: holdout` | Security-critical code, autonomous merges without human review, work where the author would mark their own homework favourably | ~4× + walls overhead |
+| `convergence: holdout` | Security-critical code, high blast radius, or work where author/tester bias is unacceptable | ~4× + walls overhead |
 
 If `informed` or `holdout`, the plan also fixes — **before any code is
 written** — these parameters:
@@ -51,9 +42,7 @@ written** — these parameters:
 **Do not change these mid-run.** Adjusting threshold or axis weights
 after seeing the first score is goalpost-moving and defeats the loop.
 
-If during implementation the agent believes the wrong mode was chosen,
-**stop and surface it to the human for a plan amendment** — do not
-unilaterally upgrade or skip convergence.
+If during implementation the chosen mode appears wrong, do not silently change it. Record the risk, continue with the declared mode when safe, and stop only if a required safety decision cannot be inferred.
 
 ### Step 2: Dependency Graph
 
@@ -103,8 +92,8 @@ Each task follows this structure:
 - [ ] [Specific, testable condition]
 
 **Verification:**
-- [ ] Tests pass: `cargo test`
-- [ ] Build succeeds: `cargo build`
+- [ ] Tests pass: [project test command]
+- [ ] Build/check succeeds: [project build/check command]
 - [ ] Manual check: [what to verify]
 
 **Dependencies:** [Task numbers or "None"]
@@ -124,7 +113,6 @@ Arrange tasks so that:
 - [ ] All tests pass
 - [ ] Application builds without errors
 - [ ] Core flow works end-to-end
-- [ ] Review with human before proceeding
 ```
 
 ### Step 6: Switch to a Worktree
@@ -185,13 +173,11 @@ If a task is L or larger, break it down further. Agents perform best on S and M 
 - All tasks are XL-sized
 - No checkpoints between tasks
 - Dependency order not considered
-- Plan is approved but no worktree was created (see **worktrees-by-default**)
-- Convergence mode not declared — agent will either skip the loop or
-  invoke it gratuitously without authorization
+- Plan exists but no worktree was created before implementation (see **worktrees-by-default**)
+- Convergence mode not declared — the agent will either skip the loop or invoke it gratuitously
 - Threshold or axis weights adjusted after the first score (goalpost
   moving — defeats the loop)
-- Agent unilaterally upgraded `convergence: none` → `informed`/`holdout`
-  mid-run instead of pausing for a human plan amendment
+- Agent silently changed `convergence: none` → `informed`/`holdout` mid-run
 
 ## Verification
 
@@ -201,7 +187,6 @@ Before starting implementation:
 - [ ] Dependencies are identified and ordered
 - [ ] No task touches more than ~5 files
 - [ ] Checkpoints exist between major phases
-- [ ] Human has reviewed and approved the plan
 - [ ] Convergence mode declared (`none` | `informed` | `holdout`)
 - [ ] If not `none`: threshold, axis weights, and loop bounds fixed
 - [ ] Dedicated worktree created and active (`git worktree list` shows it; `pwd` is inside it)

@@ -91,7 +91,7 @@ If you notice something worth improving outside scope, note it:
 NOTICED BUT NOT TOUCHING:
 - src/utils.rs has dead code (unrelated to this task)
 - The auth module needs better error messages (separate task)
-→ Want me to create tasks for these?
+→ Record these for a separate follow-up; do not expand current scope.
 ```
 
 ### Rule 3: One Thing at a Time
@@ -100,7 +100,7 @@ Each increment changes one logical thing. Don't mix concerns. Bad: one commit ad
 
 ### Rule 4: Keep It Compilable
 
-After each increment, `cargo build` succeeds and `cargo test` passes. Don't leave the codebase broken between slices.
+After each increment, the relevant build and test commands succeed. Don't leave the codebase broken between slices.
 
 ### Rule 5: Feature Flags for Incomplete Features
 
@@ -126,9 +126,9 @@ Each increment should be independently revertable:
 
 After each increment:
 - [ ] Change does one thing and does it completely
-- [ ] All existing tests still pass (`cargo test`)
-- [ ] Build succeeds (`cargo build`)
-- [ ] Linting passes (`cargo clippy`)
+- [ ] Relevant existing tests still pass
+- [ ] Build/check command succeeds
+- [ ] Linting/static checks pass when configured
 - [ ] New functionality works as expected
 - [ ] Change is committed with a descriptive message
 
@@ -157,7 +157,7 @@ After each increment:
 After completing all increments for a task:
 - [ ] Each increment was individually tested and committed
 - [ ] Full test suite passes
-- [ ] Build is clean (`cargo build`, `cargo clippy`)
+- [ ] Build/lint checks are clean for the project type
 - [ ] Feature works end-to-end as specified
 - [ ] No uncommitted changes remain
 - [ ] All commits live on the worktree branch, not on the integration branch directly

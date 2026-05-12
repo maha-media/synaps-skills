@@ -35,7 +35,7 @@ Can you reproduce?
     └── Truly random? Add defensive logging, document conditions
 ```
 
-For test failures:
+For test failures, run the smallest command that reproduces the failure, then run the relevant wider suite. Rust examples:
 ```bash
 # Run the specific failing test
 cargo test test_name -- --nocapture
@@ -66,7 +66,7 @@ Which layer is failing?
 git bisect start
 git bisect bad                    # Current commit is broken
 git bisect good <known-good-sha> # This commit worked
-git bisect run cargo test         # Automated binary search
+git bisect run <test-command>     # Automated binary search
 ```
 
 ### Step 3: Reduce
@@ -111,11 +111,12 @@ fn handles_special_characters_in_search() {
 This test will prevent the same bug from recurring.
 
 ### Step 6: Verify End-to-End
+Run the project's relevant verification commands. For Rust this is often:
 ```bash
 cargo test test_name        # Specific test passes
 cargo test                  # Full suite (no regressions)
 cargo build                 # Build clean
-cargo clippy                # No new warnings
+cargo clippy                # No new warnings, when available
 ```
 
 ## Error-Specific Triage
