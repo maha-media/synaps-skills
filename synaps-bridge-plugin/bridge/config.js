@@ -39,6 +39,13 @@ export const BRIDGE_CONFIG_DEFAULTS = Object.freeze({
       respond_to_mentions: true,
       thread_replies: true,
     }),
+    discord: Object.freeze({
+      enabled: false,
+      bot_token_env: 'DISCORD_BOT_TOKEN',
+      respond_to_dms: true,
+      respond_to_mentions: true,
+      thread_replies: true,
+    }),
   }),
   platform: Object.freeze({
     mode: 'bridge',  // 'bridge' | 'scp'
@@ -339,6 +346,18 @@ function _buildConfig(parsed, logger) {
     respond_to_dms:    rawSlack.respond_to_dms     !== undefined ? Boolean(rawSlack.respond_to_dms)    : DS.respond_to_dms,
     respond_to_mentions: rawSlack.respond_to_mentions !== undefined ? Boolean(rawSlack.respond_to_mentions) : DS.respond_to_mentions,
     thread_replies:    rawSlack.thread_replies     !== undefined ? Boolean(rawSlack.thread_replies)    : DS.thread_replies,
+  });
+
+  // ── [sources.discord] ─────────────────────────────────────────────────────
+  const rawDiscord = (rawSources.discord && typeof rawSources.discord === 'object') ? rawSources.discord : {};
+  const DD = D.sources.discord;
+
+  const discord = Object.freeze({
+    enabled:             rawDiscord.enabled             !== undefined ? Boolean(rawDiscord.enabled)             : DD.enabled,
+    bot_token_env:       rawDiscord.bot_token_env       !== undefined ? String(rawDiscord.bot_token_env)        : DD.bot_token_env,
+    respond_to_dms:      rawDiscord.respond_to_dms      !== undefined ? Boolean(rawDiscord.respond_to_dms)      : DD.respond_to_dms,
+    respond_to_mentions: rawDiscord.respond_to_mentions !== undefined ? Boolean(rawDiscord.respond_to_mentions) : DD.respond_to_mentions,
+    thread_replies:      rawDiscord.thread_replies      !== undefined ? Boolean(rawDiscord.thread_replies)      : DD.thread_replies,
   });
 
   // ── [platform] ────────────────────────────────────────────────────────────
@@ -932,7 +951,7 @@ function _buildConfig(parsed, logger) {
       host_mode: hostMode,
       strict: rpcStrict,
     }),
-    sources: Object.freeze({ slack }),
+    sources: Object.freeze({ slack, discord }),
     platform: Object.freeze({ mode: platformMode }),
     workspace: Object.freeze({
       image: wsImage,
