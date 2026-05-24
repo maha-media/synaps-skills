@@ -47,6 +47,8 @@ import { DockerExecSynapsRpc }   from './core/synaps-rpc-docker.js';
 import { ControlSocket }         from './control-socket.js';
 import { readSlackAuth }         from './sources/slack/auth.js';
 import { SlackAdapter }          from './sources/slack/index.js';
+import { readDiscordAuth }       from './sources/discord/auth.js';
+import { DiscordAdapter }        from './sources/discord/index.js';
 import { getMongoose, WorkspaceRepo, getSynapsWorkspaceModel } from './core/db/index.js';
 import { WorkspaceManager }      from './core/workspace-manager.js';
 import { VncProxy }              from './core/vnc-proxy.js';
@@ -480,6 +482,16 @@ function defaultSlackAdapterFactory({ auth, sessionRouter, memoryGateway, identi
 }
 
 /**
+ * Default DiscordAdapter factory.
+ *
+ * @param {{ auth: object, sessionRouter: SessionRouter, memoryGateway: MemoryGateway|NoopMemoryGateway, identityRouter: object, discordClientFactory: Function, logger: object }} opts
+ * @returns {DiscordAdapter}
+ */
+function defaultDiscordAdapterFactory({ auth, sessionRouter, memoryGateway, identityRouter, discordClientFactory, logger }) {
+  return new DiscordAdapter({ sessionRouter, auth, memoryGateway, identityRouter, discordClientFactory, logger });
+}
+
+/**
  * Default ControlSocket factory.
  *
  * @param {{ sessionRouter: SessionRouter, identityRouter: object, logger: object, version: string }} opts
@@ -520,6 +532,8 @@ export class BridgeDaemon extends EventEmitter {
     env = process.env,
     sessionRouterFactory = null,
     slackAdapterFactory = null,
+    discordAdapterFactory = null,
+    discordClientFactory = null,
     controlSocketFactory = null,
     onShutdown = null,
     mongoConnectFactory = null,
@@ -545,6 +559,8 @@ export class BridgeDaemon extends EventEmitter {
     this._execFileImpl = execFileImpl ?? execFileSync;
     this._sessionRouterFactory  = sessionRouterFactory  ?? defaultSessionRouterFactory;
     this._slackAdapterFactory   = slackAdapterFactory   ?? defaultSlackAdapterFactory;
+    this._discordAdapterFactory = discordAdapterFactory  ?? defaultDiscordAdapterFactory;
+    this._discordClientFactory  = discordClientFactory;
     this._controlSocketFactory  = controlSocketFactory  ?? defaultControlSocketFactory;
     this._onShutdown            = onShutdown;
 
@@ -578,6 +594,8 @@ export class BridgeDaemon extends EventEmitter {
     this._sessionRouter = null;
     /** @type {SlackAdapter|null} */
     this._slackAdapter = null;
+    /** @type {DiscordAdapter|null} */
+    this._discordAdapter = null;
     /** @type {ControlSocket|null} */
     this._controlSocket = null;
 
@@ -1038,6 +1056,33 @@ export class BridgeDaemon extends EventEmitter {
       await this._slackAdapter.start();
     }
 
+    // 4d. Discord adapter (if enabled).
+    if (this._config.sources.discord?.enabled) {
+      const auth = readDiscordAuth(this._env);
+      // Lazy-import discord.js only when Discord is enabled.
+      const clientFactory = this._discordClientFactory ?? (async () => {
+        const { Client, GatewayIntentBits, Partials } = await import('discord.js');
+        return new Client({
+          intents: [
+            GatewayIntentBits.Guilds,
+            GatewayIntentBits.GuildMessages,
+            GatewayIntentBits.MessageContent,
+            GatewayIntentBits.DirectMessages,
+          ],
+          partials: [Partials.Channel], // Required for DM support
+        });
+      });
+      this._discordAdapter = this._discordAdapterFactory({
+        auth,
+        sessionRouter: this._sessionRouter,
+        memoryGateway: this._memoryGateway,
+        identityRouter: this._identityRouter,
+        discordClientFactory: clientFactory,
+        logger: this.logger,
+      });
+      await this._discordAdapter.start();
+    }
+
     // 3. Control socket (pass hookBus + scheduler when ready).
     this._controlSocket = this._controlSocketFactory({
       sessionRouter: this._sessionRouter,
@@ -1127,6 +1172,14 @@ export class BridgeDaemon extends EventEmitter {
         await this._slackAdapter.stop();
       } catch (err) {
         this.logger.warn?.(`BridgeDaemon: slack adapter stop error: ${err.message}`);
+      }
+    }
+
+    if (this._discordAdapter) {
+      try {
+        await this._discordAdapter.stop();
+      } catch (err) {
+        this.logger.warn?.(`BridgeDaemon: discord adapter stop error: ${err.message}`);
       }
     }
 
