@@ -18,7 +18,10 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::pria_client::SessionEventPayload;
+use crate::pria_client::payloads::{
+    derive_idempotency_key, normalise_usage, EVENT_TYPE_LLM_TOKENS, SOURCE_RPC_AGENT_END,
+};
+use crate::pria_client::{SessionEventPayload, UsageEvent, UsagePayload};
 
 /// Everything needed to launch a session process.
 #[derive(Debug, Clone)]
@@ -114,6 +117,78 @@ pub fn tag_rpc_event(
         payload: raw_event.clone(),
         timestamp: chrono::Utc::now().to_rfc3339(),
     }
+}
+
+// ── HS-U6 RPC-boundary usage fallback ────────────────────────────────────────
+
+/// Identity needed to tag an untagged `RpcEvent` with attribution.
+#[derive(Debug, Clone)]
+pub struct UsageIdentity {
+    pub account_id: String,
+    pub instance_id: String,
+    pub user_id: String,
+    pub vm_id: String,
+    pub replica_id: String,
+    pub session_id: String,
+    pub ephemeral_task_id: Option<String>,
+}
+
+/// Meter a raw SynapsCLI `RpcEvent::AgentEnd { usage }` (untagged JSON) into a
+/// Pria [`UsagePayload`]. This is the **no-core-change fallback** (spec §0.2,
+/// HS-U6): SynapsCLI emits `agent_end` with a `usage` object but no account /
+/// session identity (`core/rpc_protocol.rs:272`), so the guest agent supplies
+/// the tags it knows and forwards raw usage to `/internal/agentic-vm/usage`.
+///
+/// Returns `None` for any event that is not an `agent_end` carrying a `usage`
+/// object — the relay should ignore it (zero-token usage is also dropped so we
+/// never bill an empty turn). Emits **raw usage only** (no credits, spec §5.5).
+pub fn tag_agent_end_usage(raw_event: &Value, identity: &UsageIdentity) -> Option<UsagePayload> {
+    // `RpcEvent` is `#[serde(tag = "type")]`; the AgentEnd variant renames to
+    // "agent_end" and flattens `usage` (a `TurnUsage`) under the `usage` key.
+    if raw_event.get("type").and_then(|t| t.as_str()) != Some("agent_end") {
+        return None;
+    }
+    let usage_raw = raw_event.get("usage")?;
+    let usage = normalise_usage(usage_raw);
+
+    // Drop genuinely empty turns — nothing to bill, nothing to cross-check.
+    let any_tokens = ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"]
+        .iter()
+        .any(|k| usage.get(*k).and_then(|v| v.as_u64()).unwrap_or(0) > 0);
+    if !any_tokens {
+        return None;
+    }
+
+    let model = usage_raw
+        .get("model")
+        .and_then(|m| m.as_str())
+        .map(|s| s.to_string());
+
+    let idempotency_key =
+        derive_idempotency_key(&identity.session_id, "agent_end", EVENT_TYPE_LLM_TOKENS, &usage);
+
+    let event = UsageEvent {
+        idempotency_key,
+        event_type: EVENT_TYPE_LLM_TOKENS.to_string(),
+        // RPC `AgentEnd` carries no provider; Pria backfills from session start.
+        provider: None,
+        model,
+        occurred_at: chrono::Utc::now().to_rfc3339(),
+        usage,
+        metadata: serde_json::json!({ "rpc_event": "agent_end" }),
+    };
+
+    Some(UsagePayload {
+        account_id: identity.account_id.clone(),
+        instance_id: identity.instance_id.clone(),
+        user_id: identity.user_id.clone(),
+        vm_id: identity.vm_id.clone(),
+        replica_id: identity.replica_id.clone(),
+        session_id: identity.session_id.clone(),
+        ephemeral_task_id: identity.ephemeral_task_id.clone(),
+        source: SOURCE_RPC_AGENT_END.to_string(),
+        events: vec![event],
+    })
 }
 
 // ── real Linux launcher ──────────────────────────────────────────────────────
@@ -343,6 +418,68 @@ mod tests {
         assert_eq!(tagged.session_id, "sess_4");
         assert_eq!(tagged.account_id, "acct_1");
         assert!(tagged.event_id.starts_with("evt_"));
+    }
+
+    fn identity() -> UsageIdentity {
+        UsageIdentity {
+            account_id: "acct_1".into(),
+            instance_id: "inst_2".into(),
+            user_id: "user_3".into(),
+            vm_id: "vm_4".into(),
+            replica_id: "r0".into(),
+            session_id: "sess_5".into(),
+            ephemeral_task_id: None,
+        }
+    }
+
+    #[test]
+    fn tag_agent_end_usage_builds_raw_only_payload() {
+        let raw = json!({
+            "type": "agent_end",
+            "usage": {
+                "input_tokens": 1234, "output_tokens": 567,
+                "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 200,
+                "cache_creation_5m": 200, "cache_creation_1h": 0,
+                "model": "claude-sonnet-4-test"
+            }
+        });
+        let payload = tag_agent_end_usage(&raw, &identity()).expect("must meter agent_end");
+        assert_eq!(payload.source, "synaps-rpc-agent-end");
+        assert_eq!(payload.account_id, "acct_1");
+        assert_eq!(payload.session_id, "sess_5");
+        assert_eq!(payload.events.len(), 1);
+        let ev = &payload.events[0];
+        assert_eq!(ev.event_type, "llm.tokens");
+        assert_eq!(ev.model.as_deref(), Some("claude-sonnet-4-test"));
+        assert!(ev.provider.is_none());
+        assert!(ev.idempotency_key.starts_with("synaps:sess_5:agent_end:llm.tokens:"));
+        assert_eq!(ev.usage["input_tokens"], 1234);
+        // Raw-only: the serialised event must not carry credits.
+        let v = serde_json::to_value(ev).unwrap();
+        assert!(v.get("credits").is_none());
+    }
+
+    #[test]
+    fn tag_agent_end_usage_ignores_non_agent_end() {
+        let raw = json!({"type": "synaps.output.delta", "payload": {}});
+        assert!(tag_agent_end_usage(&raw, &identity()).is_none());
+    }
+
+    #[test]
+    fn tag_agent_end_usage_drops_empty_turn() {
+        let raw = json!({
+            "type": "agent_end",
+            "usage": { "input_tokens": 0, "output_tokens": 0,
+                       "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 }
+        });
+        assert!(tag_agent_end_usage(&raw, &identity()).is_none());
+    }
+
+    #[test]
+    fn tag_agent_end_usage_model_null_when_absent() {
+        let raw = json!({"type": "agent_end", "usage": { "input_tokens": 5 }});
+        let payload = tag_agent_end_usage(&raw, &identity()).unwrap();
+        assert!(payload.events[0].model.is_none());
     }
 
     #[tokio::test]

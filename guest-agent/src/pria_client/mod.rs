@@ -17,6 +17,7 @@ use serde_json::Value;
 
 pub use payloads::{
     kinds, AuditEventBuilder, CredentialRequestPayload, HeartbeatPayload, SessionEventPayload,
+    UsageEvent, UsagePayload,
 };
 pub use signer::OutboundSigner;
 
@@ -49,6 +50,11 @@ pub trait PriaCallbackClient: Send + Sync {
     /// the hot path for the HTTP impl).
     async fn audit(&self, events: Vec<Value>) -> Result<(), CallbackError>;
     async fn session_event(&self, p: &SessionEventPayload) -> Result<(), CallbackError>;
+    /// Forward a batch of raw-usage events (spec §6.2). Signed + POSTed to
+    /// `/internal/agentic-vm/usage`; spools on failure (never crashes the hot
+    /// path for the HTTP impl). This is the RPC-boundary fallback/cross-check
+    /// (HS-U6) and must remain even after `on_usage` ships.
+    async fn usage(&self, p: &UsagePayload) -> Result<(), CallbackError>;
     async fn credential_request(
         &self,
         p: &CredentialRequestPayload,
@@ -59,6 +65,7 @@ pub trait PriaCallbackClient: Send + Sync {
 const HEARTBEAT_PATH: &str = "/internal/agentic-vm/heartbeat";
 const AUDIT_PATH: &str = "/internal/agentic-vm/audit";
 const SESSION_EVENT_PATH: &str = "/internal/agentic-vm/session-event";
+const USAGE_PATH: &str = "/internal/agentic-vm/usage";
 const CREDENTIAL_PATH: &str = "/internal/agentic-vm/credential-request";
 
 /// The production HTTP client using reqwest + the outbound signer.
@@ -131,6 +138,26 @@ impl HttpPriaClient {
             }
         }
     }
+
+    /// Append a usage envelope to a dedicated durable spool (one JSON object per
+    /// line). Separate file from audit so a later drain can re-POST to the usage
+    /// endpoint specifically.
+    fn spool_usage(&self, payload: &UsagePayload) {
+        use std::io::Write;
+        if std::fs::create_dir_all(&self.audit_spool_dir).is_err() {
+            return;
+        }
+        let path = self.audit_spool_dir.join("guest-agent-usage.jsonl");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            if let Ok(line) = serde_json::to_string(payload) {
+                let _ = writeln!(f, "{line}");
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -168,6 +195,24 @@ impl PriaCallbackClient for HttpPriaClient {
         Ok(())
     }
 
+    async fn usage(&self, p: &UsagePayload) -> Result<(), CallbackError> {
+        if p.events.is_empty() {
+            return Ok(());
+        }
+        let body = serde_json::to_vec(p).map_err(|e| CallbackError::Network(e.to_string()))?;
+        match self.post_signed(USAGE_PATH, &body, Some(&p.session_id)).await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                // Spool and swallow — usage must never crash the hot path. The
+                // RPC fallback is a cross-check; transient failure is tolerated
+                // (plan Q11: spool + retry, not a hard stop).
+                tracing::warn!(error = %e, "usage POST failed; spooling");
+                self.spool_usage(p);
+                Ok(())
+            }
+        }
+    }
+
     async fn credential_request(
         &self,
         p: &CredentialRequestPayload,
@@ -196,6 +241,7 @@ pub mod fake {
         pub heartbeats: Mutex<Vec<HeartbeatPayload>>,
         pub audits: Mutex<Vec<Value>>,
         pub session_events: Mutex<Vec<SessionEventPayload>>,
+        pub usages: Mutex<Vec<UsagePayload>>,
         pub credential_requests: Mutex<Vec<CredentialRequestPayload>>,
         pub credential_response: Mutex<Value>,
     }
@@ -212,6 +258,10 @@ pub mod fake {
         }
         async fn session_event(&self, p: &SessionEventPayload) -> Result<(), CallbackError> {
             self.session_events.lock().unwrap().push(p.clone());
+            Ok(())
+        }
+        async fn usage(&self, p: &UsagePayload) -> Result<(), CallbackError> {
+            self.usages.lock().unwrap().push(p.clone());
             Ok(())
         }
         async fn credential_request(
