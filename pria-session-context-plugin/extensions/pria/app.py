@@ -14,6 +14,7 @@ from pria.policy import PolicyEngine
 from pria.ingest import IngestSink
 from pria.credential import CredentialBroker, TOOL_SPEC, TOOL_NAME
 from pria.egress import EgressCorrelator
+from pria.usage import UsageForwarder, usage_from_hook, build_usage_batch
 
 
 class App:
@@ -25,6 +26,11 @@ class App:
         self.policy = PolicyEngine(self.ctx)
         self.broker = CredentialBroker(self.ctx, self.config, audit=self.audit)
         self.egress = EgressCorrelator(self.ctx)
+        # AC-B1.2: usage forwarder is constructed lazily on initialize (needs
+        # config). Stays dormant unless an `on_usage` event ever arrives — and
+        # the manifest does NOT declare `on_usage` (protocol stays v1) until
+        # Track C ships the core hook + protocol v2 (see contract §5, HS-U*).
+        self.usage = None
 
     # ── initialize ──────────────────────────────────────────────────────────
     def initialize(self, params: dict) -> dict:
@@ -36,6 +42,9 @@ class App:
         ingest = IngestSink(self.ctx, self.config)
         self.audit.attach_ingest(ingest)
         self.broker.config = self.config
+        # AC-B1.2: usage forwarder (raw-usage → Pria ingest). Dormant until an
+        # `on_usage` event is delivered; harmless if never configured.
+        self.usage = UsageForwarder(self.ctx, self.config)
         return {
             "protocol_version": 1,
             "capabilities": {
@@ -56,6 +65,9 @@ class App:
             "before_tool_call": self._before_tool_call,
             "after_tool_call": self._after_tool_call,
             "before_message": self._before_message,
+            # AC-B1.2 (defensive): handle `on_usage` IF the core ever delivers
+            # it. Not declared in the manifest — see contract §5 (HS-U1/HS-U3).
+            "on_usage": self._on_usage,
         }.get(kind)
         if handler is None:
             return {"action": "continue"}
@@ -116,6 +128,27 @@ class App:
         return {"action": "continue"}
 
     def _before_message(self, event: dict) -> dict:
+        return {"action": "continue"}
+
+    def _on_usage(self, event: dict) -> dict:
+        """Raw-usage emission path (AC-B1.2 scaffold; raw-only, no credits).
+
+        Never raises and always returns `continue` — usage metering must never
+        block or corrupt the agent loop. Forwarding is best-effort/spooled.
+        """
+        try:
+            record = usage_from_hook(event)
+            batch = build_usage_batch(self.ctx, [record])
+            self.audit.emit("usage.observed", {
+                "provider": record.get("provider"),
+                "model": record.get("model"),
+                "message_id": record.get("message_id"),
+                "event_count": len(batch.get("events", [])),
+            })
+            if self.usage is not None:
+                self.usage.forward(batch)
+        except Exception:  # noqa: BLE001 — usage path must never break the loop
+            pass
         return {"action": "continue"}
 
     # ── tools ───────────────────────────────────────────────────────────────
