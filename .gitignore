@@ -1,4 +1,6 @@
 node_modules/
+__pycache__/
+*.py[cod]
 .DS_Store
 local-voice-plugin/bin/synaps-voice-plugin
 local-voice-plugin/target/
