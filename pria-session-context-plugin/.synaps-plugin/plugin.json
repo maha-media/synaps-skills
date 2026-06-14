@@ -1,0 +1,65 @@
+{
+  "name": "pria-session-context",
+  "version": "0.1.0",
+  "description": "Pria agentic-VM in-VM integration: loads control-plane session context (by file, keyed by session_id), tags audit records with Account/Instance/User/session IDs, gates tool calls via before_tool_call, and forwards a multi-sink audit stream to Pria's ingest endpoint.",
+  "author": {
+    "name": "Pria",
+    "url": "https://github.com/maha-media"
+  },
+  "repository": "https://github.com/maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "security",
+  "compatibility": {
+    "synaps": ">=0.1.0",
+    "extension_protocol": "1"
+  },
+  "extension": {
+    "protocol_version": 1,
+    "runtime": "process",
+    "command": "python3",
+    "args": [
+      "extensions/context.py"
+    ],
+    "permissions": [
+      "tools.intercept",
+      "session.lifecycle",
+      "privacy.llm_content",
+      "tools.register"
+    ],
+    "hooks": [
+      { "hook": "on_session_start" },
+      { "hook": "on_session_end" },
+      { "hook": "before_tool_call" },
+      { "hook": "after_tool_call" },
+      { "hook": "before_message" }
+    ],
+    "config": [
+      {
+        "key": "ingest_url",
+        "type": "string",
+        "description": "Pria audit ingest endpoint. Overridden by context.ingest_url if present.",
+        "required": false
+      },
+      {
+        "key": "ingest_token",
+        "type": "string",
+        "description": "Bearer token for the ingest endpoint.",
+        "required": false,
+        "secret_env": "PRIA_INGEST_TOKEN"
+      },
+      {
+        "key": "credential_broker_url",
+        "type": "string",
+        "description": "Base URL of the Pria credential broker (issue/revoke).",
+        "required": false
+      },
+      {
+        "key": "audit_spool_file",
+        "type": "string",
+        "description": "Relative path under SYNAPS_BASE_DIR for the local JSONL audit spool.",
+        "required": false,
+        "default": "audit-spool/pria-session-context.jsonl"
+      }
+    ]
+  }
+}
