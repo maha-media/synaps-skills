@@ -12,6 +12,7 @@ from pria.sessionctx import SessionContext
 from pria.audit import AuditSink
 from pria.policy import PolicyEngine
 from pria.ingest import IngestSink
+from pria.credential import CredentialBroker, TOOL_SPEC, TOOL_NAME
 
 
 class App:
@@ -21,6 +22,7 @@ class App:
         self.ctx = SessionContext()
         self.audit = AuditSink(self.ctx, self.config)
         self.policy = PolicyEngine(self.ctx)
+        self.broker = CredentialBroker(self.ctx, self.config, audit=self.audit)
 
     # ── initialize ──────────────────────────────────────────────────────────
     def initialize(self, params: dict) -> dict:
@@ -31,6 +33,7 @@ class App:
         # B4: attach the Pria ingest sink (multi-sink: spool + ingest POST).
         ingest = IngestSink(self.ctx, self.config)
         self.audit.attach_ingest(ingest)
+        self.broker.config = self.config
         return {
             "protocol_version": 1,
             "capabilities": {
@@ -39,8 +42,8 @@ class App:
         }
 
     def _tool_specs(self) -> list:
-        # B5 registers the request_credential tool here.
-        return []
+        # B5: register the request_credential tool (tools.register permission).
+        return [TOOL_SPEC]
 
     # ── hooks ───────────────────────────────────────────────────────────────
     def handle_hook(self, event: dict) -> dict:
@@ -101,6 +104,8 @@ class App:
     # ── tools ───────────────────────────────────────────────────────────────
     def handle_tool_call(self, params: dict) -> dict:
         name = params.get("name")
+        if name == TOOL_NAME:
+            return self.broker.issue(params.get("input") or {})
         raise ValueError(f"unknown tool: {name}")
 
     # ── lifecycle ───────────────────────────────────────────────────────────
