@@ -213,3 +213,69 @@ Content-Type: application/json
 
 `principal.source` is derived from the bearer token (control-plane side) and must
 be one of `{synaps-extension, synaps-sidecar}`. Offline → spool-only, no crash.
+
+---
+
+## 5. Usage metering (HS-U*) — Track B1 pre-core assessment
+
+**Status:** CONFIRMED against SynapsCLI read-only @ `crates/agent-engine` and
+`crates/agent-core` (this checkout). This section is the authoritative HARD STOP
+register that **gates Track C** (SynapsCLI core). Each finding is reproduced with
+exact path/line evidence and the single required core change.
+
+> Track B1 rule: do **not** edit SynapsCLI. The `on_usage` hook (spec §5) cannot
+> be delivered to a plugin without core changes. The plugin manifest therefore
+> stays `protocol_version: 1` and does **not** declare `on_usage` until Track C
+> ships protocol v2. The no-core-change fallback is RPC `AgentEnd.usage` metered
+> at the guest-agent boundary (HS-U6, §0.2 of the spec).
+
+### 5.1 HARD STOP register (CONFIRMED)
+
+| ID | Hard stop | Evidence (this checkout) | Verdict | Required SynapsCLI (Track C) change |
+|----|-----------|--------------------------|---------|-------------------------------------|
+| **HS-U1** | `HookKind` is a **closed enum** with 7 variants and no usage variant; plugins cannot subscribe to or receive token usage. | `crates/agent-engine/src/extensions/hooks/events.rs:25-40` (enum: `BeforeToolCall, AfterToolCall, BeforeMessage, OnMessageComplete, OnCompaction, OnSessionStart, OnSessionEnd`); `as_str` `:45-55`; `from_str` `:62-73`; `allowed_action_names` `:76-83`; `allows_result` `:91-100`; `required_permission` `:107-113`. Doc comment `:20-22` states "The set is intentionally closed; new kinds are added via a breaking version bump." | **CONFIRMED** | Add `HookKind::OnUsage` ("on_usage") and update **every** match arm: `as_str`/`from_str`, `allowed_action_names`→`["continue"]`, `allows_tool_filter`→false, `allows_result`→`Continue` only, `required_permission` (see HS-U5). Add `HookEvent::on_usage(...)` constructor carrying the §5.3 payload in `data`. |
+| **HS-U2** | The authoritative token counts live in `runtime/api.rs` stream-parse state, whose context (`EventCtx`) has **no `hook_bus` handle** — so the hook cannot be emitted from where usage is actually known. | `crates/agent-engine/src/runtime/api.rs:193-205` (`struct EventCtx` carries only `tx`, `telemetry_level`, `request_start`, `cache_ttl`, two `AtomicBool` latches — no `hook_bus`); the single authoritative emission `api.rs:424-437` sends `SessionEvent::Usage` via `ctx.tx` only. The `hook_bus` **is** available one layer up in `runtime/stream.rs:43,221` (used for `on_message_complete`) but that scope has no token counts. A grep for `hook` in `api.rs` returns zero hits. | **CONFIRMED** | Plumb a `hook_bus` handle (or a usage→hook bridge channel) into the stream-parse context so the authoritative `message_delta` emission **also** fires `OnUsage`. Must reuse the `state.usage_emitted` single-emit latch (`api.rs:428`) so message_start (`api.rs:441-468`, capture-only) and the residual path (`api.rs:517-543`) do not double-emit. |
+| **HS-U3** | Manifest validation **hard-rejects** any `protocol_version != 1`; a plugin declaring `on_usage` cannot also declare protocol v2 today. | `crates/agent-engine/src/extensions/manifest.rs:10` (`CURRENT_EXTENSION_PROTOCOL_VERSION = 1`); `validate()` `:113-118` returns `Err` for `protocol_version != CURRENT_EXTENSION_PROTOCOL_VERSION`. | **CONFIRMED** | Accept a supported **set** (`{1,2}`); bump `CURRENT_EXTENSION_PROTOCOL_VERSION = 2`. v1 manifests must still validate; v1 plugins must **never** be delivered `OnUsage` (the bus must not send unknown kinds to a plugin that did not subscribe). |
+| **HS-U4** | `SessionEvent::Usage.model` is hard-coded `None` at the only authoritative emission site, so usage carries no model attribution. | `crates/agent-engine/src/runtime/api.rs:436` (`model: None`) — also the residual path `api.rs` (`emit_residual_usage`) emits `model: None`. The field exists on the type: `crates/agent-core/src/core/stream_types.rs` `SessionEvent::Usage{...model: Option<String>}` and mirror `TurnUsage.model: Option<String>` at `crates/agent-core/src/core/rpc_protocol.rs:98-100`. | **CONFIRMED** | Populate `model` from runtime/session config at the emission site when known; else `null`. Carry the same `model` into the `OnUsage` payload. Pria may backfill from session-start/RPC `Ready` when `null`. |
+| **HS-U5** | A permission is needed to gate `OnUsage` subscription; no usage/metering permission exists. | `crates/agent-engine/src/extensions/permissions.rs:14-39` (`enum Permission`: `ToolsIntercept, ToolsOverride, LlmContent, SessionLifecycle, ToolsRegister, ProvidersRegister, MemoryRead, MemoryWrite, AudioInput, AudioOutput`). `required_permission` mapping `events.rs:107-113` has no usage arm. | **CONFIRMED** | Decide & wire a permission for `OnUsage`. Either reuse `Permission::LlmContent` (`privacy.llm_content` — usage is derived from LLM turns, and the Pria plugin already holds it) **or** add a dedicated `Permission::UsageMetering` (`usage.metering`). Recommendation: reuse `LlmContent` to avoid a permission-catalog change; document the choice. Map `OnUsage.required_permission()` accordingly. |
+| **HS-U6** | RPC events carry **no** account/instance/user/session tags. | `crates/agent-core/src/core/rpc_protocol.rs:272-275` (`RpcEvent::AgentEnd { usage: TurnUsage }` — no identity fields); `TurnUsage` `:80-101`. Guest-side mitigation already shipped: `guest-agent/src/synaps/launcher.rs:95-117` (`tag_rpc_event`). | **CONFIRMED — MITIGATED (no core change)** | None. Keep `RpcEvent::AgentEnd { usage }` unchanged as the fallback/cross-check. The guest agent tags it with session identity at the boundary (AC-B1.3). |
+| **HS-2 (carried)** | Extensions run under `env_clear()` + a 5-var allowlist; the spec §9.1 `SYNAPS_SESSION_CONTEXT` env var cannot reach the extension. | See §1.2 above (`process.rs:643-648`). | **CONFIRMED (prior)** | No core change. The usage path joins raw usage with the **file-delivered** session context (§1.2), exactly like audit tagging. |
+
+### 5.2 Track C requirements (exact edits, derived from B1)
+
+Track C **must not start** until HS-U1..U5 are confirmed (done, above). The exact
+core edits Track C must land:
+
+1. **`events.rs`** — add `HookKind::OnUsage`; extend `as_str`, `from_str`,
+   `allowed_action_names` (→ `&["continue"]`), `allows_tool_filter` (→ `false`),
+   `allows_result` (→ `Continue` only), `required_permission` (→ chosen
+   permission, HS-U5). Add `HookEvent::on_usage(provider, model, session_id,
+   message_id, turn_id, usage, source, occurred_at)` populating `data` with the
+   spec §5.3 shape. Extend the `hook_kind_as_str_roundtrip` test array.
+2. **`manifest.rs`** — `CURRENT_EXTENSION_PROTOCOL_VERSION = 2`; `validate()`
+   accepts `{1,2}`; v1 still validates; v1 plugins are never subscribed to
+   `on_usage`.
+3. **`runtime/api.rs` + `runtime/stream.rs`/`runtime/mod.rs`** — plumb `hook_bus`
+   into the stream-parse context; at the authoritative delta-arm emission
+   (`api.rs:424-437`, guarded by `state.usage_emitted`) also `hook_bus.emit(OnUsage)`;
+   populate `model` (HS-U4); never emit from `message_start` or twice from the
+   residual path; hook failure follows existing extension failure semantics and
+   never corrupts the stream.
+4. **`permissions.rs`** — only if a dedicated `UsageMetering` permission is chosen
+   (HS-U5); otherwise no change (reuse `LlmContent`).
+5. **`rpc_protocol.rs`** — **no change**; `RpcEvent::AgentEnd { usage }`
+   (`:272`) stays as the fallback/cross-check.
+
+### 5.3 What B1 ships now (no core change)
+
+- **Plugin (AC-B1.2):** `extensions/pria/usage.py` — pure raw-usage→Pria-payload
+  transform, idempotency-key derivation, and session-context join. Wired into
+  `app.handle_hook` **defensively** (handles an `on_usage` event if one ever
+  arrives) but the manifest stays v1 and does **not** declare `on_usage`, so core
+  never sends it until Track C lands. Emits **raw usage only** — no `credits`
+  field (spec §5.5; Pria rating is authoritative).
+- **Guest-agent (AC-B1.3):** `UsagePayload` + `PriaCallbackClient::usage()` +
+  `tag_agent_end_usage()` at the RPC boundary → signed POST to
+  `/internal/agentic-vm/usage`, spool on failure. This is the §0.2 fallback and
+  remains even after `on_usage` ships (dedupe collapses overlap by idempotency
+  key).
