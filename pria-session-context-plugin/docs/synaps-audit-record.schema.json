@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://pria.dev/contracts/synaps-audit-record.schema.json",
+  "title": "Pria Synaps Audit Record",
+  "description": "Audit record emitted by the pria-session-context extension (synaps-extension) and the synaps_fsmon daemon (synaps-sidecar).",
+  "type": "object",
+  "required": ["schema_version", "event_id", "kind", "source", "timestamp"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "event_id": {"type": "string"},
+    "kind": {
+      "type": "string",
+      "enum": [
+        "tool.call.started",
+        "tool.call.completed",
+        "tool.call.blocked",
+        "tool.call.confirm_required",
+        "tool.call.modified",
+        "file.write.allowed",
+        "file.write.denied",
+        "credential.issued",
+        "credential.denied",
+        "credential.revoked",
+        "session.started",
+        "session.ended"
+      ]
+    },
+    "source": {"enum": ["synaps-extension", "synaps-sidecar"]},
+    "account_id": {"type": ["string", "null"]},
+    "instance_id": {"type": ["string", "null"]},
+    "user_id": {"type": ["string", "null"]},
+    "vm_id": {"type": ["string", "null"]},
+    "session_id": {"type": ["string", "null"]},
+    "linux_uid": {"type": ["integer", "null"]},
+    "context": {"enum": ["resolved", "missing"]},
+    "tool_call_id": {"type": "string"},
+    "tool_name": {"type": "string"},
+    "cwd": {"type": "string"},
+    "decision": {"enum": ["allow", "block", "confirm", "modify", "deny"]},
+    "reason": {"type": "string"},
+    "message": {"type": "string"},
+    "path": {"type": "string"},
+    "op": {"enum": ["open_write", "open_read", "access"]},
+    "roles": {"type": "array", "items": {"type": "string"}},
+    "timestamp": {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": true
+}

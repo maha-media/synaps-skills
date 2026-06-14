@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://pria.dev/contracts/session-context.schema.json",
+  "title": "Pria Synaps Session Context",
+  "description": "Control-plane-issued session context delivered by FILE keyed by session_id (never via env var; see HS-2).",
+  "type": "object",
+  "required": [
+    "account_id", "instance_id", "user_id", "linux_username", "linux_uid",
+    "vm_id", "session_id", "roles", "issued_at", "expires_at"
+  ],
+  "properties": {
+    "account_id": {"type": "string"},
+    "account_slug": {"type": "string"},
+    "instance_id": {"type": "string"},
+    "instance_slug": {"type": "string"},
+    "user_id": {"type": "string"},
+    "linux_username": {"type": "string"},
+    "linux_uid": {"type": "integer", "minimum": 0},
+    "vm_id": {"type": "string"},
+    "session_id": {"type": "string"},
+    "roles": {"type": "array", "items": {"type": "string"}},
+    "policy_profile_id": {"type": "string"},
+    "issued_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "ingest_url": {"type": "string", "format": "uri"},
+    "ingest_token": {"type": "string"},
+    "credential_broker_url": {"type": "string", "format": "uri"},
+    "policy": {"$ref": "#/definitions/policy"}
+  },
+  "additionalProperties": true,
+  "definitions": {
+    "policy": {
+      "type": "object",
+      "required": ["version", "default", "rules"],
+      "properties": {
+        "version": {"type": "integer"},
+        "default": {"enum": ["allow", "deny"]},
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["tool", "decision"],
+            "properties": {
+              "tool": {"type": "string"},
+              "input_contains": {"type": "string"},
+              "path_outside_instance": {"type": "boolean"},
+              "decision": {"enum": ["allow", "block", "confirm", "modify"]},
+              "reason": {"type": "string"},
+              "message": {"type": "string"},
+              "modify": {"type": "object"}
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  }
+}
