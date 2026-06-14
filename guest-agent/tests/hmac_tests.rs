@@ -61,13 +61,19 @@ fn test_state() -> AppState {
     let cfg = Config::from_yaml(SAMPLE_CONFIG).unwrap();
     let hmac = HmacVerifier::new(SECRET.to_vec(), "acct_123", "vm_456", 300, 300);
     let versions = pria_guest_agent::versions::Versions::detect(&cfg);
+    let runtime = Arc::new(pria_guest_agent::runtime::RuntimeState::new());
+    let sessions = Arc::new(pria_guest_agent::sessions::SessionStore::new(
+        runtime.clone(),
+    ));
     AppState {
         config: Arc::new(cfg),
         hmac: Arc::new(hmac),
-        runtime: Arc::new(pria_guest_agent::runtime::RuntimeState::new()),
+        runtime,
         versions: Arc::new(versions),
         pria: Arc::new(pria_guest_agent::pria_client::fake::FakePriaClient::default()),
         os: Arc::new(pria_guest_agent::os::FakeUserManager::default()),
+        synaps: Arc::new(pria_guest_agent::synaps::launcher::FakeLauncher::default()),
+        sessions,
     }
 }
 

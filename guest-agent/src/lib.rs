@@ -14,7 +14,9 @@ pub mod os;
 pub mod paths;
 pub mod pria_client;
 pub mod runtime;
+pub mod sessions;
 pub mod supervisor;
+pub mod synaps;
 pub mod versions;
 
 pub mod api;

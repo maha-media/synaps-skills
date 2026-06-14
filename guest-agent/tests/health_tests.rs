@@ -37,7 +37,7 @@ fsmon:
 async fn health_returns_section_6_1_payload() {
     let cfg = Config::from_yaml(CONFIG).unwrap();
     let versions = Versions::detect(&cfg);
-    let runtime = RuntimeState::new();
+    let runtime = Arc::new(RuntimeState::new());
     runtime.incr_sessions();
     runtime.incr_sessions();
     runtime.set_fsmon_status(FsmonStatus::Healthy);
@@ -46,6 +46,9 @@ async fn health_returns_section_6_1_payload() {
         policy_version: Some(17),
         policy_hash: Some("sha256:abc".into()),
     });
+    let sessions = Arc::new(pria_guest_agent::sessions::SessionStore::new(
+        runtime.clone(),
+    ));
     let state = AppState {
         config: Arc::new(cfg),
         hmac: Arc::new(HmacVerifier::new(
@@ -55,10 +58,12 @@ async fn health_returns_section_6_1_payload() {
             300,
             300,
         )),
-        runtime: Arc::new(runtime),
+        runtime,
         versions: Arc::new(versions),
         pria: Arc::new(pria_guest_agent::pria_client::fake::FakePriaClient::default()),
         os: Arc::new(pria_guest_agent::os::FakeUserManager::default()),
+        synaps: Arc::new(pria_guest_agent::synaps::launcher::FakeLauncher::default()),
+        sessions,
     };
 
     let resp = build_router(state)

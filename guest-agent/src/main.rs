@@ -34,13 +34,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pria = pria_guest_agent::pria_client::http_client(&config, secret);
     let os: std::sync::Arc<dyn pria_guest_agent::os::OsUserManager> =
         std::sync::Arc::new(pria_guest_agent::os::users::LinuxUserManager::new());
+    let synaps: std::sync::Arc<dyn pria_guest_agent::synaps::launcher::SynapsLauncher> =
+        std::sync::Arc::new(pria_guest_agent::synaps::launcher::ProcessLauncher::new());
+    let runtime = std::sync::Arc::new(pria_guest_agent::runtime::RuntimeState::new());
+    let sessions = std::sync::Arc::new(pria_guest_agent::sessions::SessionStore::new(
+        runtime.clone(),
+    ));
     let state = AppState {
         config: Arc::new(config),
         hmac: Arc::new(hmac),
-        runtime: Arc::new(pria_guest_agent::runtime::RuntimeState::new()),
+        runtime,
         versions: Arc::new(versions),
         pria,
         os,
+        synaps,
+        sessions,
     };
 
     let _heartbeat = pria_guest_agent::supervisor::spawn_heartbeat_loop(state.clone());
