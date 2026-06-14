@@ -26,10 +26,11 @@ class App:
         self.policy = PolicyEngine(self.ctx)
         self.broker = CredentialBroker(self.ctx, self.config, audit=self.audit)
         self.egress = EgressCorrelator(self.ctx)
-        # AC-B1.2: usage forwarder is constructed lazily on initialize (needs
-        # config). Stays dormant unless an `on_usage` event ever arrives — and
-        # the manifest does NOT declare `on_usage` (protocol stays v1) until
-        # Track C ships the core hook + protocol v2 (see contract §5, HS-U*).
+        # AC-B2.1: usage forwarder is constructed on initialize (needs config).
+        # Live under protocol v2: the manifest declares the `on_usage` hook, so
+        # SynapsCLI core (Track C) delivers raw LLM token usage here. We join it
+        # with the file-delivered session context and forward via the guest-agent
+        # signing proxy. Emits RAW usage only — no credits (spec §5.5).
         self.usage = None
 
     # ── initialize ──────────────────────────────────────────────────────────
@@ -42,11 +43,12 @@ class App:
         ingest = IngestSink(self.ctx, self.config)
         self.audit.attach_ingest(ingest)
         self.broker.config = self.config
-        # AC-B1.2: usage forwarder (raw-usage → Pria ingest). Dormant until an
-        # `on_usage` event is delivered; harmless if never configured.
+        # AC-B2.1: usage forwarder (raw-usage → guest-agent signing proxy →
+        # Pria /internal/agentic-vm/usage). Live under protocol v2; the manifest
+        # now declares the `on_usage` hook (see contract §6). Raw usage only.
         self.usage = UsageForwarder(self.ctx, self.config)
         return {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "capabilities": {
                 "tools": self._tool_specs(),
             },
@@ -65,8 +67,8 @@ class App:
             "before_tool_call": self._before_tool_call,
             "after_tool_call": self._after_tool_call,
             "before_message": self._before_message,
-            # AC-B1.2 (defensive): handle `on_usage` IF the core ever delivers
-            # it. Not declared in the manifest — see contract §5 (HS-U1/HS-U3).
+            # AC-B2.1: `on_usage` is declared in the manifest (protocol v2), so
+            # SynapsCLI core delivers raw LLM token usage here (contract §6).
             "on_usage": self._on_usage,
         }.get(kind)
         if handler is None:
@@ -131,7 +133,14 @@ class App:
         return {"action": "continue"}
 
     def _on_usage(self, event: dict) -> dict:
-        """Raw-usage emission path (AC-B1.2 scaffold; raw-only, no credits).
+        """Raw-usage emission path (AC-B2.1; raw-only, no credits).
+
+        SynapsCLI core (protocol v2) fires `on_usage` once per billable LLM turn
+        (it reuses the `usage_emitted` latch so message_start + delta never
+        double-emit). We join the raw token counts with the file-delivered
+        session context (account/instance/user/vm/session), derive a stable
+        idempotency key, build the §6.2 batch, and forward via the guest-agent
+        signing proxy (which HMAC-signs + POSTs to /internal/agentic-vm/usage).
 
         Never raises and always returns `continue` — usage metering must never
         block or corrupt the agent loop. Forwarding is best-effort/spooled.

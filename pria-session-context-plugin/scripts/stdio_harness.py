@@ -59,7 +59,7 @@ def run(requests, env=None):
 
 def main():
     responses, err = run([
-        ("initialize", {"synaps_version": "test", "extension_protocol_version": 1,
+        ("initialize", {"synaps_version": "test", "extension_protocol_version": 2,
                         "plugin_id": "pria-session-context", "config": {}}),
         ("hook.handle", {"kind": "before_tool_call", "tool_name": "bash",
                          "tool_input": {"command": "ls"}}),
@@ -67,7 +67,7 @@ def main():
     ])
     assert responses, f"no responses; stderr={err}"
     init = responses[0]
-    assert init.get("result", {}).get("protocol_version") == 1, f"bad init: {init}"
+    assert init.get("result", {}).get("protocol_version") == 2, f"bad init: {init}"
     hook = responses[1]
     # B3: bash with no session context fails closed (block).
     assert hook.get("result", {}).get("action") == "block", f"bad hook: {hook}"

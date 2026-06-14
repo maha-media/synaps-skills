@@ -1,7 +1,7 @@
 {
   "name": "pria-session-context",
   "version": "0.1.0",
-  "description": "Pria agentic-VM in-VM integration: loads control-plane session context (by file, keyed by session_id), tags audit records with Account/Instance/User/session IDs, gates tool calls via before_tool_call, and forwards a multi-sink audit stream to Pria's ingest endpoint.",
+  "description": "Pria agentic-VM in-VM integration: loads control-plane session context (by file, keyed by session_id), tags audit records with Account/Instance/User/session IDs, gates tool calls via before_tool_call, forwards a multi-sink audit stream to Pria's ingest endpoint, and (protocol v2) forwards raw LLM token usage from on_usage to Pria via the guest-agent signing proxy.",
   "author": {
     "name": "Pria",
     "url": "https://github.com/maha-media"
@@ -11,10 +11,10 @@
   "category": "security",
   "compatibility": {
     "synaps": ">=0.1.0",
-    "extension_protocol": "1"
+    "extension_protocol": "2"
   },
   "extension": {
-    "protocol_version": 1,
+    "protocol_version": 2,
     "runtime": "process",
     "command": "python3",
     "args": [
@@ -31,7 +31,8 @@
       { "hook": "on_session_end" },
       { "hook": "before_tool_call" },
       { "hook": "after_tool_call" },
-      { "hook": "before_message" }
+      { "hook": "before_message" },
+      { "hook": "on_usage" }
     ],
     "config": [
       {
@@ -59,6 +60,19 @@
         "description": "Relative path under SYNAPS_BASE_DIR for the local JSONL audit spool.",
         "required": false,
         "default": "audit-spool/pria-session-context.jsonl"
+      },
+      {
+        "key": "usage_url",
+        "type": "string",
+        "description": "Guest-agent local usage-proxy endpoint (it signs + forwards to Pria /internal/agentic-vm/usage). Overridden by context.usage_url if present. Falls back to ingest_url when unset.",
+        "required": false
+      },
+      {
+        "key": "usage_token",
+        "type": "string",
+        "description": "Bearer token for the guest-agent local usage proxy. Falls back to ingest_token when unset.",
+        "required": false,
+        "secret_env": "PRIA_USAGE_TOKEN"
       }
     ]
   }

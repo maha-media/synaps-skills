@@ -76,12 +76,13 @@ validate_plugin_json() {
     fi
   fi
 
-  # P007 — compatibility.extension_protocol must be "1" if present
+  # P007 — compatibility.extension_protocol must be "1" or "2" if present
+  # ("2" adds the on_usage hook; SynapsCLI CURRENT_EXTENSION_PROTOCOL_VERSION=2).
   if pj_has "$file" '.compatibility.extension_protocol'; then
     local proto
     proto=$(pj_get "$file" '.compatibility.extension_protocol')
-    if [[ "$proto" != "1" ]]; then
-      err "P007: compatibility.extension_protocol must be \"1\" (got '$proto')"
+    if [[ "$proto" != "1" && "$proto" != "2" ]]; then
+      err "P007: compatibility.extension_protocol must be \"1\" or \"2\" (got '$proto')"
       errs=$((errs + 1))
     fi
   fi

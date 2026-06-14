@@ -1,21 +1,28 @@
-"""Raw-usage → Pria usage-ingest transform (AC-B1.2, pre-core scaffold).
+"""Raw-usage → Pria usage-ingest transform (AC-B2.1, live under protocol v2).
 
 This module is the plugin-side half of the agentic credits / usage-metering
-path (spec §5/§6). It is intentionally **decoupled from the SynapsCLI core**:
+path (spec §5/§6). Now that SynapsCLI core (Track C) ships the `on_usage` hook
+and bumps the extension protocol to v2, the plugin manifest declares
+`on_usage` and core delivers raw LLM token usage to `app._on_usage`, which calls
+into this module:
 
-  * SynapsCLI has no `on_usage` hook yet — `HookKind` is a closed enum and the
-    manifest validator hard-rejects `protocol_version != 1`
-    (see docs/contract.md §5, HS-U1/HS-U3). So this code is **not** wired into
-    the manifest. It is exercised today only by unit tests with synthetic
-    payloads, and is invoked defensively by `app.handle_hook` IF an `on_usage`
-    event ever arrives (it won't until Track C ships protocol v2).
   * It emits **raw usage only** — token/cache counts, provider, model. It MUST
     NOT compute or include Pria `credits`; Pria's rating engine is the sole
-    authority (spec §5.5).
+    authority (spec §5.5). `assert_raw_only` enforces this on every batch.
+  * Identity (account/instance/user/vm/session) comes from the file-delivered
+    session context (HS-2: extensions run under `env_clear()`, so there is no
+    `SYNAPS_SESSION_CONTEXT` env var — the context arrives as a file keyed by
+    `session_id`; see contract §1.2).
+  * The forward target is the **guest-agent local signing proxy**, which holds
+    the Pria HMAC key and re-stamps trusted identity before POSTing to
+    `/internal/agentic-vm/usage` (AC-B2.2, resolves open Q10 → guest-agent
+    signs). The transport shape is identical to a direct POST.
 
 Responsibilities (all pure / side-effect-free except `forward`):
   * `usage_from_hook(event)`   — normalise an `on_usage` HookEvent → raw usage.
   * `derive_idempotency_key(...)` — stable dedupe key when the runtime gives none.
+    Mirrors the guest-agent fallback hashing byte-for-byte so the two ingest
+    paths derive convergent `usage_hash` values (spec §6.4).
   * `build_usage_batch(ctx, ...)` — join raw usage with file-delivered session
     context (account/instance/user/vm/session) into the spec §6.2 request body.
   * `UsageForwarder` — best-effort POST via the existing `IngestSink` transport

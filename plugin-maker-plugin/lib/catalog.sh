@@ -33,18 +33,23 @@ audio.output	false	Produce audio through output devices.
 EOF
 }
 
-# ── hook kinds (7 total) ───────────────────────────────────────────────────
+# ── hook kinds (8 total) ───────────────────────────────────────────────────
 # Source: src/extensions/hooks/events.rs::HookKind
-# Format: name<TAB>required_permission<TAB>allows_tool_filter<TAB>allowed_actions<TAB>description
+# Format: name<TAB>required_permission<TAB>allows_tool_filter<TAB>allowed_actions<TAB>min_protocol<TAB>description
+# `min_protocol` gates version-introduced hooks: a manifest may only subscribe
+# to a hook whose minimum protocol version it declares. This mirrors SynapsCLI
+# `HookKind::min_protocol_version` and keeps v1 plugins from ever being
+# subscribed to (and thus delivered) the v2-only `on_usage` hook (HS-U3).
 catalog_hooks() {
   cat <<'EOF'
-before_tool_call	tools.intercept	yes	continue,block,confirm,modify	Fires immediately before a tool is invoked. Handlers may block, modify, or require user confirmation.
-after_tool_call	tools.intercept	yes	continue	Fires immediately after a tool returns. Handlers receive the output.
-before_message	privacy.llm_content	no	continue,inject	Fires before an LLM message is sent. Handlers may inject extra context.
-on_message_complete	privacy.llm_content	no	continue	Fires after an assistant response is added to history.
-on_compaction	privacy.llm_content	no	continue	Fires after conversation compaction creates a replacement session.
-on_session_start	session.lifecycle	no	continue	Fires when a new session is created.
-on_session_end	session.lifecycle	no	continue	Fires when a session is torn down.
+before_tool_call	tools.intercept	yes	continue,block,confirm,modify	1	Fires immediately before a tool is invoked. Handlers may block, modify, or require user confirmation.
+after_tool_call	tools.intercept	yes	continue	1	Fires immediately after a tool returns. Handlers receive the output.
+before_message	privacy.llm_content	no	continue,inject	1	Fires before an LLM message is sent. Handlers may inject extra context.
+on_message_complete	privacy.llm_content	no	continue	1	Fires after an assistant response is added to history.
+on_compaction	privacy.llm_content	no	continue	1	Fires after conversation compaction creates a replacement session.
+on_session_start	session.lifecycle	no	continue	1	Fires when a new session is created.
+on_session_end	session.lifecycle	no	continue	1	Fires when a session is torn down.
+on_usage	privacy.llm_content	no	continue	2	Fires when an LLM turn reports raw token/cache usage (protocol v2). Reuses privacy.llm_content; raw-usage only, no credits.
 EOF
 }
 
@@ -198,6 +203,13 @@ hook_allows_tool_filter() {
   catalog_hooks | awk -F'\t' -v n="$name" '$1 == n && $3 == "yes" { found=1 } END { exit !found }'
 }
 
+# hook_min_protocol NAME → emits the minimum extension protocol_version that may
+# subscribe to this hook (1 for the original closed set, 2 for `on_usage`).
+hook_min_protocol() {
+  local name="$1"
+  catalog_hooks | awk -F'\t' -v n="$name" '$1 == n { print $5; exit }'
+}
+
 # is_known_editor_kind NAME → 0 if known
 is_known_editor_kind() {
   local name="$1"
@@ -253,8 +265,8 @@ catalog_dispatch() {
   esac
   case "$what" in
     hooks)
-      print_catalog_table "Hook kinds (7)" \
-        $'KIND\tREQUIRES\tTOOL_FILTER\tACTIONS\tDESCRIPTION' catalog_hooks
+      print_catalog_table "Hook kinds (8)" \
+        $'KIND\tREQUIRES\tTOOL_FILTER\tACTIONS\tMIN_PROTO\tDESCRIPTION' catalog_hooks
       ;;
     permissions)
       print_catalog_table "Extension permissions (12)" \
@@ -290,7 +302,7 @@ catalog_dispatch() {
 Usage: plugin-maker catalog <name>
 
 Available catalogs:
-  hooks               — 7 hook kinds with required permissions and tool-filter rules
+  hooks               — 8 hook kinds with required permissions and tool-filter rules
   permissions         — 12 extension permissions (incl. reserved)
   hook-permissions    — hook → required-permission map
   sidecar-frames      — sidecar wire protocol v2 frames

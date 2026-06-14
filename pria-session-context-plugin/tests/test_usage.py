@@ -1,4 +1,4 @@
-"""AC-B1.2 — raw-usage → Pria usage-ingest transform (pre-core, no SynapsCLI dep).
+"""AC-B2.1 — raw-usage → Pria usage-ingest transform (live under protocol v2).
 
 Covers:
   * payload shape (spec §6.2 envelope + events[])
@@ -6,7 +6,7 @@ Covers:
   * raw-only invariant (NO `credits`/`credit_cost`)
   * session-context join from the context FILE (HS-2)
   * best-effort forward + spool-tolerance
-  * defensive `on_usage` dispatch in App (manifest stays v1)
+  * `on_usage` dispatch in App; manifest declares on_usage under protocol v2
 """
 import json
 import os
@@ -258,8 +258,8 @@ class ForwarderTest(unittest.TestCase):
 
 
 class AppDispatchTest(unittest.TestCase):
-    """The defensive `on_usage` handler exists, joins context, forwards, and is
-    never wired into the manifest (protocol stays v1)."""
+    """The `on_usage` handler is declared in the manifest (protocol v2), joins
+    the file-delivered session context, and forwards raw usage."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -278,13 +278,21 @@ class AppDispatchTest(unittest.TestCase):
         os.environ["PRIA_AUDIT_QUIET"] = "1"
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(self._env)))
 
-    def test_manifest_stays_v1_without_on_usage(self):
+    def test_manifest_declares_on_usage_under_protocol_v2(self):
         manifest = json.loads(
             (Path(__file__).resolve().parents[1] / ".synaps-plugin" / "plugin.json").read_text()
         )
-        self.assertEqual(manifest["extension"]["protocol_version"], 1)
+        self.assertEqual(manifest["extension"]["protocol_version"], 2)
+        self.assertEqual(manifest["compatibility"]["extension_protocol"], "2")
         hooks = [h["hook"] for h in manifest["extension"]["hooks"]]
-        self.assertNotIn("on_usage", hooks)
+        self.assertIn("on_usage", hooks)
+        # on_usage reuses privacy.llm_content — no new permission needed (HS-U5).
+        self.assertIn("privacy.llm_content", manifest["extension"]["permissions"])
+
+    def test_initialize_reports_protocol_v2(self):
+        app = App("pria-session-context")
+        result = app.initialize({"config": {}})
+        self.assertEqual(result["protocol_version"], 2)
 
     def test_on_usage_dispatch_forwards_raw_usage(self):
         app = App("pria-session-context")
@@ -297,9 +305,19 @@ class AppDispatchTest(unittest.TestCase):
         self.assertEqual(len(opener.calls), 1)
         payload = opener.calls[0]["payload"]
         self.assertEqual(payload["account_id"], "acct_123")
+        self.assertEqual(payload["source"], U.SOURCE_ON_USAGE)
         ev = payload["events"][0]
         self.assertEqual(ev["type"], "llm.tokens")
         self.assertNotIn("credits", ev)
+
+    def test_on_usage_never_raises_when_forward_offline(self):
+        app = App("pria-session-context")
+        app.initialize({"config": {}})
+        app.usage._opener = FakeOpener(fail=True)
+        app.handle_hook({"kind": "on_session_start", "session_id": "sess_abc"})
+        # offline forward must not raise out of the hot path
+        out = app.handle_hook(SAMPLE_HOOK)
+        self.assertEqual(out["action"], "continue")
 
     def test_unknown_hook_kind_still_continues(self):
         app = App("pria-session-context")

@@ -43,10 +43,10 @@ class FramingTest(unittest.TestCase):
 
 
 class HandshakeTest(unittest.TestCase):
-    def test_initialize_returns_protocol_1(self):
+    def test_initialize_returns_protocol_2(self):
         app = App("pria-session-context")
         result = app.initialize({"config": {"ingest_url": "https://x"}})
-        self.assertEqual(result["protocol_version"], 1)
+        self.assertEqual(result["protocol_version"], 2)
         self.assertIn("tools", result["capabilities"])
         self.assertEqual(app.config["ingest_url"], "https://x")
 

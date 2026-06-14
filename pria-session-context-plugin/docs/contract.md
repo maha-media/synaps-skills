@@ -279,3 +279,57 @@ core edits Track C must land:
   `/internal/agentic-vm/usage`, spool on failure. This is the §0.2 fallback and
   remains even after `on_usage` ships (dedupe collapses overlap by idempotency
   key).
+
+---
+
+## 6. Usage metering (post-core) — Track B2 (protocol v2 LIVE)
+
+**Status:** LIVE. SynapsCLI Track C landed `HookKind::OnUsage` ("on_usage"),
+`HookEvent::on_usage(...)` (spec §5.3 payload), `CURRENT_EXTENSION_PROTOCOL_VERSION = 2`
+(`{1,2}` accepted; v1 plugins never subscribed to `on_usage`), and the
+authoritative single-emit at the delta arm with `model` populated. The HS-U
+register (§5.1) is resolved as specified.
+
+### 6.1 Plugin (AC-B2.1)
+
+- `.synaps-plugin/plugin.json` → `extension.protocol_version: 2`,
+  `compatibility.extension_protocol: "2"`, and declares `{ "hook": "on_usage" }`.
+  `on_usage` reuses the **existing** `privacy.llm_content` permission (HS-U5), so
+  no permission-catalog change is required.
+- `app._on_usage(event)` (live in the dispatch table) calls
+  `usage.usage_from_hook` → `usage.build_usage_batch` joining raw token counts
+  with the **file-delivered** session context (account/instance/user/vm/session
+  — HS-2, §1.2), derives the idempotency key (§6.4), and forwards the spec §6.2
+  envelope via `UsageForwarder`. Emits **raw usage only** — no `credits`
+  (`assert_raw_only` enforces this). The handler never raises and always returns
+  `continue`: metering must never block or corrupt the agent loop.
+- Forward target is the **guest-agent local signing proxy** (`usage_url` /
+  `usage_token`, falling back to `ingest_url` / `ingest_token`). The guest agent
+  holds the Pria HMAC key and re-stamps trusted identity before POSTing to
+  `/internal/agentic-vm/usage` (resolves open Q10 → guest-agent signs/proxies).
+
+**plugin-maker (validator) parity:** the closed-catalog validator mirrors the
+core bump — `catalog.sh` adds `on_usage` (min_protocol 2, perm
+`privacy.llm_content`, no tool filter), `validate.sh` P007 accepts
+`extension_protocol ∈ {"1","2"}`, `validate_extension.sh` X003 accepts
+`protocol_version ∈ {1,2}` and **X014** rejects a manifest that subscribes to a
+hook whose `min_protocol` exceeds the declared `protocol_version` (so a v1
+manifest declaring `on_usage` fails validation, mirroring HS-U3).
+
+### 6.2 Guest-agent usage signing path (AC-B2.2)
+
+- `pria_client::UsagePayload` / `PriaCallbackClient::usage()` (from AC-B1.3) is
+  the single signed forward primitive for **both** paths.
+- `synaps::launcher::tag_plugin_usage(envelope, identity)` ingests the plugin's
+  §6.2 envelope arriving over the guest-agent local proxy, **re-stamps trusted
+  identity** from the guest agent's session table (`SessionStore::usage_identity`)
+  + config (`vm_id`/`replica_id`) — the in-VM plugin can declare `session_id` but
+  may **not** spoof account/instance/user — preserves the plugin-derived
+  idempotency keys and the `synaps-hook-on-usage` source, drops empty turns, and
+  forwards via `pria.usage()`.
+- The `synaps-hook-on-usage` (plugin) and `synaps-rpc-agent-end` (RPC fallback)
+  paths use **distinct `source` tags** and a **byte-identical `usage_hash`**
+  canonicalisation (sorted token keys → SHA-256 → 16 hex), so Pria's ledger
+  dedupe (`account + source + idempotency_key`) keeps them auditable and Pria
+  rating can cross-check/collapse without double-charging (spec §0.2, plan #3).
+  The RPC `AgentEnd.usage` fallback remains available and auditable.

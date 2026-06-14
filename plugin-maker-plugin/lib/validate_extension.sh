@@ -31,11 +31,12 @@ validate_extension() {
     errs=$((errs + 1))
   fi
 
-  # X003 — protocol_version
+  # X003 — protocol_version ∈ {1, 2}. v2 adds the on_usage hook (SynapsCLI
+  # CURRENT_EXTENSION_PROTOCOL_VERSION=2); v1 manifests remain fully valid.
   local proto
   proto=$(pj_get "$file" '.extension.protocol_version // 1')
-  if [[ "$proto" != "1" ]]; then
-    err "X003: extension.protocol_version must be 1 (got '$proto')"
+  if [[ "$proto" != "1" && "$proto" != "2" ]]; then
+    err "X003: extension.protocol_version must be 1 or 2 (got '$proto')"
     errs=$((errs + 1))
   fi
 
@@ -106,6 +107,17 @@ validate_extension() {
     needed=$(hook_required_permission "$hook")
     if ! grep -Fqx "$needed" <<<"$perms"; then
       err "X008: hooks[$i] '$hook' requires permission '$needed' (not in extension.permissions)"
+      errs=$((errs + 1))
+    fi
+
+    # X014 — version-introduced hooks may only be declared by a manifest whose
+    # extension.protocol_version is high enough. Mirrors SynapsCLI
+    # HookKind::min_protocol_version (HS-U3): a v1 plugin must never subscribe to
+    # the v2-only on_usage hook (or it could be delivered an unknown kind).
+    local min_proto
+    min_proto=$(hook_min_protocol "$hook")
+    if [[ -n "$min_proto" && "$proto" -lt "$min_proto" ]]; then
+      err "X014: hooks[$i] '$hook' requires extension.protocol_version >= $min_proto (manifest declares $proto)"
       errs=$((errs + 1))
     fi
 
