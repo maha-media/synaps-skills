@@ -80,6 +80,7 @@ pub fn test_env(
     cfg.paths.efs_root = efs_root.clone();
     cfg.paths.run_root = run_root.clone();
     cfg.paths.audit_spool_dir = spool;
+    cfg.paths.policy_dir = efs_root.join("policy");
     let state = assemble(cfg, pria, os, synaps);
     TestEnv {
         state,
@@ -106,5 +107,6 @@ fn assemble(
         os,
         synaps,
         sessions,
+        fsmon: Arc::new(crate::fsmon::client::FakeFsmonControl::healthy()),
     }
 }

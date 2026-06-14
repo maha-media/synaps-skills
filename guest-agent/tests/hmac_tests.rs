@@ -74,6 +74,7 @@ fn test_state() -> AppState {
         os: Arc::new(pria_guest_agent::os::FakeUserManager::default()),
         synaps: Arc::new(pria_guest_agent::synaps::launcher::FakeLauncher::default()),
         sessions,
+        fsmon: Arc::new(pria_guest_agent::fsmon::client::FakeFsmonControl::healthy()),
     }
 }
 

@@ -40,6 +40,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sessions = std::sync::Arc::new(pria_guest_agent::sessions::SessionStore::new(
         runtime.clone(),
     ));
+    let fsmon: std::sync::Arc<dyn pria_guest_agent::fsmon::client::FsmonControl> =
+        std::sync::Arc::new(pria_guest_agent::fsmon::client::UdsFsmonControl::new(
+            config.fsmon.socket.clone(),
+        ));
     let state = AppState {
         config: Arc::new(config),
         hmac: Arc::new(hmac),
@@ -49,6 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         os,
         synaps,
         sessions,
+        fsmon,
     };
 
     let _heartbeat = pria_guest_agent::supervisor::spawn_heartbeat_loop(state.clone());

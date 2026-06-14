@@ -8,6 +8,7 @@
 
 pub mod config;
 pub mod error;
+pub mod fsmon;
 pub mod hmac;
 pub mod ids;
 pub mod os;
