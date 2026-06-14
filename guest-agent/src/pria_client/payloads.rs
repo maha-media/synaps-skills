@@ -1,7 +1,7 @@
 //! Pria callback payload types (spec §7) + the guest-agent audit event builder.
 
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 /// Heartbeat payload (spec §7.1).
@@ -67,18 +67,19 @@ pub struct CredentialRequestPayload {
 /// RAW USAGE ONLY — there is deliberately no `credits`/`credit_cost` field.
 /// Pria's rating engine is the sole authority for credit conversion
 /// (spec §5.5). The token counts are forwarded verbatim from the runtime.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UsageEvent {
     pub idempotency_key: String,
     #[serde(rename = "type")]
     pub event_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     pub occurred_at: String,
     /// Raw token breakdown (input/output/cache split), forwarded verbatim.
     pub usage: Value,
+    #[serde(default)]
     pub metadata: Value,
 }
 
@@ -104,6 +105,12 @@ pub struct UsagePayload {
 
 /// Source tag for the RPC-boundary fallback path (spec §6.1 / model `source`).
 pub const SOURCE_RPC_AGENT_END: &str = "synaps-rpc-agent-end";
+
+/// Source tag for the in-VM `on_usage` plugin path (spec §6.1 / model `source`).
+/// Kept **distinct** from `SOURCE_RPC_AGENT_END` so Pria's ledger dedupe
+/// (`account + source + idempotency_key`) keeps the two paths auditable and Pria
+/// rating can cross-check/collapse without double-charging (spec §0.2).
+pub const SOURCE_ON_USAGE: &str = "synaps-hook-on-usage";
 
 /// Canonical event type for LLM token usage.
 pub const EVENT_TYPE_LLM_TOKENS: &str = "llm.tokens";

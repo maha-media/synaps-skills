@@ -20,6 +20,7 @@ pub mod health;
 pub mod policy;
 pub mod principals;
 pub mod sessions;
+pub mod usage;
 
 /// Shared application state. Cloned into handlers via axum `State`; the heavy
 /// members are behind `Arc` so cloning is cheap.
@@ -68,6 +69,7 @@ pub fn build_router(state: AppState) -> Router {
             get(sessions::status),
         )
         .route(&format!("{prefix}/policy/apply"), post(policy::apply))
+        .route(&format!("{prefix}/usage"), post(usage::ingest))
         .route(&format!("{prefix}/fsmon/status"), get(fsmon::status))
         .route(&format!("{prefix}/fsmon/reload"), post(fsmon::reload))
         .with_state(state)

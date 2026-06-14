@@ -76,6 +76,17 @@ impl SessionStore {
         })
     }
 
+    /// Resolve a `session_id` to its trusted attribution tags (account /
+    /// instance / user) for the AC-B2.2 usage signing proxy. The guest agent
+    /// owns this mapping; the in-VM plugin may name a `session_id` but may NOT
+    /// supply/spoof account/instance/user — those come from here. Returns
+    /// `None` for an unknown session so the proxy can reject it.
+    pub fn identity_tags(&self, session_id: &str) -> Option<(String, String, String)> {
+        let map = self.sessions.lock().unwrap();
+        map.get(session_id)
+            .map(|e| (e.account_id.clone(), e.instance_id.clone(), e.user_id.clone()))
+    }
+
     /// Remove a session (on close/exit) and decrement the active counter.
     pub fn remove(&self, session_id: &str) -> Option<SessionEntry> {
         let mut map = self.sessions.lock().unwrap();

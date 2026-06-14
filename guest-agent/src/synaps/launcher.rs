@@ -19,7 +19,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::pria_client::payloads::{
-    derive_idempotency_key, normalise_usage, EVENT_TYPE_LLM_TOKENS, SOURCE_RPC_AGENT_END,
+    derive_idempotency_key, normalise_usage, EVENT_TYPE_LLM_TOKENS, SOURCE_ON_USAGE,
+    SOURCE_RPC_AGENT_END,
 };
 use crate::pria_client::{SessionEventPayload, UsageEvent, UsagePayload};
 
@@ -188,6 +189,81 @@ pub fn tag_agent_end_usage(raw_event: &Value, identity: &UsageIdentity) -> Optio
         ephemeral_task_id: identity.ephemeral_task_id.clone(),
         source: SOURCE_RPC_AGENT_END.to_string(),
         events: vec![event],
+    })
+}
+
+// ── AC-B2.2 in-VM `on_usage` plugin signing proxy ────────────────────────────
+
+/// Re-tag an in-VM plugin's spec §6.2 usage envelope with **trusted** identity
+/// and prepare it for the signed forward to `/internal/agentic-vm/usage`.
+///
+/// This is the AC-B2.2 primary path: the Pria session-context plugin fires on
+/// SynapsCLI's `on_usage` hook (protocol v2), builds the §6.2 envelope, and
+/// POSTs it to the guest agent's local usage proxy (the plugin holds no Pria
+/// HMAC key). The guest agent owns signing + attribution:
+///
+///   * Identity (account/instance/user/vm/replica) comes from `identity`, which
+///     the proxy resolves from its session table + config — the plugin may NAME
+///     a `session_id` but may NOT spoof account/instance/user.
+///   * The plugin-derived `idempotency_key`, `type`, `provider`, `model`,
+///     `occurred_at`, `usage`, and `metadata` are preserved verbatim so the
+///     ledger key the plugin computed is authoritative for this path.
+///   * The `source` is forced to `synaps-hook-on-usage` (distinct from the RPC
+///     fallback's `synaps-rpc-agent-end`), keeping both paths auditable.
+///   * Empty turns (no positive token count on any event) are dropped, and any
+///     event carrying a `credits`/`credit_cost` field is rejected (raw-only,
+///     spec §5.5) by returning `None`.
+///
+/// Returns `None` when the envelope has no billable events — the proxy then
+/// replies success without forwarding (nothing to bill).
+pub fn tag_plugin_usage(envelope: &Value, identity: &UsageIdentity) -> Option<UsagePayload> {
+    let raw_events = envelope.get("events")?.as_array()?;
+    let mut events: Vec<UsageEvent> = Vec::with_capacity(raw_events.len());
+
+    for raw in raw_events {
+        // Raw-only invariant (spec §5.5): never accept credits from the plugin.
+        if raw.get("credits").is_some() || raw.get("credit_cost").is_some() {
+            return None;
+        }
+        // Deserialize into the canonical UsageEvent; skip malformed entries.
+        let mut ev: UsageEvent = match serde_json::from_value(raw.clone()) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        // Re-normalise the token counts so the forwarded `usage` matches the
+        // canonical shape Pria expects (and the usage_hash basis).
+        ev.usage = normalise_usage(&ev.usage);
+
+        // Drop genuinely empty turns — nothing to bill.
+        let any_tokens = [
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+        ]
+        .iter()
+        .any(|k| ev.usage.get(*k).and_then(|v| v.as_u64()).unwrap_or(0) > 0);
+        if !any_tokens {
+            continue;
+        }
+        events.push(ev);
+    }
+
+    if events.is_empty() {
+        return None;
+    }
+
+    Some(UsagePayload {
+        account_id: identity.account_id.clone(),
+        instance_id: identity.instance_id.clone(),
+        user_id: identity.user_id.clone(),
+        vm_id: identity.vm_id.clone(),
+        replica_id: identity.replica_id.clone(),
+        session_id: identity.session_id.clone(),
+        ephemeral_task_id: identity.ephemeral_task_id.clone(),
+        // Force the canonical plugin source regardless of what the plugin sent.
+        source: SOURCE_ON_USAGE.to_string(),
+        events,
     })
 }
 
@@ -480,6 +556,103 @@ mod tests {
         let raw = json!({"type": "agent_end", "usage": { "input_tokens": 5 }});
         let payload = tag_agent_end_usage(&raw, &identity()).unwrap();
         assert!(payload.events[0].model.is_none());
+    }
+
+    // ── AC-B2.2 tag_plugin_usage ─────────────────────────────────────────────
+
+    fn plugin_envelope() -> Value {
+        // A spec §6.2 envelope as the in-VM plugin builds it. Note the plugin
+        // claims an account_id we must IGNORE in favour of the trusted identity.
+        json!({
+            "account_id": "acct_SPOOFED",
+            "instance_id": "inst_SPOOFED",
+            "user_id": "user_SPOOFED",
+            "session_id": "sess_5",
+            "source": "synaps-hook-on-usage",
+            "events": [{
+                "idempotency_key": "synaps:sess_5:msg_123:llm.tokens:deadbeefdeadbeef",
+                "type": "llm.tokens",
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-test",
+                "occurred_at": "2026-06-14T00:00:00Z",
+                "usage": {
+                    "input_tokens": 1234, "output_tokens": 567,
+                    "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 200,
+                    "cache_creation_5m": 200, "cache_creation_1h": 0
+                },
+                "metadata": { "message_id": "msg_123", "turn_id": "turn_abc" }
+            }]
+        })
+    }
+
+    #[test]
+    fn tag_plugin_usage_restamps_trusted_identity_and_preserves_key() {
+        let payload = tag_plugin_usage(&plugin_envelope(), &identity()).expect("billable");
+        // Trusted identity wins over the plugin-claimed (spoofed) tags.
+        assert_eq!(payload.account_id, "acct_1");
+        assert_eq!(payload.instance_id, "inst_2");
+        assert_eq!(payload.user_id, "user_3");
+        assert_eq!(payload.vm_id, "vm_4");
+        assert_eq!(payload.replica_id, "r0");
+        // Canonical plugin source, distinct from the RPC fallback.
+        assert_eq!(payload.source, "synaps-hook-on-usage");
+        assert_eq!(payload.events.len(), 1);
+        let ev = &payload.events[0];
+        // Plugin-derived idempotency key + provider/model preserved verbatim.
+        assert_eq!(ev.idempotency_key, "synaps:sess_5:msg_123:llm.tokens:deadbeefdeadbeef");
+        assert_eq!(ev.provider.as_deref(), Some("anthropic"));
+        assert_eq!(ev.model.as_deref(), Some("claude-sonnet-4-test"));
+        assert_eq!(ev.usage["input_tokens"], 1234);
+        // Raw-only: no credits anywhere in the forwarded payload.
+        let v = serde_json::to_value(&payload).unwrap();
+        assert!(v.to_string().find("credits").is_none());
+    }
+
+    #[test]
+    fn tag_plugin_usage_rejects_credits_field() {
+        let mut env = plugin_envelope();
+        env["events"][0]["credits"] = json!(0.0184);
+        // Raw-only invariant (spec §5.5): the whole batch is rejected.
+        assert!(tag_plugin_usage(&env, &identity()).is_none());
+    }
+
+    #[test]
+    fn tag_plugin_usage_drops_empty_turns() {
+        let env = json!({
+            "session_id": "sess_5",
+            "events": [{
+                "idempotency_key": "k", "type": "llm.tokens",
+                "occurred_at": "2026-06-14T00:00:00Z",
+                "usage": { "input_tokens": 0, "output_tokens": 0 },
+                "metadata": {}
+            }]
+        });
+        assert!(tag_plugin_usage(&env, &identity()).is_none());
+    }
+
+    #[test]
+    fn tag_plugin_usage_none_without_events() {
+        assert!(tag_plugin_usage(&json!({"session_id": "s"}), &identity()).is_none());
+    }
+
+    #[test]
+    fn tag_plugin_usage_normalises_usage_shape() {
+        // Plugin sends only input_tokens; the proxy fills the canonical fields so
+        // the forwarded usage matches the usage_hash basis Pria expects.
+        let env = json!({
+            "session_id": "sess_5",
+            "events": [{
+                "idempotency_key": "k", "type": "llm.tokens",
+                "occurred_at": "2026-06-14T00:00:00Z",
+                "usage": { "input_tokens": 7 }, "metadata": {}
+            }]
+        });
+        let payload = tag_plugin_usage(&env, &identity()).unwrap();
+        let u = &payload.events[0].usage;
+        assert_eq!(u["input_tokens"], 7);
+        assert_eq!(u["output_tokens"], 0);
+        assert_eq!(u["cache_read_input_tokens"], 0);
+        assert!(u["cache_creation_5m"].is_null());
     }
 
     #[tokio::test]

@@ -201,9 +201,11 @@ class UsageForwarder:
 
     Resolves a dedicated `usage_url`/`usage_token` first, then falls back to the
     audit `ingest_url`/`ingest_token`. Spool-tolerant: failures never raise on
-    the hook hot path. This is the plugin-direct path; in production (AC-B2.x)
-    the guest agent signs/proxies to `/internal/agentic-vm/usage`, but the
-    transport shape (envelope == request body) is identical.
+    the hook hot path. In production `usage_url` points at the **guest-agent
+    local signing proxy** (AC-B2.2): the guest agent holds the Pria HMAC key,
+    re-stamps trusted identity, and signs + POSTs the §6.2 body to
+    `/internal/agentic-vm/usage`. The transport shape (envelope == request body)
+    is identical whether the target is the proxy or Pria directly.
 
     Unlike the audit `IngestSink` (which wraps records as ``{"events": [...]}``),
     the usage envelope IS the spec §6.2 request body — account/instance/user

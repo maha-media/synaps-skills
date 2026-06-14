@@ -125,3 +125,173 @@ async fn spools_when_unreachable() {
     assert!(!spooled.contains("credits"));
     std::fs::remove_dir_all(&spool).ok();
 }
+
+// ── AC-B2.2 in-VM `on_usage` plugin signing proxy (primary path) ─────────────
+
+use pria_guest_agent::api::build_router;
+use pria_guest_agent::os::{FakeUserManager, UserRecord};
+use pria_guest_agent::synaps::launcher::{tag_plugin_usage, FakeLauncher};
+use pria_guest_agent::test_support::{test_env, TestEnv};
+
+fn post(uri: &str, body: serde_json::Value) -> axum::http::Request<axum::body::Body> {
+    axum::http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap()
+}
+
+fn started_env(pria: Arc<FakePriaClient>) -> TestEnv {
+    let os = Arc::new(FakeUserManager::default().with_user(UserRecord {
+        username: "pria_u_104251".into(),
+        uid: 104251,
+        gid: 104251,
+        active: true,
+    }));
+    test_env(pria, os, Arc::new(FakeLauncher::default()))
+}
+
+fn start_body(env: &TestEnv) -> serde_json::Value {
+    let ws = env.efs_root.join("instances/inst_456/workspace");
+    let sd = env.efs_root.join("sessions/sess_abc");
+    json!({
+        "account_id": "acct_123", "instance_id": "inst_456", "user_id": "user_789",
+        "session_id": "sess_abc", "vm_id": "vm_456",
+        "linux_username": "pria_u_104251", "uid": 104251, "gid": 104251,
+        "workspace_dir": ws.to_string_lossy(), "session_dir": sd.to_string_lossy(),
+        "roles": ["agent_operator"], "transport": {"kind": "pria-agent-websocket"},
+        "request_id": "req_1"
+    })
+}
+
+/// The plugin's §6.2 envelope (note: claims a spoofed account the proxy ignores).
+fn plugin_envelope() -> serde_json::Value {
+    json!({
+        "account_id": "acct_SPOOFED",
+        "instance_id": "inst_SPOOFED",
+        "user_id": "user_SPOOFED",
+        "session_id": "sess_abc",
+        "source": "synaps-hook-on-usage",
+        "events": [{
+            "idempotency_key": "synaps:sess_abc:msg_123:llm.tokens:deadbeefdeadbeef",
+            "type": "llm.tokens",
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-test",
+            "occurred_at": "2026-06-14T00:00:00Z",
+            "usage": {
+                "input_tokens": 1234, "output_tokens": 567,
+                "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 200,
+                "cache_creation_5m": 200, "cache_creation_1h": 0
+            },
+            "metadata": { "message_id": "msg_123", "turn_id": "turn_abc" }
+        }]
+    })
+}
+
+/// End-to-end: start a session, then POST a plugin usage envelope to the local
+/// proxy. The guest agent re-stamps trusted identity and forwards via the (fake)
+/// signed Pria client.
+#[tokio::test]
+async fn plugin_usage_proxy_restamps_and_forwards() {
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    let pria = Arc::new(FakePriaClient::default());
+    let env = started_env(pria.clone());
+    let state = env.state.clone();
+
+    // 1. Start the session so the proxy can resolve its trusted identity.
+    let start = build_router(state.clone())
+        .oneshot(post("/guest/v1/sessions/start", start_body(&env)))
+        .await
+        .unwrap();
+    assert_eq!(start.status(), axum::http::StatusCode::OK);
+
+    // 2. POST the plugin usage envelope to the local proxy.
+    let resp = build_router(state.clone())
+        .oneshot(post("/guest/v1/usage", plugin_envelope()))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["accepted"], 1);
+    assert_eq!(v["source"], "synaps-hook-on-usage");
+
+    // 3. The fake Pria client received a signed-forward usage payload with
+    //    TRUSTED identity (not the spoofed values) and the plugin idempotency key.
+    let usages = pria.usages.lock().unwrap();
+    assert_eq!(usages.len(), 1);
+    let p = &usages[0];
+    assert_eq!(p.account_id, "acct_123"); // from session table, NOT acct_SPOOFED
+    assert_eq!(p.instance_id, "inst_456");
+    assert_eq!(p.user_id, "user_789");
+    assert_eq!(p.vm_id, "vm_456");
+    assert_eq!(p.replica_id, "replica_0");
+    assert_eq!(p.source, "synaps-hook-on-usage");
+    assert_eq!(p.events[0].idempotency_key, "synaps:sess_abc:msg_123:llm.tokens:deadbeefdeadbeef");
+    assert!(!serde_json::to_string(&*p).unwrap().contains("credits"));
+}
+
+/// An unknown session_id is rejected (anti-spoof: identity must be resolvable).
+#[tokio::test]
+async fn plugin_usage_proxy_rejects_unknown_session() {
+    use tower::ServiceExt;
+    let pria = Arc::new(FakePriaClient::default());
+    let env = started_env(pria.clone());
+    let resp = build_router(env.state.clone())
+        .oneshot(post("/guest/v1/usage", json!({
+            "session_id": "sess_NOT_STARTED",
+            "events": [{ "idempotency_key": "k", "type": "llm.tokens",
+                         "occurred_at": "t", "usage": {"input_tokens": 1}, "metadata": {} }]
+        })))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+    assert_eq!(pria.usages.lock().unwrap().len(), 0);
+}
+
+/// Convergence (spec §6.4): the plugin path (`tag_plugin_usage`) and the RPC
+/// fallback (`tag_agent_end_usage`) derive a **byte-identical `usage_hash`** for
+/// the same token counts, but keep **distinct `source` tags** — so Pria's ledger
+/// dedupe can cross-check/collapse without double-charging.
+#[test]
+fn paths_converge_on_usage_hash_with_distinct_sources() {
+    use pria_guest_agent::pria_client::payloads::{
+        derive_idempotency_key, normalise_usage, usage_hash, EVENT_TYPE_LLM_TOKENS,
+    };
+
+    let tokens = json!({
+        "input_tokens": 1234, "output_tokens": 567,
+        "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 200,
+        "cache_creation_5m": 200, "cache_creation_1h": 0
+    });
+    let normalised = normalise_usage(&tokens);
+    let expected_hash = usage_hash(&normalised);
+
+    // The in-VM plugin derives its key over the SAME canonicalisation (asserted
+    // byte-for-byte against Python in payloads.rs::usage_hash_matches_python_*).
+    let plugin_key =
+        derive_idempotency_key("sess_5", "msg_123", EVENT_TYPE_LLM_TOKENS, &normalised);
+    let env = json!({
+        "session_id": "sess_5", "source": "synaps-hook-on-usage",
+        "events": [{
+            "idempotency_key": plugin_key, "type": "llm.tokens",
+            "provider": "anthropic", "model": "claude-sonnet-4-test",
+            "occurred_at": "2026-06-14T00:00:00Z", "usage": tokens.clone(), "metadata": {}
+        }]
+    });
+
+    let rpc =
+        tag_agent_end_usage(&json!({"type": "agent_end", "usage": tokens}), &identity()).unwrap();
+    let plugin = tag_plugin_usage(&env, &identity()).unwrap();
+
+    // Distinct, auditable sources keep the two paths separate in the ledger.
+    assert_eq!(rpc.source, "synaps-rpc-agent-end");
+    assert_eq!(plugin.source, "synaps-hook-on-usage");
+    // Both idempotency keys are built over the SAME convergent usage_hash, so
+    // Pria can cross-check/collapse the overlap without double-charging.
+    assert!(rpc.events[0].idempotency_key.ends_with(&expected_hash));
+    assert!(plugin.events[0].idempotency_key.ends_with(&expected_hash));
+}
