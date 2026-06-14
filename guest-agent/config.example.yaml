@@ -1,0 +1,29 @@
+mode: local-virsh
+account_id: acct_local_123
+vm_id: vm_local_456
+replica_id: replica_0
+route_prefix: /guest/v1
+listen:
+  host: 0.0.0.0
+  port: 47831
+pria:
+  base_url: http://host.libvirt.internal:3000
+  hmac_key_id: local-key-1
+  # Generated per-VM by the substrate (cloud-init); never committed (spec §16.3).
+  hmac_secret_file: /etc/pria/guest-agent.hmac
+paths:
+  efs_root: /efs/accounts/acct_local_123
+  run_root: /run/pria
+  policy_dir: /efs/accounts/acct_local_123/policy
+  audit_spool_dir: /efs/accounts/acct_local_123/audit-spool
+synaps:
+  binary: /usr/local/bin/synaps
+  plugin_dir: /opt/synaps/plugins
+fsmon:
+  socket: /run/pria/fsmon.sock
+  forward_socket: /run/pria/fsmon-forward.sock
+heartbeat:
+  interval_seconds: 15
+security:
+  max_timestamp_skew_seconds: 300
+  nonce_cache_seconds: 300
