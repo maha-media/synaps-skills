@@ -60,9 +60,12 @@ async fn echo(SignedJson { value, .. }: SignedJson<Echo>) -> String {
 fn test_state() -> AppState {
     let cfg = Config::from_yaml(SAMPLE_CONFIG).unwrap();
     let hmac = HmacVerifier::new(SECRET.to_vec(), "acct_123", "vm_456", 300, 300);
+    let versions = pria_guest_agent::versions::Versions::detect(&cfg);
     AppState {
         config: Arc::new(cfg),
         hmac: Arc::new(hmac),
+        runtime: Arc::new(pria_guest_agent::runtime::RuntimeState::new()),
+        versions: Arc::new(versions),
     }
 }
 

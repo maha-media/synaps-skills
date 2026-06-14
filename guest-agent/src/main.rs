@@ -20,6 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = std::env::var("PRIA_GUEST_AGENT_CONFIG")
         .map_err(|_| "PRIA_GUEST_AGENT_CONFIG must be set to the guest-agent config path")?;
     let config = Config::load_from(&config_path)?;
+    let versions = pria_guest_agent::versions::Versions::detect(&config);
 
     let listen = config.listen.clone();
     let secret = config.load_hmac_secret()?;
@@ -33,6 +34,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState {
         config: Arc::new(config),
         hmac: Arc::new(hmac),
+        runtime: Arc::new(pria_guest_agent::runtime::RuntimeState::new()),
+        versions: Arc::new(versions),
     };
 
     let app = build_router(state);

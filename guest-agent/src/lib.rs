@@ -10,5 +10,7 @@ pub mod config;
 pub mod error;
 pub mod hmac;
 pub mod ids;
+pub mod runtime;
+pub mod versions;
 
 pub mod api;
