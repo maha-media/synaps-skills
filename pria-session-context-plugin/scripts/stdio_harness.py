@@ -69,9 +69,10 @@ def main():
     init = responses[0]
     assert init.get("result", {}).get("protocol_version") == 1, f"bad init: {init}"
     hook = responses[1]
-    assert hook.get("result", {}).get("action") == "continue", f"bad hook: {hook}"
+    # B3: bash with no session context fails closed (block).
+    assert hook.get("result", {}).get("action") == "block", f"bad hook: {hook}"
     print("B1 handshake OK:", json.dumps(init["result"]))
-    print("B1 hook dispatch OK:", json.dumps(hook["result"]))
+    print("B3 fail-closed gating OK:", json.dumps(hook["result"]))
 
 
 if __name__ == "__main__":

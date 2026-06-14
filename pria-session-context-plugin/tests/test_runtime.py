@@ -54,11 +54,12 @@ class HandshakeTest(unittest.TestCase):
         app = App("pria-session-context")
         self.assertEqual(app.handle_hook({"kind": "on_compaction"}), {"action": "continue"})
 
-    def test_before_tool_call_default_continue(self):
+    def test_before_tool_call_fail_closed_without_context(self):
+        # B3: high-risk tools (bash) fail closed when no session context is loaded.
         app = App("pria-session-context")
         out = app.handle_hook({"kind": "before_tool_call", "tool_name": "bash",
                                "tool_input": {"command": "ls"}})
-        self.assertEqual(out["action"], "continue")
+        self.assertEqual(out["action"], "block")
 
 
 if __name__ == "__main__":

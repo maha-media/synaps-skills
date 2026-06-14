@@ -10,6 +10,7 @@ Slice wiring:
 """
 from pria.sessionctx import SessionContext
 from pria.audit import AuditSink
+from pria.policy import PolicyEngine
 
 
 class App:
@@ -18,6 +19,7 @@ class App:
         self.config = {}
         self.ctx = SessionContext()
         self.audit = AuditSink(self.ctx, self.config)
+        self.policy = PolicyEngine(self.ctx)
 
     # ── initialize ──────────────────────────────────────────────────────────
     def initialize(self, params: dict) -> dict:
@@ -65,12 +67,21 @@ class App:
         return {"action": "continue"}
 
     def _before_tool_call(self, event: dict) -> dict:
-        # B3 replaces this with policy gating. B2 records the attempt.
-        self.audit.emit("tool.call.started", {
-            "tool_name": event.get("tool_name"),
+        tool_name = event.get("tool_name") or event.get("tool_runtime_name") or ""
+        tool_input = event.get("tool_input")
+        result = self.policy.decide(tool_name, tool_input)
+        kind = self.policy.classify_kind(result.get("action"))
+        fields = {
+            "tool_name": tool_name,
             "tool_runtime_name": event.get("tool_runtime_name"),
-        })
-        return {"action": "continue"}
+            "decision": result.get("action"),
+        }
+        if "reason" in result:
+            fields["reason"] = result["reason"]
+        if "message" in result:
+            fields["message"] = result["message"]
+        self.audit.emit(kind, fields)
+        return result
 
     def _after_tool_call(self, event: dict) -> dict:
         output = event.get("tool_output") or ""
