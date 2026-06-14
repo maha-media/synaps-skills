@@ -1,0 +1,29 @@
+{
+  "name": "pria-fsmon",
+  "version": "0.1.0",
+  "description": "Pria in-VM file-write monitor (synaps_fsmon): a Rust SIBLING DAEMON using fanotify FAN_OPEN_PERM/FAN_ACCESS_PERM for inline ALLOW/DENY, an in-memory L1 policy cache, fail-closed posture, and structured audit. Launched by the Pria guest agent / systemd — NOT a Synaps-managed sidecar (HS-5).",
+  "author": {
+    "name": "Pria",
+    "url": "https://github.com/maha-media"
+  },
+  "repository": "https://github.com/maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "security",
+  "compatibility": {
+    "synaps": ">=0.1.0"
+  },
+  "commands": [
+    {
+      "name": "fsmon-build",
+      "description": "Build the synaps_fsmon file-write monitor binary (cargo release build).",
+      "command": "bash",
+      "args": ["scripts/setup.sh"]
+    },
+    {
+      "name": "fsmon-check",
+      "description": "Verify the synaps_fsmon binary exists and a policy file parses.",
+      "command": "bash",
+      "args": ["scripts/setup.sh", "--check"]
+    }
+  ]
+}
