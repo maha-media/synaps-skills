@@ -11,6 +11,7 @@ Slice wiring:
 from pria.sessionctx import SessionContext
 from pria.audit import AuditSink
 from pria.policy import PolicyEngine
+from pria.ingest import IngestSink
 
 
 class App:
@@ -27,6 +28,9 @@ class App:
         if isinstance(incoming, dict):
             self.config = {**self.config, **incoming}
         self.audit.config = self.config
+        # B4: attach the Pria ingest sink (multi-sink: spool + ingest POST).
+        ingest = IngestSink(self.ctx, self.config)
+        self.audit.attach_ingest(ingest)
         return {
             "protocol_version": 1,
             "capabilities": {
