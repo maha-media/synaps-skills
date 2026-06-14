@@ -6,13 +6,16 @@ use axum::routing::get;
 use axum::Router;
 
 use crate::config::Config;
+use crate::hmac::HmacVerifier;
 
-/// Placeholder slice-B1 application state. Later slices (B2..B8) extend this with
-/// the HMAC verifier, OS layer, session table, fsmon client, and Pria callback
-/// client. Held behind `Arc` and cloned into handlers via axum `State`.
+/// Shared application state. Cloned into handlers via axum `State`; the heavy
+/// members are behind `Arc` so cloning is cheap. Later slices (B5..B8) extend
+/// this with the OS layer, session table, fsmon client, and Pria callback
+/// client.
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
+    pub hmac: Arc<HmacVerifier>,
 }
 
 /// Build the axum router for the configured route prefix.

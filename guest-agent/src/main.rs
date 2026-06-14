@@ -22,8 +22,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load_from(&config_path)?;
 
     let listen = config.listen.clone();
+    let secret = config.load_hmac_secret()?;
+    let hmac = pria_guest_agent::hmac::HmacVerifier::new(
+        secret,
+        config.account_id.to_string(),
+        config.vm_id.to_string(),
+        config.security.max_timestamp_skew_seconds,
+        config.security.nonce_cache_seconds,
+    );
     let state = AppState {
         config: Arc::new(config),
+        hmac: Arc::new(hmac),
     };
 
     let app = build_router(state);

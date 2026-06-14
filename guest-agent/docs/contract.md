@@ -57,8 +57,8 @@ ACCOUNT_ID     = "acct_local_123"
 VM_ID          = "vm_local_456"
 SESSION_ID     = "sess_abc"
 BODY           = "{\"hello\":\"world\"}"
-BODY_SHA256    = 936a185caaa266bb9cbe981e9e05cb78cd732b0b3280eb944412bb6f8f8f07af
-SIGNATURE      = 7b3d... (see `tests/hmac_tests.rs::golden_vector` for the frozen value)
+BODY_SHA256    = 93a23971a914e5eacbf0a8d25154cda309c3c1c72fbb9914d47c60f3cb681588
+SIGNATURE      = eba9ba5e3577be996992878db905837d3ee8186c11fe801578d87a730a38b61e
 ```
 
 The Rust crate freezes the computed signature in `tests/hmac_tests.rs`; the Node
