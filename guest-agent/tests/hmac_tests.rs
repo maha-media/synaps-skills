@@ -66,6 +66,7 @@ fn test_state() -> AppState {
         hmac: Arc::new(hmac),
         runtime: Arc::new(pria_guest_agent::runtime::RuntimeState::new()),
         versions: Arc::new(versions),
+        pria: Arc::new(pria_guest_agent::pria_client::fake::FakePriaClient::default()),
     }
 }
 

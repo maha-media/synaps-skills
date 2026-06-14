@@ -14,6 +14,11 @@ path = "src/main.rs"
 name = "pria_guest_agent"
 path = "src/lib.rs"
 
+[features]
+# Exposes in-crate test fakes (FakePriaClient, fake OS layer) to integration
+# tests and downstream harnesses (spec §13.2).
+test-fakes = []
+
 [dependencies]
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "process"] }

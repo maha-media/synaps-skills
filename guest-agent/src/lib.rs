@@ -10,7 +10,12 @@ pub mod config;
 pub mod error;
 pub mod hmac;
 pub mod ids;
+pub mod pria_client;
 pub mod runtime;
+pub mod supervisor;
 pub mod versions;
 
 pub mod api;
+
+#[cfg(any(test, feature = "test-fakes"))]
+pub mod test_support;

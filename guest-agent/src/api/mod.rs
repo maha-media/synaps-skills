@@ -7,6 +7,7 @@ use axum::Router;
 
 use crate::config::Config;
 use crate::hmac::HmacVerifier;
+use crate::pria_client::PriaCallbackClient;
 use crate::runtime::RuntimeState;
 use crate::versions::Versions;
 
@@ -14,14 +15,14 @@ pub mod health;
 
 /// Shared application state. Cloned into handlers via axum `State`; the heavy
 /// members are behind `Arc` so cloning is cheap. Later slices (B5..B8) extend
-/// this with the OS layer, session table, fsmon client, and Pria callback
-/// client.
+/// this with the OS layer, session table, fsmon client.
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
     pub hmac: Arc<HmacVerifier>,
     pub runtime: Arc<RuntimeState>,
     pub versions: Arc<Versions>,
+    pub pria: Arc<dyn PriaCallbackClient>,
 }
 
 /// Build the axum router for the configured route prefix.

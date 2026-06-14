@@ -25,18 +25,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listen = config.listen.clone();
     let secret = config.load_hmac_secret()?;
     let hmac = pria_guest_agent::hmac::HmacVerifier::new(
-        secret,
+        secret.clone(),
         config.account_id.to_string(),
         config.vm_id.to_string(),
         config.security.max_timestamp_skew_seconds,
         config.security.nonce_cache_seconds,
     );
+    let pria = pria_guest_agent::pria_client::http_client(&config, secret);
     let state = AppState {
         config: Arc::new(config),
         hmac: Arc::new(hmac),
         runtime: Arc::new(pria_guest_agent::runtime::RuntimeState::new()),
         versions: Arc::new(versions),
+        pria,
     };
+
+    let _heartbeat = pria_guest_agent::supervisor::spawn_heartbeat_loop(state.clone());
 
     let app = build_router(state);
 
