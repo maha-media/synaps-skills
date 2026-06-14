@@ -32,12 +32,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.security.nonce_cache_seconds,
     );
     let pria = pria_guest_agent::pria_client::http_client(&config, secret);
+    let os: std::sync::Arc<dyn pria_guest_agent::os::OsUserManager> =
+        std::sync::Arc::new(pria_guest_agent::os::users::LinuxUserManager::new());
     let state = AppState {
         config: Arc::new(config),
         hmac: Arc::new(hmac),
         runtime: Arc::new(pria_guest_agent::runtime::RuntimeState::new()),
         versions: Arc::new(versions),
         pria,
+        os,
     };
 
     let _heartbeat = pria_guest_agent::supervisor::spawn_heartbeat_loop(state.clone());

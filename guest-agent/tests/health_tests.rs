@@ -58,6 +58,7 @@ async fn health_returns_section_6_1_payload() {
         runtime: Arc::new(runtime),
         versions: Arc::new(versions),
         pria: Arc::new(pria_guest_agent::pria_client::fake::FakePriaClient::default()),
+        os: Arc::new(pria_guest_agent::os::FakeUserManager::default()),
     };
 
     let resp = build_router(state)

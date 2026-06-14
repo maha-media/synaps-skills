@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::api::AppState;
 use crate::config::Config;
 use crate::hmac::HmacVerifier;
+use crate::os::{FakeUserManager, OsUserManager};
 use crate::pria_client::PriaCallbackClient;
 use crate::runtime::RuntimeState;
 use crate::versions::Versions;
@@ -32,6 +33,11 @@ fsmon:
 
 /// Build a test `AppState` with HMAC disabled and the given Pria client.
 pub fn test_state_with_pria(pria: Arc<dyn PriaCallbackClient>) -> AppState {
+    test_state_full(pria, Arc::new(FakeUserManager::default()))
+}
+
+/// Build a test `AppState` with HMAC disabled and explicit Pria + OS layers.
+pub fn test_state_full(pria: Arc<dyn PriaCallbackClient>, os: Arc<dyn OsUserManager>) -> AppState {
     let cfg = Config::from_yaml(TEST_CONFIG).unwrap();
     let versions = Versions::detect(&cfg);
     AppState {
@@ -40,5 +46,6 @@ pub fn test_state_with_pria(pria: Arc<dyn PriaCallbackClient>) -> AppState {
         runtime: Arc::new(RuntimeState::new()),
         versions: Arc::new(versions),
         pria,
+        os,
     }
 }
