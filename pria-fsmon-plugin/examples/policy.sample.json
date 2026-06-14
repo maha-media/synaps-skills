@@ -1,0 +1,24 @@
+{
+  "default_decision": "allow",
+  "immutable_prefixes": [
+    "/srv/synaps/policy",
+    "/srv/synaps/account.json",
+    "/srv/synaps/instance.json",
+    "/srv/synaps/vm.json"
+  ],
+  "dlp_substrings": ["id_rsa", ".aws/credentials"],
+  "high_risk_prefixes": ["/srv/synaps", "/etc"],
+  "rules": [],
+  "principals": [
+    {
+      "uid": 12001,
+      "account_id": "acct_123",
+      "instance_id": "inst_456",
+      "user_id": "user_789",
+      "session_id": "sess_def",
+      "vm_id": "vm_abc",
+      "instance_roots": ["/srv/accounts/acme-school/instances/tutor-bot-7"],
+      "home_root": "/home/alice_acme"
+    }
+  ]
+}

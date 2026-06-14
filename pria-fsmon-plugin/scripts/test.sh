@@ -66,6 +66,14 @@ else
   fail "binary smoke"
 fi
 
+section "6. B8 guest-agent contract round-trip (policy push + audit forward)"
+if python3 "$ROOT/scripts/guest_agent_stub.py" >/tmp/fsmon-b8.out 2>&1; then
+  tail -3 /tmp/fsmon-b8.out
+  pass "B8 round-trip"
+else
+  cat /tmp/fsmon-b8.out; fail "B8 round-trip"
+fi
+
 section "Result"
 if [[ $fails -eq 0 ]]; then
   green "ALL PASS"; exit 0

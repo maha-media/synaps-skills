@@ -41,6 +41,9 @@ struct Args {
     control: String,
     forward: Option<String>,
     policy: Option<String>,
+    uid: u32,
+    sim_path: String,
+    op: String,
 }
 
 fn parse_args() -> Args {
@@ -51,6 +54,9 @@ fn parse_args() -> Args {
         control: DEFAULT_CONTROL.to_string(),
         forward: None,
         policy: None,
+        uid: 0,
+        sim_path: String::new(),
+        op: "open_write".to_string(),
     };
     let mut it = std::env::args().skip(1);
     if let Some(first) = it.next() {
@@ -73,6 +79,9 @@ fn apply_flag(a: &mut Args, flag: &str, it: &mut impl Iterator<Item = String>) {
         "--control" => a.control = it.next().unwrap_or_default(),
         "--forward" => a.forward = it.next(),
         "--policy" => a.policy = it.next(),
+        "--uid" => a.uid = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
+        "--path" => a.sim_path = it.next().unwrap_or_default(),
+        "--op" => a.op = it.next().unwrap_or_else(|| "open_write".to_string()),
         _ => {}
     }
 }
@@ -197,17 +206,57 @@ fn cmd_check(a: &Args) -> i32 {
     }
 }
 
+fn cmd_simulate(a: &Args) -> i32 {
+    // Dry-run one decision through the full decide → spool → forward path.
+    // Lets the guest agent self-test policy without CAP_SYS_ADMIN / fanotify.
+    let doc = match load_policy(&a.policy) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("synaps_fsmon: policy error: {e}");
+            return 2;
+        }
+    };
+    let op = match a.op.as_str() {
+        "open_write" => policy::Op::OpenWrite,
+        "open_read" => policy::Op::OpenRead,
+        "access" => policy::Op::Access,
+        other => {
+            eprintln!("synaps_fsmon: bad --op '{other}' (open_write|open_read|access)");
+            return 2;
+        }
+    };
+    let daemon = Daemon::new(
+        Policy::new(doc),
+        AuditSpool::new(&a.spool),
+        make_forwarder(&a.forward),
+    );
+    let verdict = daemon.decide_and_audit(a.uid, &a.sim_path, op);
+    println!(
+        "{{\"uid\":{},\"path\":\"{}\",\"op\":\"{}\",\"decision\":\"{}\",\"reason\":\"{}\"}}",
+        a.uid,
+        a.sim_path,
+        op.as_str(),
+        verdict.decision.as_str(),
+        verdict.reason.as_str()
+    );
+    match verdict.decision {
+        policy::Decision::Allow => 0,
+        policy::Decision::Deny => 3,
+    }
+}
+
 fn main() {
     let a = parse_args();
     let code = match a.cmd.as_str() {
         "run" => cmd_run(&a),
         "check" => cmd_check(&a),
+        "simulate" => cmd_simulate(&a),
         "version" | "--version" | "-V" => {
             println!("synaps_fsmon {}", env!("CARGO_PKG_VERSION"));
             0
         }
         other => {
-            eprintln!("synaps_fsmon: unknown command '{other}' (run|check|version)");
+            eprintln!("synaps_fsmon: unknown command '{other}' (run|check|simulate|version)");
             2
         }
     };
