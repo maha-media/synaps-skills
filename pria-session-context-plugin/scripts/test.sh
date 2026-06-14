@@ -31,7 +31,7 @@ else
 fi
 
 section "2. Python unit tests"
-if python3 -m unittest discover -s "$ROOT/tests" -p 'test_*.py' -v 2>&1; then
+if PRIA_AUDIT_QUIET=1 python3 -m unittest discover -s "$ROOT/tests" -p 'test_*.py' -v 2>&1; then
   pass "unit tests"
 else
   fail "unit tests"
