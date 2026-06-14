@@ -1,0 +1,36 @@
+//! `pria-guest-agent` binary entrypoint.
+//!
+//! Boots the HTTP server from the YAML config referenced by the
+//! `PRIA_GUEST_AGENT_CONFIG` env var (spec §11).
+
+use std::sync::Arc;
+
+use pria_guest_agent::api::{build_router, AppState};
+use pria_guest_agent::config::Config;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    let config_path = std::env::var("PRIA_GUEST_AGENT_CONFIG")
+        .map_err(|_| "PRIA_GUEST_AGENT_CONFIG must be set to the guest-agent config path")?;
+    let config = Config::load_from(&config_path)?;
+
+    let listen = config.listen.clone();
+    let state = AppState {
+        config: Arc::new(config),
+    };
+
+    let app = build_router(state);
+
+    let addr = format!("{}:{}", listen.host, listen.port);
+    tracing::info!(%addr, "pria-guest-agent listening");
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    axum::serve(listener, app).await?;
+    Ok(())
+}
