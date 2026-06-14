@@ -58,6 +58,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _heartbeat = pria_guest_agent::supervisor::spawn_heartbeat_loop(state.clone());
 
+    // Spawn the fsmon audit-forward relay if a forward socket is configured.
+    if let Some(forward) = state.config.fsmon.forward_socket.clone() {
+        match pria_guest_agent::fsmon::relay::spawn_audit_relay(state.clone(), &forward) {
+            Ok(_) => tracing::info!(socket = %forward.display(), "fsmon audit relay listening"),
+            Err(e) => tracing::warn!(error = %e, "failed to start fsmon audit relay"),
+        }
+    }
+
     let app = build_router(state);
 
     let addr = format!("{}:{}", listen.host, listen.port);

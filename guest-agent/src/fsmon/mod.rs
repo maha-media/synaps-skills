@@ -2,4 +2,5 @@
 
 pub mod client;
 pub mod compile;
+pub mod relay;
 pub mod types;

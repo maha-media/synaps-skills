@@ -58,11 +58,14 @@ pub async fn apply(
     let fsmon_applied = match state.fsmon.apply_policy(&compiled.doc).await {
         Ok(_) => {
             state.runtime.set_fsmon_status(FsmonStatus::Healthy);
+            state.runtime.set_last_fsmon_policy(compiled.doc.clone());
             true
         }
         Err(e) => {
             warnings.push(format!("fsmon_unavailable: {e}"));
             state.runtime.set_fsmon_status(FsmonStatus::Unavailable);
+            // Still remember the policy so a later fsmon/reload can re-push it.
+            state.runtime.set_last_fsmon_policy(compiled.doc.clone());
             false
         }
     };

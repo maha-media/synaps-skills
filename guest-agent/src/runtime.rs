@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
+use crate::fsmon::types::PolicyDoc;
+
 /// fsmon health as reported by the guest agent (spec §6.7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FsmonStatus {
@@ -33,12 +35,26 @@ pub struct PolicyState {
     pub policy_hash: Option<String>,
 }
 
+/// fsmon decision counters (spec §6.7), incremented by the audit relay.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FsmonDecisions {
+    pub allowed: u64,
+    pub denied: u64,
+    pub observed: u64,
+}
+
 /// Process-wide runtime state.
 pub struct RuntimeState {
     started_at: Instant,
     active_sessions: AtomicU64,
     policy: Mutex<PolicyState>,
     fsmon_status: Mutex<FsmonStatus>,
+    fsmon_allowed: AtomicU64,
+    fsmon_denied: AtomicU64,
+    fsmon_observed: AtomicU64,
+    /// The last policy pushed to fsmon, re-applied on `fsmon/reload`.
+    last_fsmon_policy: Mutex<Option<PolicyDoc>>,
+    policy_loaded_at: Mutex<Option<String>>,
 }
 
 impl Default for RuntimeState {
@@ -54,6 +70,11 @@ impl RuntimeState {
             active_sessions: AtomicU64::new(0),
             policy: Mutex::new(PolicyState::default()),
             fsmon_status: Mutex::new(FsmonStatus::Unavailable),
+            fsmon_allowed: AtomicU64::new(0),
+            fsmon_denied: AtomicU64::new(0),
+            fsmon_observed: AtomicU64::new(0),
+            last_fsmon_policy: Mutex::new(None),
+            policy_loaded_at: Mutex::new(None),
         }
     }
 
@@ -99,6 +120,42 @@ impl RuntimeState {
 
     pub fn set_fsmon_status(&self, s: FsmonStatus) {
         *self.fsmon_status.lock().expect("fsmon status poisoned") = s;
+    }
+
+    pub fn record_decision(&self, decision: &str) {
+        match decision {
+            "deny" | "denied" => {
+                self.fsmon_denied.fetch_add(1, Ordering::Relaxed);
+            }
+            "observe" | "observed" => {
+                self.fsmon_observed.fetch_add(1, Ordering::Relaxed);
+            }
+            "allow" | "allowed" => {
+                self.fsmon_allowed.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn fsmon_decisions(&self) -> FsmonDecisions {
+        FsmonDecisions {
+            allowed: self.fsmon_allowed.load(Ordering::Relaxed),
+            denied: self.fsmon_denied.load(Ordering::Relaxed),
+            observed: self.fsmon_observed.load(Ordering::Relaxed),
+        }
+    }
+
+    pub fn set_last_fsmon_policy(&self, doc: PolicyDoc) {
+        *self.last_fsmon_policy.lock().unwrap() = Some(doc);
+        *self.policy_loaded_at.lock().unwrap() = Some(chrono::Utc::now().to_rfc3339());
+    }
+
+    pub fn last_fsmon_policy(&self) -> Option<PolicyDoc> {
+        self.last_fsmon_policy.lock().unwrap().clone()
+    }
+
+    pub fn policy_loaded_at(&self) -> Option<String> {
+        self.policy_loaded_at.lock().unwrap().clone()
     }
 }
 

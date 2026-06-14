@@ -62,6 +62,20 @@ impl SessionStore {
             .map(|e| (e.pid, e.started_at.clone(), e.process.status()))
     }
 
+    /// Resolve a uid to its session identity tags (for fsmon audit enrichment).
+    /// Returns `(session_id, account_id, instance_id, user_id)`.
+    pub fn find_by_uid(&self, uid: u32) -> Option<(String, String, String, String)> {
+        let map = self.sessions.lock().unwrap();
+        map.values().find(|e| e.uid == uid).map(|e| {
+            (
+                e.session_id.clone(),
+                e.account_id.clone(),
+                e.instance_id.clone(),
+                e.user_id.clone(),
+            )
+        })
+    }
+
     /// Remove a session (on close/exit) and decrement the active counter.
     pub fn remove(&self, session_id: &str) -> Option<SessionEntry> {
         let mut map = self.sessions.lock().unwrap();
