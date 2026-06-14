@@ -13,6 +13,7 @@ from pria.audit import AuditSink
 from pria.policy import PolicyEngine
 from pria.ingest import IngestSink
 from pria.credential import CredentialBroker, TOOL_SPEC, TOOL_NAME
+from pria.egress import EgressCorrelator
 
 
 class App:
@@ -23,6 +24,7 @@ class App:
         self.audit = AuditSink(self.ctx, self.config)
         self.policy = PolicyEngine(self.ctx)
         self.broker = CredentialBroker(self.ctx, self.config, audit=self.audit)
+        self.egress = EgressCorrelator(self.ctx)
 
     # ── initialize ──────────────────────────────────────────────────────────
     def initialize(self, params: dict) -> dict:
@@ -77,11 +79,26 @@ class App:
         tool_name = event.get("tool_name") or event.get("tool_runtime_name") or ""
         tool_input = event.get("tool_input")
         result = self.policy.decide(tool_name, tool_input)
+
+        # B6: egress correlation (partial; HS-4). Always generate a tool_call_id
+        # for audit join; inject it into cooperating, plugin-owned tools' input.
+        tool_call_id, modified_input = self.egress.correlate(tool_name, tool_input)
+        correlated = False
+        if result.get("action") == "continue" and modified_input is not None:
+            result = {"action": "modify", "input": modified_input}
+            correlated = True
+
         kind = self.policy.classify_kind(result.get("action"))
+        # A pure egress modify is not a policy "modified" decision — record as started.
+        if correlated and kind == "tool.call.modified":
+            kind = "tool.call.started"
         fields = {
             "tool_name": tool_name,
             "tool_runtime_name": event.get("tool_runtime_name"),
             "decision": result.get("action"),
+            "tool_call_id": tool_call_id,
+            "egress_correlated": correlated,
+            "egress_native_limited": (not correlated) and (modified_input is None),
         }
         if "reason" in result:
             fields["reason"] = result["reason"]
