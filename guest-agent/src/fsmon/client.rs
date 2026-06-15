@@ -51,6 +51,17 @@ pub trait FsmonControl: Send + Sync {
     async fn ensure_running(&self) -> Result<(), FsmonError> {
         Ok(())
     }
+
+    /// Stop a daemon we previously activated on demand (belt-and-suspenders for
+    /// ephemeral task VMs / post-verification teardown).
+    ///
+    /// Long-lived `FAN_OPEN_PERM` marks hold one event fd per in-flight open;
+    /// narrowing the mark to the account EFS mount keeps the rate bounded, but a
+    /// task VM that only needs a one-shot policy check should release the monitor
+    /// entirely once verification is done. Default: no-op (externally managed).
+    async fn ensure_stopped(&self) -> Result<(), FsmonError> {
+        Ok(())
+    }
 }
 
 /// UDS-backed control client.
@@ -60,6 +71,18 @@ pub struct UdsFsmonControl {
     daemon_bin: std::path::PathBuf,
     /// Optional audit-forward socket the daemon connects back to.
     forward_socket: Option<std::path::PathBuf>,
+    /// The fanotify mount to mark. Narrowing this from the whole `/` to the
+    /// account EFS mount (`/efs/accounts/<id>`) is the structural fix for
+    /// fd-exhaustion: only opens on the account data subtree generate a
+    /// synchronous `FAN_OPEN_PERM` round-trip, so a busy root filesystem (sshd,
+    /// `/usr`, `/lib`) never floods the single-threaded permission loop. It is
+    /// also a complete envelope — every path that needs write-containment
+    /// (immutable prefixes, instance workspaces, session dirs) is EFS-rooted, so
+    /// it lives under this one mount. Per-user homes hold only ephemeral runtime
+    /// config and are isolated by Unix DAC, not this mark.
+    mount_path: std::path::PathBuf,
+    /// PID of a daemon we spawned on demand, so `ensure_stopped` can release it.
+    daemon_pid: std::sync::Mutex<Option<u32>>,
 }
 
 impl UdsFsmonControl {
@@ -68,6 +91,8 @@ impl UdsFsmonControl {
             socket_path: socket_path.into(),
             daemon_bin: std::path::PathBuf::from("/usr/local/sbin/synaps_fsmon"),
             forward_socket: None,
+            mount_path: std::path::PathBuf::from("/"),
+            daemon_pid: std::sync::Mutex::new(None),
         }
     }
 
@@ -79,6 +104,13 @@ impl UdsFsmonControl {
     ) -> Self {
         self.daemon_bin = daemon_bin.into();
         self.forward_socket = forward_socket;
+        self
+    }
+
+    /// Set the fanotify mount to mark (production: the account EFS mount, e.g.
+    /// `config.paths.efs_root`). Defaults to `/` for safety/back-compat.
+    pub fn with_mount(mut self, mount_path: impl Into<std::path::PathBuf>) -> Self {
+        self.mount_path = mount_path.into();
         self
     }
 
@@ -145,9 +177,11 @@ impl FsmonControl for UdsFsmonControl {
         if self.ping().await.is_ok() {
             return Ok(());
         }
-        // Spawn the daemon over the whole `/` mount with a minimal allow-all
-        // policy (the real policy is hot-pushed via apply_policy right after).
-        // Starting post-boot avoids the boot-time fanotify deadlock.
+        // Spawn the daemon over the configured mount (production: the account EFS
+        // mount, not the whole `/`) with a minimal allow-all bootstrap policy (the
+        // real policy is hot-pushed via apply_policy right after). Starting
+        // post-boot avoids the boot-time fanotify deadlock; the narrow mount keeps
+        // the permission-event rate bounded so event fds never exhaust NOFILE.
         let spool = self
             .socket_path
             .parent()
@@ -164,10 +198,11 @@ impl FsmonControl for UdsFsmonControl {
             &policy,
             br#"{"default_decision":"allow","principals":[],"rules":[],"immutable_prefixes":[]}"#,
         );
+        let mount = self.mount_path.to_string_lossy().to_string();
         let mut cmd = tokio::process::Command::new(&self.daemon_bin);
         cmd.arg("run")
             .arg("--mount")
-            .arg("/")
+            .arg(&mount)
             .arg("--control")
             .arg(&self.socket_path)
             .arg("--spool")
@@ -191,8 +226,13 @@ impl FsmonControl for UdsFsmonControl {
                 });
             }
         }
-        cmd.spawn()
+        let child = cmd
+            .spawn()
             .map_err(|e| FsmonError::Unavailable(format!("failed to spawn synaps_fsmon: {e}")))?;
+        // Remember the PID so ensure_stopped can release the monitor later.
+        if let Some(pid) = child.id() {
+            *self.daemon_pid.lock().unwrap() = Some(pid);
+        }
         // Wait for the control socket to come up (poll ping up to ~8s).
         for _ in 0..40 {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -203,6 +243,26 @@ impl FsmonControl for UdsFsmonControl {
         Err(FsmonError::Unavailable(
             "synaps_fsmon did not become ready within timeout".into(),
         ))
+    }
+
+    async fn ensure_stopped(&self) -> Result<(), FsmonError> {
+        // Only stop a daemon WE activated on demand (PID recorded by
+        // ensure_running). Externally-managed daemons (systemd) are left alone.
+        let pid = self.daemon_pid.lock().unwrap().take();
+        let Some(pid) = pid else {
+            return Ok(());
+        };
+        #[cfg(unix)]
+        {
+            // SAFETY: SIGTERM to a pid we spawned; the daemon installs no signal
+            // handler so it terminates, releasing all fanotify event fds + the mark.
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGTERM);
+            }
+        }
+        // Best-effort: clear the control socket so a later ensure_running rebinds.
+        let _ = std::fs::remove_file(&self.socket_path);
+        Ok(())
     }
 }
 
@@ -220,6 +280,8 @@ mod fake {
     pub struct FakeFsmonControl {
         pub applied: Mutex<Vec<PolicyDoc>>,
         pub available: Mutex<bool>,
+        pub ensure_running_calls: Mutex<usize>,
+        pub ensure_stopped_calls: Mutex<usize>,
     }
 
     impl FakeFsmonControl {
@@ -227,12 +289,16 @@ mod fake {
             Self {
                 applied: Mutex::new(Vec::new()),
                 available: Mutex::new(true),
+                ensure_running_calls: Mutex::new(0),
+                ensure_stopped_calls: Mutex::new(0),
             }
         }
         pub fn unavailable() -> Self {
             Self {
                 applied: Mutex::new(Vec::new()),
                 available: Mutex::new(false),
+                ensure_running_calls: Mutex::new(0),
+                ensure_stopped_calls: Mutex::new(0),
             }
         }
     }
@@ -264,5 +330,69 @@ mod fake {
                 Err(FsmonError::Unavailable("down".into()))
             }
         }
+        async fn ensure_running(&self) -> Result<(), FsmonError> {
+            *self.ensure_running_calls.lock().unwrap() += 1;
+            // Mirror the real daemon: if the (simulated) socket can't come up,
+            // activation fails — we do NOT fabricate availability.
+            if *self.available.lock().unwrap() {
+                Ok(())
+            } else {
+                Err(FsmonError::Unavailable("daemon did not start".into()))
+            }
+        }
+        async fn ensure_stopped(&self) -> Result<(), FsmonError> {
+            *self.ensure_stopped_calls.lock().unwrap() += 1;
+            *self.available.lock().unwrap() = false;
+            Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_mount_narrows_the_fanotify_mark_target() {
+        // Default is the whole `/` (safe fallback); production narrows to the
+        // account EFS mount so the permission loop never floods on root-fs opens.
+        let default = UdsFsmonControl::new("/run/pria/fsmon.sock");
+        assert_eq!(default.mount_path, std::path::PathBuf::from("/"));
+
+        let narrowed = UdsFsmonControl::new("/run/pria/fsmon.sock")
+            .with_mount("/efs/accounts/acct_abc123");
+        assert_eq!(
+            narrowed.mount_path,
+            std::path::PathBuf::from("/efs/accounts/acct_abc123")
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_stopped_is_a_noop_when_nothing_was_activated() {
+        // No PID recorded (ensure_running never spawned a daemon) → clean Ok,
+        // never signals a stray process.
+        let ctl = UdsFsmonControl::new("/run/pria/fsmon-noexist.sock");
+        assert!(ctl.daemon_pid.lock().unwrap().is_none());
+        ctl.ensure_stopped().await.expect("noop stop");
+        assert!(ctl.daemon_pid.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn fake_tracks_start_stop_lifecycle() {
+        let f = FakeFsmonControl::healthy();
+        f.ensure_running().await.unwrap();
+        assert_eq!(*f.ensure_running_calls.lock().unwrap(), 1);
+        assert!(f.ping().await.is_ok());
+        f.ensure_stopped().await.unwrap();
+        assert_eq!(*f.ensure_stopped_calls.lock().unwrap(), 1);
+        // After stop the monitor is no longer reachable.
+        assert!(f.ping().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn fake_unavailable_fails_activation_without_fabricating_availability() {
+        let f = FakeFsmonControl::unavailable();
+        assert!(f.ensure_running().await.is_err());
+        assert!(f.ping().await.is_err());
     }
 }

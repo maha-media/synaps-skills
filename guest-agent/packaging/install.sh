@@ -40,10 +40,13 @@ echo "[pria]   sbin  pria-kasm-setpw"
 # the guest-agent; /etc/pria holds the per-VM bootstrap (config + hmac), 0700.
 chmod 0755 "${ETC_PRIA}"
 
-# Enable the persistent units (the kasmvnc@ template is started on demand).
+# Enable the persistent units. synaps-fsmon.service is intentionally NOT enabled:
+# fsmon runs on demand (the guest-agent spawns it over the narrow account EFS
+# mount via ensure_running) — a boot-time whole-`/` fanotify mark deadlocks the
+# guest. The kasmvnc@ template is also started on demand.
 if command -v systemctl >/dev/null 2>&1 && [ -z "${DESTDIR}" ]; then
   systemctl daemon-reload || true
-  systemctl enable pria-guest-agent.service synaps-fsmon.service || true
+  systemctl enable pria-guest-agent.service || true
 fi
 
 echo "[pria] guest-agent runtime contract installed"

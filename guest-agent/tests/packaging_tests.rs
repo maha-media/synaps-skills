@@ -36,7 +36,26 @@ fn guest_agent_unit_gated_on_bootstrap() {
 #[test]
 fn fsmon_unit_present_and_ordered_after_agent() {
     let unit = read("systemd/synaps-fsmon.service");
-    assert!(unit.contains("ExecStart=/usr/local/sbin/synaps_fsmon --socket /run/pria/fsmon.sock"));
+    // fsmon runs ON DEMAND (the guest-agent spawns it over the narrow account
+    // EFS mount via ensure_running). This unit is only a manual/disabled
+    // fallback. It must use the correct `run` subcommand and `--control` flag
+    // (the old `--socket` was invalid), drive the mount from an env file (never
+    // a hardcoded whole-`/`), and be fail-safe (refuse to start without an
+    // explicitly-provided narrow mount).
+    assert!(unit.contains("/usr/local/sbin/synaps_fsmon run"));
+    assert!(unit.contains("--control /run/pria/fsmon.sock"));
+    assert!(unit.contains("--mount ${FSMON_MOUNT}"));
+    assert!(
+        !unit.contains("--socket"),
+        "the invalid --socket flag must not be used"
+    );
+    assert!(
+        !unit.contains("--mount /\n") && !unit.contains("--mount / "),
+        "must never hardcode a whole-`/` fanotify mount (boot deadlock)"
+    );
+    // Fail-safe: inert unless an operator deliberately provides the narrow mount.
+    assert!(unit.contains("ConditionPathExists=/run/pria/fsmon.env"));
+    assert!(unit.contains("EnvironmentFile=/run/pria/fsmon.env"));
     assert!(unit.contains("After=pria-guest-agent.service"));
     assert!(unit.contains("Restart=on-failure"));
 }

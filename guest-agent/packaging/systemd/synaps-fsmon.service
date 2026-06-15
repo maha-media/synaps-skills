@@ -1,9 +1,32 @@
+# synaps-fsmon.service — MANUAL / ON-DEMAND ONLY. Disabled at boot by design.
+#
+# fsmon is NOT started at boot: marking the whole `/` mount with FAN_OPEN_PERM
+# during boot makes every root-fs open block on a single-threaded permission
+# loop, which deadlocks the guest filesystem (and exhausts fds on long-lived
+# VMs). The guest-agent spawns the daemon on demand from `ensure_running()`
+# over the NARROW account EFS mount (a separate virtiofs mount,
+# /efs/accounts/<id>) and releases it via `ensure_stopped()`. That on-demand
+# path is the real mechanism — this unit is only a documented manual fallback.
+#
+# It is fail-safe: it refuses to start unless an operator deliberately provides
+# a narrow mount via /run/pria/fsmon.env (so it can never re-introduce a
+# whole-`/` boot mark). Example env file:
+#   FSMON_MOUNT=/efs/accounts/<account-id>
+#   FSMON_SPOOL=/efs/accounts/<account-id>/audit-spool
+#   FSMON_POLICY=/run/pria/fsmon-bootstrap-policy.json
 [Unit]
-Description=Synaps fsmon
+Description=Synaps fsmon (manual/on-demand; disabled at boot — see unit comments)
 After=pria-guest-agent.service
+ConditionPathExists=/run/pria/fsmon.env
 
 [Service]
-ExecStart=/usr/local/sbin/synaps_fsmon --socket /run/pria/fsmon.sock
+Type=simple
+EnvironmentFile=/run/pria/fsmon.env
+ExecStart=/usr/local/sbin/synaps_fsmon run \
+  --mount ${FSMON_MOUNT} \
+  --control /run/pria/fsmon.sock \
+  --spool ${FSMON_SPOOL} \
+  --policy ${FSMON_POLICY}
 Restart=on-failure
 
 [Install]

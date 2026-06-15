@@ -9,7 +9,7 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use pria_guest_agent::api::build_router;
-use pria_guest_agent::fsmon::client::FakeFsmonControl;
+use pria_guest_agent::fsmon::client::{FakeFsmonControl, FsmonControl};
 use pria_guest_agent::fsmon::relay::handle_line;
 use pria_guest_agent::os::FakeUserManager;
 use pria_guest_agent::pria_client::fake::FakePriaClient;
@@ -127,6 +127,64 @@ async fn reload_repushes_last_policy() {
     assert_eq!(v["reloaded"], true);
     assert_eq!(v["fsmon_applied"], true);
     assert_eq!(fsmon.applied.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn apply_activates_monitor_on_demand_before_pushing_policy() {
+    // fsmon is not started at boot; the policy handler must call ensure_running
+    // (on-demand activation) before pushing — verified via the fake's counter.
+    let fsmon = Arc::new(FakeFsmonControl::healthy());
+    let mut env = test_env(
+        Arc::new(FakePriaClient::default()),
+        Arc::new(FakeUserManager::default()),
+        Arc::new(FakeLauncher::default()),
+    );
+    env.state.fsmon = fsmon.clone();
+    let resp = build_router(env.state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/guest/v1/policy/apply")
+                .header("content-type", "application/json")
+                .body(Body::from(apply_body().to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(*fsmon.ensure_running_calls.lock().unwrap(), 1);
+    assert_eq!(fsmon.applied.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn stop_releases_the_on_demand_monitor() {
+    // Belt-and-suspenders for ephemeral task VMs: POST /fsmon/stop calls
+    // ensure_stopped, freeing the fanotify mark + its event fds.
+    let fsmon = Arc::new(FakeFsmonControl::healthy());
+    let mut env = test_env(
+        Arc::new(FakePriaClient::default()),
+        Arc::new(FakeUserManager::default()),
+        Arc::new(FakeLauncher::default()),
+    );
+    env.state.fsmon = fsmon.clone();
+    let resp = build_router(env.state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/guest/v1/fsmon/stop")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(v["stopped"], true);
+    assert_eq!(*fsmon.ensure_stopped_calls.lock().unwrap(), 1);
+    // After stop the monitor is no longer reachable.
+    assert!(fsmon.ping().await.is_err());
 }
 
 #[tokio::test]

@@ -76,6 +76,7 @@ pub fn build_router(state: AppState) -> Router {
         .route(&format!("{prefix}/usage"), post(usage::ingest))
         .route(&format!("{prefix}/fsmon/status"), get(fsmon::status))
         .route(&format!("{prefix}/fsmon/reload"), post(fsmon::reload))
+        .route(&format!("{prefix}/fsmon/stop"), post(fsmon::stop))
         // Desktop / KasmVNC lifecycle (spec §5.4, §8.2)
         .route(
             &format!("{prefix}/desktops/start"),

@@ -59,6 +59,30 @@ pub async fn status(State(state): State<AppState>) -> Json<FsmonStatusResponse> 
 }
 
 #[derive(Debug, Serialize)]
+pub struct StopResponse {
+    pub stopped: bool,
+}
+
+/// `POST /guest/v1/fsmon/stop` — release an on-demand-activated monitor.
+///
+/// Belt-and-suspenders for ephemeral task VMs and post-verification teardown:
+/// a long-lived `FAN_OPEN_PERM` mark holds one event fd per in-flight open, so a
+/// VM that only needed a one-shot policy check should free the monitor once the
+/// check is done. No-op (and still 200) when nothing was activated.
+pub async fn stop(
+    State(state): State<AppState>,
+    _signed: SignedJson<Value>,
+) -> Result<Json<StopResponse>, GuestAgentError> {
+    state
+        .fsmon
+        .ensure_stopped()
+        .await
+        .map_err(|e| GuestAgentError::new(ErrorCode::FsmonUnavailable, e.to_string()))?;
+    state.runtime.set_fsmon_status(FsmonStatus::Unavailable);
+    Ok(Json(StopResponse { stopped: true }))
+}
+
+#[derive(Debug, Serialize)]
 pub struct ReloadResponse {
     pub reloaded: bool,
     pub fsmon_applied: bool,

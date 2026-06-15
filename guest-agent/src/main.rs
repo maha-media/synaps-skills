@@ -46,7 +46,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .with_daemon(
                     std::path::PathBuf::from("/usr/local/sbin/synaps_fsmon"),
                     config.fsmon.forward_socket.clone(),
-                ),
+                )
+                // Narrow the fanotify mark to the account EFS mount instead of the
+                // whole `/`: only opens on the account data subtree generate a
+                // synchronous FAN_OPEN_PERM round-trip, so a busy root filesystem
+                // never floods the permission loop into fd-exhaustion. This is
+                // also a complete envelope: the data needing containment (instance
+                // workspaces, session dirs, immutable prefixes) is EFS-rooted, so
+                // it sits under this mount. Per-user homes (`/home/<user>`) hold
+                // only ephemeral, legitimately-writable runtime config
+                // (`~/.synaps-cli`, `~/.vnc`) and are isolated by Unix DAC (distinct
+                // uid + 0700), not fanotify. System-path tamper protection (`/etc`,
+                // `/srv/synaps`) is handled out-of-band (chattr +i / read-only
+                // binds), not by a whole-`/` permission mark.
+                .with_mount(config.paths.efs_root.clone()),
         );
     // Desktop store uses run_root for persisted allocations + env files.
     let desktops = Arc::new(
