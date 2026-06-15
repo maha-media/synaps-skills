@@ -13,6 +13,15 @@ use super::{OsError, OsUserManager, PrincipalAction, PrincipalState, UserRecord,
 /// Linux implementation backed by the shadow-utils CLIs.
 pub struct LinuxUserManager;
 
+// Disable/enable must be SYMMETRIC. `disable_user` sets BOTH a password lock
+// and a nologin shell; `lookup().active` is derived purely from the shell
+// (a nologin/false shell ⇒ inactive). So re-enabling a principal must restore
+// a real login shell — unlocking the password alone leaves the nologin shell
+// in place and the principal stays inactive forever (every session/desktop
+// start is rejected with principal_disabled).
+const NOLOGIN_SHELL: &str = "/usr/sbin/nologin";
+const LOGIN_SHELL: &str = "/bin/bash";
+
 impl LinuxUserManager {
     pub fn new() -> Self {
         Self
@@ -97,7 +106,14 @@ impl OsUserManager for LinuxUserManager {
                     }
                     PrincipalState::Active => {
                         if !rec.active {
-                            let (ok, out) = Self::run("usermod", &["-U", &spec.username]).await?;
+                            // Symmetric with disable_user(): restore BOTH the
+                            // password (-U) AND a login shell (-s). Without the
+                            // shell restore, lookup() still reports the principal
+                            // inactive (nologin) and session/desktop starts keep
+                            // failing with principal_disabled.
+                            let (ok, out) =
+                                Self::run("usermod", &["-U", "-s", LOGIN_SHELL, &spec.username])
+                                    .await?;
                             if !ok {
                                 return Err(OsError(format!("usermod -U failed: {out}")));
                             }
@@ -141,7 +157,9 @@ impl OsUserManager for LinuxUserManager {
 
     async fn disable_user(&self, username: &str) -> Result<(), OsError> {
         // Lock the password and the shell so no new login/session is possible.
-        let (ok, out) = Self::run("usermod", &["-L", "-s", "/usr/sbin/nologin", username]).await?;
+        // Paired with the re-enable above (usermod -U -s LOGIN_SHELL) so a
+        // disable → enable cycle round-trips cleanly.
+        let (ok, out) = Self::run("usermod", &["-L", "-s", NOLOGIN_SHELL, username]).await?;
         if !ok {
             return Err(OsError(format!("usermod -L failed: {out}")));
         }
@@ -203,5 +221,54 @@ mod tests {
         let mgr = LinuxUserManager::new();
         // `root` group exists at gid 0; refuse to recreate it at a different gid.
         assert!(mgr.ensure_group(987654, "root").await.is_err());
+    }
+
+    // Disable → enable round-trip on a real throwaway user. Opt-in (needs root):
+    //   PRIA_GA_ROOT_TESTS=1 cargo test -- ensure_user_disable_enable_round_trip --nocapture
+    // Regression guard for the asymmetric-disable bug: disable sets a nologin
+    // shell, so re-enabling MUST restore a login shell or lookup() keeps
+    // reporting the principal inactive and every session start is rejected.
+    #[tokio::test]
+    async fn ensure_user_disable_enable_round_trip() {
+        if std::env::var("PRIA_GA_ROOT_TESTS").ok().as_deref() != Some("1") {
+            eprintln!("skipping ensure_user_disable_enable_round_trip (set PRIA_GA_ROOT_TESTS=1 as root)");
+            return;
+        }
+        let mgr = LinuxUserManager::new();
+        let username = "pria_ga_roundtrip_test";
+        let uid = 30571u32;
+        let gid = 30571u32;
+        // Clean any prior run.
+        let _ = LinuxUserManager::run("userdel", &["-r", username]).await;
+        let _ = LinuxUserManager::run("groupdel", &[username]).await;
+
+        let active_spec = UserSpec {
+            username: username.to_string(),
+            uid,
+            gid,
+            group_name: Some(username.to_string()),
+            state: PrincipalState::Active,
+            home_dir: None,
+        };
+        let disabled_spec = UserSpec { state: PrincipalState::Disabled, ..active_spec.clone() };
+
+        // create → active
+        assert_eq!(mgr.ensure_user(&active_spec).await.unwrap(), PrincipalAction::Created);
+        assert!(mgr.lookup(username).await.unwrap().unwrap().active);
+
+        // disable → inactive (nologin shell)
+        assert_eq!(mgr.ensure_user(&disabled_spec).await.unwrap(), PrincipalAction::Disabled);
+        assert!(!mgr.lookup(username).await.unwrap().unwrap().active);
+
+        // re-enable → active again (shell restored — the regression this guards)
+        assert_eq!(mgr.ensure_user(&active_spec).await.unwrap(), PrincipalAction::Updated);
+        assert!(
+            mgr.lookup(username).await.unwrap().unwrap().active,
+            "re-enable must restore a login shell so the principal is active"
+        );
+
+        // cleanup
+        let _ = LinuxUserManager::run("userdel", &["-r", username]).await;
+        let _ = LinuxUserManager::run("groupdel", &[username]).await;
     }
 }
