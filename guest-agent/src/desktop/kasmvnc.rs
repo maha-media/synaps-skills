@@ -214,6 +214,101 @@ impl PortReadiness for TcpPortReadiness {
     }
 }
 
+// ── desktop password application ────────────────────────────────────────────
+
+/// Applies the KasmVNC Basic-auth (`kasm_user`) password to a user's
+/// `~/.kasmpasswd`.
+///
+/// Why this is a distinct, always-run step (and not left to the unit's
+/// `ExecStartPre=pria-kasm-setpw`):
+///
+/// The `kasmvnc@<user>.service` unit writes `.kasmpasswd` from its
+/// `ExecStartPre` hook — but **only when the unit actually (re)starts**.
+/// `systemctl start` is a no-op when the unit is already active, so a desktop
+/// that survived a guest-agent restart keeps its *old* `.kasmpasswd` even
+/// though the control plane just supplied a fresh password (the agent's
+/// in-memory session table is lost on restart, so the reuse path on the
+/// control plane misses the live desktop and issues a fresh `start` with a new
+/// password). The result is a Basic-auth mismatch → KasmVNC 401 → the Pria VNC
+/// proxy surfaces "Request failed with status code 401".
+///
+/// KasmVNC re-reads `.kasmpasswd` per connection, so applying the password
+/// directly (no unit restart) is sufficient and non-disruptive: the user's
+/// running X session is preserved while the new credential takes effect on the
+/// next handshake. Injectable so unit tests never shell out.
+#[async_trait]
+pub trait PasswordApplier: Send + Sync {
+    /// Write `vnc_password` into `linux_username`'s `~/.kasmpasswd` for the
+    /// `kasm_user` transport. Must be idempotent (safe to run on every start,
+    /// including immediately after the unit's own `ExecStartPre`).
+    async fn apply(&self, linux_username: &str, vnc_password: &str) -> Result<(), String>;
+}
+
+/// Default applier for unit tests / any backend without a real helper: does
+/// nothing so tests never spawn a process or touch the filesystem.
+pub struct NoopPasswordApplier;
+
+#[async_trait]
+impl PasswordApplier for NoopPasswordApplier {
+    async fn apply(&self, _linux_username: &str, _vnc_password: &str) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Default path to the privileged setpw helper (matches the unit's
+/// `ExecStartPre=+/usr/local/sbin/pria-kasm-setpw`).
+pub const DEFAULT_SETPW_BIN: &str = "/usr/local/sbin/pria-kasm-setpw";
+
+/// Production applier: invokes the `pria-kasm-setpw` helper exactly as the
+/// systemd unit's `ExecStartPre` does — as root, with the password supplied via
+/// the `KASM_VNC_PASSWORD` environment variable (never on argv; spec §16,
+/// HS-G1). The helper resolves the user's home, writes `.kasmpasswd` mode 0600,
+/// and is idempotent.
+pub struct SetpwApplier {
+    pub bin: PathBuf,
+}
+
+impl Default for SetpwApplier {
+    fn default() -> Self {
+        let bin = std::env::var("PRIA_KASM_SETPW_BIN")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_SETPW_BIN));
+        Self { bin }
+    }
+}
+
+#[async_trait]
+impl PasswordApplier for SetpwApplier {
+    async fn apply(&self, linux_username: &str, vnc_password: &str) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        {
+            // Password is passed via env, never argv, and is never logged.
+            let out = tokio::process::Command::new(&self.bin)
+                .arg(linux_username)
+                .env("KASM_VNC_PASSWORD", vnc_password)
+                .output()
+                .await
+                .map_err(|e| format!("spawn {} failed: {e}", self.bin.display()))?;
+            if out.status.success() {
+                return Ok(());
+            }
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            return Err(format!(
+                "{} {linux_username} failed ({}): {stderr}",
+                self.bin.display(),
+                out.status
+            ));
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (linux_username, vnc_password);
+            Err("setpw only available on Linux".into())
+        }
+    }
+}
+
 /// Unit name for a KasmVNC session (spec §4.3 template `kasmvnc@.service`).
 pub fn kasmvnc_unit(linux_username: &str) -> String {
     format!("kasmvnc@{linux_username}.service")
@@ -371,6 +466,30 @@ pub mod fake {
                 .unwrap_or(UnitStatus::Inactive))
         }
     }
+
+    /// Records every `(linux_username, vnc_password)` the store asked to apply,
+    /// so tests can assert the password is (re)written on every start —
+    /// including reuse of an already-running unit.
+    #[derive(Default)]
+    pub struct FakePasswordApplier {
+        pub applied: Mutex<Vec<(String, String)>>,
+        /// If set, `apply` returns this error (to exercise the fail-open path).
+        pub fail: Mutex<Option<String>>,
+    }
+
+    #[async_trait]
+    impl PasswordApplier for FakePasswordApplier {
+        async fn apply(&self, linux_username: &str, vnc_password: &str) -> Result<(), String> {
+            if let Some(msg) = self.fail.lock().unwrap().clone() {
+                return Err(msg);
+            }
+            self.applied
+                .lock()
+                .unwrap()
+                .push((linux_username.to_string(), vnc_password.to_string()));
+            Ok(())
+        }
+    }
 }
 
 // ── desktop session record ─────────────────────────────────────────────────────
@@ -459,6 +578,9 @@ pub struct DesktopStore {
     pub systemctl: Arc<dyn SystemctlBackend>,
     /// Probe that gates `start()` on the KasmVNC port actually listening.
     readiness: Arc<dyn PortReadiness>,
+    /// Applies the supplied VNC password to `~/.kasmpasswd` on every start so a
+    /// reused/already-running unit still honors a freshly-minted credential.
+    password_applier: Arc<dyn PasswordApplier>,
 }
 
 impl DesktopStore {
@@ -469,6 +591,7 @@ impl DesktopStore {
             run_root,
             systemctl,
             readiness: Arc::new(AlwaysReady),
+            password_applier: Arc::new(NoopPasswordApplier),
         }
     }
 
@@ -476,6 +599,14 @@ impl DesktopStore {
     /// `start()` only returns once KasmVNC is actually accepting connections).
     pub fn with_port_readiness(mut self, readiness: Arc<dyn PortReadiness>) -> Self {
         self.readiness = readiness;
+        self
+    }
+
+    /// Override the password applier (production wires [`SetpwApplier`] so the
+    /// control-plane-supplied password is written to `~/.kasmpasswd` even when
+    /// the unit is already running and `systemctl start` no-ops).
+    pub fn with_password_applier(mut self, applier: Arc<dyn PasswordApplier>) -> Self {
+        self.password_applier = applier;
         self
     }
 
@@ -522,6 +653,30 @@ impl DesktopStore {
             .start(&unit)
             .await
             .map_err(|e| format!("systemctl start {unit} failed: {e}"))?;
+
+        // 3a. Apply the password to ~/.kasmpasswd unconditionally.
+        //
+        // `systemctl start` is a no-op when the unit is already active (e.g. the
+        // desktop survived a guest-agent restart, so the control plane's
+        // single-session reuse missed it and issued a fresh start with a new
+        // password). In that case the unit's `ExecStartPre=pria-kasm-setpw` does
+        // NOT run, leaving `.kasmpasswd` holding the previous credential — the
+        // freshly-supplied password would then 401 at the KasmVNC Basic-auth
+        // gate. Applying it directly here closes that gap; KasmVNC re-reads the
+        // file per connection so the running X session is preserved. Idempotent
+        // and best-effort: a failure is logged but does not abort the start
+        // (behavior is then no worse than before this step existed).
+        if let Err(e) = self
+            .password_applier
+            .apply(&linux_username, &vnc_password)
+            .await
+        {
+            tracing::warn!(
+                unit = %unit,
+                error = %e,
+                "failed to apply kasmvnc password to .kasmpasswd; Basic auth may 401 until next unit restart"
+            );
+        }
 
         // 3b. wait for KasmVNC to actually bind its websocket port. `systemctl
         // start` returns once the unit's main process has forked, but Xvnc takes
@@ -853,5 +1008,69 @@ mod tests {
         let seen = probe.seen.lock().unwrap();
         assert_eq!(seen.len(), 1, "readiness probe must run exactly once");
         assert_eq!(seen[0], ds.port, "probe must check the allocated KasmVNC port");
+    }
+
+    #[tokio::test]
+    async fn start_applies_password_on_every_start_including_reuse() {
+        // Regression: when a KasmVNC unit survives a guest-agent restart, the
+        // control plane misses it (in-memory session table lost) and issues a
+        // fresh start with a NEW password. `systemctl start` no-ops on the
+        // already-active unit, so the unit's own ExecStartPre never re-runs —
+        // start() MUST therefore apply the password itself, every time, or the
+        // new credential 401s at KasmVNC's Basic-auth gate.
+        let applier = Arc::new(fake::FakePasswordApplier::default());
+        let store = DesktopStore::new(tmp_run_root(), Arc::new(fake::FakeSystemctl::default()))
+            .with_password_applier(applier.clone());
+
+        store
+            .start("sess_1".into(), "pria_u_x".into(), "pw_first".into(), None)
+            .await
+            .unwrap();
+        // Second start for the SAME user = the reuse / already-running case.
+        store
+            .start("sess_2".into(), "pria_u_x".into(), "pw_second".into(), None)
+            .await
+            .unwrap();
+
+        let applied = applier.applied.lock().unwrap();
+        assert_eq!(
+            applied.len(),
+            2,
+            "password must be applied on every start, not just the first"
+        );
+        assert_eq!(applied[0], ("pria_u_x".into(), "pw_first".into()));
+        assert_eq!(
+            applied[1],
+            ("pria_u_x".into(), "pw_second".into()),
+            "the fresh password must be re-applied even when the unit is reused"
+        );
+    }
+
+    #[tokio::test]
+    async fn start_is_fail_open_when_password_apply_fails() {
+        // A setpw failure must not abort the start (behavior is then no worse
+        // than before this step existed); the session is still recorded.
+        let applier = Arc::new(fake::FakePasswordApplier::default());
+        *applier.fail.lock().unwrap() = Some("kasmvncpasswd not found".into());
+        let store = DesktopStore::new(tmp_run_root(), Arc::new(fake::FakeSystemctl::default()))
+            .with_password_applier(applier.clone());
+
+        let ds = store
+            .start("sess_fo".into(), "pria_u_fo".into(), "pw".into(), None)
+            .await
+            .expect("start must succeed even if password apply fails (fail-open)");
+        assert_eq!(ds.session_id, "sess_fo");
+        assert!(
+            applier.applied.lock().unwrap().is_empty(),
+            "the failing applier recorded nothing, but start still succeeded"
+        );
+    }
+
+    #[test]
+    fn setpw_applier_default_honors_env_override() {
+        // Default path matches the unit's ExecStartPre; PRIA_KASM_SETPW_BIN
+        // overrides it for non-standard installs.
+        let def = SetpwApplier::default();
+        assert!(def.bin.ends_with("pria-kasm-setpw"));
     }
 }

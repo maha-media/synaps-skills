@@ -71,6 +71,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pria_guest_agent::desktop::kasmvnc::TcpPortReadiness::new(
                 std::time::Duration::from_secs(25),
             ),
+        ))
+        .with_password_applier(Arc::new(
+            pria_guest_agent::desktop::kasmvnc::SetpwApplier::default(),
         )),
     );
     let state = AppState {
