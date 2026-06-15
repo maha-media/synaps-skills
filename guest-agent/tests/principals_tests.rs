@@ -67,6 +67,41 @@ async fn reconcile_creates_then_is_idempotent() {
 }
 
 #[tokio::test]
+async fn reconcile_accepts_per_account_group_name() {
+    // The control plane sends a deterministic per-account `group_name` + gid so
+    // the guest creates a private primary group before `useradd --gid`. The
+    // payload must be accepted (no 400) and the principal created.
+    let pria = Arc::new(FakePriaClient::default());
+    let os = Arc::new(FakeUserManager::default());
+    let state = test_state_full(pria.clone(), os.clone());
+
+    let body = json!({
+        "account_id": "acct_123",
+        "desired": [{
+            "user_id": "user_abc",
+            "linux_username": "pria_u_104251",
+            "uid": 104251,
+            "gid": 14242,
+            "group_name": "acct_acme",
+            "state": "active",
+            "home_dir": "/home/pria_u_104251",
+            "instance_ids": ["inst_1"]
+        }],
+        "request_id": "req_grp"
+    });
+
+    let resp = build_router(state.clone())
+        .oneshot(post("/guest/v1/principals/reconcile", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(v["results"][0]["action"], "created");
+    assert_eq!(v["results"][0]["ok"], true);
+}
+
+#[tokio::test]
 async fn reconcile_rejects_home_dir_traversal() {
     let state = test_state_full(
         Arc::new(FakePriaClient::default()),

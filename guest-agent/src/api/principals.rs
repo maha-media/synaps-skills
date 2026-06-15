@@ -21,6 +21,10 @@ pub struct DesiredPrincipal {
     pub state: String,
     #[serde(default)]
     pub home_dir: Option<String>,
+    /// Optional name of the primary group to create at `gid` before adding the
+    /// user. Sent by the control plane for per-account primary-group isolation.
+    #[serde(default)]
+    pub group_name: Option<String>,
     #[serde(default)]
     pub instance_ids: Vec<String>,
 }
@@ -94,6 +98,7 @@ pub async fn reconcile(
             gid: d.gid,
             home_dir: d.home_dir.clone(),
             state: desired_state,
+            group_name: d.group_name.clone(),
         };
         match state.os.ensure_user(&spec).await {
             Ok(action) => {

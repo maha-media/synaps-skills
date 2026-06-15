@@ -34,6 +34,13 @@ pub struct UserSpec {
     pub gid: u32,
     pub home_dir: Option<String>,
     pub state: PrincipalState,
+    /// Optional name of the primary group to create (idempotently) at `gid`
+    /// before the user is added. When `None`, the group is assumed to already
+    /// exist (e.g. the well-known `users` group). Enables per-account primary
+    /// group isolation: the control plane sends a deterministic per-account
+    /// group name + gid so all of an account's users share one private group
+    /// for EFS-shared file collaboration without crossing account boundaries.
+    pub group_name: Option<String>,
 }
 
 /// What `ensure_user` did.
@@ -226,6 +233,7 @@ mod tests {
             gid: 104251,
             home_dir: Some("/home/pria_u_1".into()),
             state: PrincipalState::Active,
+            group_name: None,
         };
         assert_eq!(
             mgr.ensure_user(&spec).await.unwrap(),
@@ -254,6 +262,7 @@ mod tests {
             gid: 2,
             home_dir: None,
             state: PrincipalState::Active,
+            group_name: None,
         };
         assert!(mgr.ensure_user(&spec).await.is_err());
     }
