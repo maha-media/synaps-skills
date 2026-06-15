@@ -91,6 +91,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _heartbeat = pria_guest_agent::supervisor::spawn_heartbeat_loop(state.clone());
 
+    // Rebuild the desktop session table from persisted state so a guest-agent
+    // restart does not lose track of desktops whose `kasmvnc@<user>` units are
+    // still running. Without this, `GET /desktops` reports empty after a restart
+    // and the control plane's single-session reuse misses the live desktop.
+    let restored = state.desktops.rehydrate().await;
+    if restored > 0 {
+        tracing::info!(restored, "rehydrated desktop sessions on startup");
+    }
+
     // Spawn the fsmon audit-forward relay if a forward socket is configured.
     if let Some(forward) = state.config.fsmon.forward_socket.clone() {
         match pria_guest_agent::fsmon::relay::spawn_audit_relay(state.clone(), &forward) {

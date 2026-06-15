@@ -79,6 +79,36 @@ impl LinuxUserManager {
         }
         Ok(())
     }
+
+    /// Look up a principal BY NUMERIC UID (`getent passwd <uid>`), returning the
+    /// existing login's record (with its real username) or `None`. Used by
+    /// `ensure_user` to detect a uid that is already claimed under a different
+    /// name before it would `useradd --uid` and fail hard ("UID N is not
+    /// unique"). The username is parsed from the passwd entry (field 0), unlike
+    /// `lookup(username)` which echoes its argument.
+    async fn lookup_by_uid(&self, uid: u32) -> Result<Option<UserRecord>, OsError> {
+        let (ok, out) = Self::run("getent", &["passwd", &uid.to_string()]).await?;
+        if !ok {
+            return Ok(None);
+        }
+        // Format: name:passwd:uid:gid:gecos:home:shell
+        let line = out.lines().next().unwrap_or("");
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() < 7 {
+            return Ok(None);
+        }
+        let username = fields[0].to_string();
+        let parsed_uid = fields[2].parse().unwrap_or(0);
+        let gid = fields[3].parse().unwrap_or(0);
+        let shell = fields[6];
+        let active = !shell.contains("nologin") && !shell.contains("/false");
+        Ok(Some(UserRecord {
+            username,
+            uid: parsed_uid,
+            gid,
+            active,
+        }))
+    }
 }
 
 impl Default for LinuxUserManager {
@@ -125,6 +155,66 @@ impl OsUserManager for LinuxUserManager {
                 }
             }
             None => {
+                // Idempotency hardening: the username is not present, but the
+                // deterministic uid may already be claimed by a login under a
+                // DIFFERENT name. This happens when the agent's view and the OS
+                // diverge — e.g. after an agent restart, or when the derived
+                // username drifts because the email/slug opts changed between
+                // reconciles. `useradd --uid <uid>` aborts hard in that case
+                // ("UID N is not unique"), wedging every session start. Adopt
+                // the existing uid-holder instead: the uid is the stable
+                // identity, the username only a derived label. Rename the login
+                // to converge the OS to the desired principal, then reconcile
+                // its state. The per-account primary group is created first so a
+                // gid realignment (usermod -g) does not race a missing group.
+                if let Some(holder) = self.lookup_by_uid(spec.uid).await? {
+                    if let Some(group_name) = &spec.group_name {
+                        self.ensure_group(spec.gid, group_name).await?;
+                    }
+                    // Rename the login (uid/home/files unchanged) to the desired
+                    // username. usermod refuses while the user has running
+                    // processes — surface that as a clear error rather than the
+                    // opaque useradd collision so the caller knows the uid is in
+                    // active use (e.g. a live desktop) and must be drained first.
+                    let (ok, out) =
+                        Self::run("usermod", &["-l", &spec.username, &holder.username]).await?;
+                    if !ok {
+                        return Err(OsError(format!(
+                            "uid {} already held by {} and rename to {} failed: {out}",
+                            spec.uid, holder.username, spec.username
+                        )));
+                    }
+                    // Realign the primary gid if it drifted (deterministic, so
+                    // normally already correct — idempotent belt-and-braces).
+                    if holder.gid != spec.gid {
+                        let gid_s = spec.gid.to_string();
+                        let (ok, out) =
+                            Self::run("usermod", &["-g", &gid_s, &spec.username]).await?;
+                        if !ok {
+                            return Err(OsError(format!("usermod -g failed: {out}")));
+                        }
+                    }
+                    match spec.state {
+                        PrincipalState::Disabled => {
+                            self.disable_user(&spec.username).await?;
+                            return Ok(PrincipalAction::Disabled);
+                        }
+                        PrincipalState::Active => {
+                            // Ensure a login shell + unlocked password on adopt
+                            // (the holder may have been left disabled). Symmetric
+                            // with disable_user().
+                            let (ok, out) = Self::run(
+                                "usermod",
+                                &["-U", "-s", LOGIN_SHELL, &spec.username],
+                            )
+                            .await?;
+                            if !ok {
+                                return Err(OsError(format!("usermod -U failed: {out}")));
+                            }
+                            return Ok(PrincipalAction::Adopted);
+                        }
+                    }
+                }
                 // Ensure the primary group exists first when the control plane
                 // pins a per-account group (`useradd --gid` requires it to
                 // pre-exist). When `group_name` is None we assume a well-known
@@ -289,6 +379,25 @@ mod tests {
         assert!(mgr.ensure_group(987654, "root").await.is_err());
     }
 
+    // lookup_by_uid resolves the REAL login name from a numeric uid (uid 0 is
+    // always `root`). This is the probe `ensure_user` uses to detect a uid that
+    // is already claimed under a different name before it would `useradd --uid`
+    // and fail. No root required (read-only getent).
+    #[tokio::test]
+    async fn lookup_by_uid_resolves_root_login_name() {
+        let mgr = LinuxUserManager::new();
+        let rec = mgr.lookup_by_uid(0).await.unwrap().expect("uid 0 exists");
+        assert_eq!(rec.username, "root");
+        assert_eq!(rec.uid, 0);
+    }
+
+    #[tokio::test]
+    async fn lookup_by_uid_returns_none_for_unused_uid() {
+        let mgr = LinuxUserManager::new();
+        // A uid in our human band that is overwhelmingly unlikely to be taken.
+        assert!(mgr.lookup_by_uid(59993).await.unwrap().is_none());
+    }
+
     // Revoking membership in a group that does not exist is an idempotent no-op
     // (no root required — there is no such group to mutate). Guards the
     // per-instance de-authorization fail-open contract: a revoke for an
@@ -349,5 +458,61 @@ mod tests {
         // cleanup
         let _ = LinuxUserManager::run("userdel", &["-r", username]).await;
         let _ = LinuxUserManager::run("groupdel", &[username]).await;
+    }
+
+    // Adopt-on-uid-collision round-trip on a real throwaway user. Opt-in (root):
+    //   PRIA_GA_ROOT_TESTS=1 cargo test -- ensure_user_adopts_existing_uid --nocapture
+    // Regression guard for the `/start` 500 `useradd: UID N is not unique`:
+    // create a user under one name, then reconcile the SAME uid under a DIFFERENT
+    // name (simulating derived-username drift / agent-OS divergence). ensure_user
+    // must rename-adopt the existing uid-holder, never collide on the uid.
+    #[tokio::test]
+    async fn ensure_user_adopts_existing_uid() {
+        if std::env::var("PRIA_GA_ROOT_TESTS").ok().as_deref() != Some("1") {
+            eprintln!("skipping ensure_user_adopts_existing_uid (set PRIA_GA_ROOT_TESTS=1 as root)");
+            return;
+        }
+        let mgr = LinuxUserManager::new();
+        let old_name = "pria_ga_adopt_old";
+        let new_name = "pria_ga_adopt_new";
+        let group = "pria_ga_adopt_grp";
+        let uid = 30572u32;
+        let gid = 30572u32;
+        // Clean any prior run.
+        for u in [old_name, new_name] {
+            let _ = LinuxUserManager::run("userdel", &["-r", u]).await;
+        }
+        let _ = LinuxUserManager::run("groupdel", &[group]).await;
+
+        let base = UserSpec {
+            username: old_name.to_string(),
+            uid,
+            gid,
+            group_name: Some(group.to_string()),
+            state: PrincipalState::Active,
+            home_dir: None,
+        };
+        // create the original login at the uid
+        assert_eq!(mgr.ensure_user(&base).await.unwrap(), PrincipalAction::Created);
+        assert_eq!(mgr.lookup_by_uid(uid).await.unwrap().unwrap().username, old_name);
+
+        // reconcile arrives with the SAME uid but a DRIFTED username
+        let drifted = UserSpec { username: new_name.to_string(), ..base.clone() };
+        assert_eq!(
+            mgr.ensure_user(&drifted).await.unwrap(),
+            PrincipalAction::Adopted,
+            "uid collision under a new name must adopt (rename), not fail"
+        );
+        // the uid is now owned by the new name; the old name is gone
+        assert_eq!(mgr.lookup_by_uid(uid).await.unwrap().unwrap().username, new_name);
+        assert!(mgr.lookup(old_name).await.unwrap().is_none());
+        assert!(mgr.lookup(new_name).await.unwrap().unwrap().active);
+
+        // re-running with the canonical name is now idempotent
+        assert_eq!(mgr.ensure_user(&drifted).await.unwrap(), PrincipalAction::Unchanged);
+
+        // cleanup
+        let _ = LinuxUserManager::run("userdel", &["-r", new_name]).await;
+        let _ = LinuxUserManager::run("groupdel", &[group]).await;
     }
 }

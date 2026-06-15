@@ -110,6 +110,84 @@ pub fn write_env_file(run_root: &Path, linux_username: &str, env: &KasmEnv) -> s
     Ok(())
 }
 
+/// Parse a previously written env file back into a [`KasmEnv`]. Used by
+/// [`DesktopStore::rehydrate`] to recover a surviving desktop's port / geometry
+/// / password after a guest-agent restart (the in-memory session table is lost
+/// but the env file persists, root-owned 0600). Returns `None` if the file is
+/// absent or missing a required key.
+pub fn read_env_file(run_root: &Path, linux_username: &str) -> Option<KasmEnv> {
+    let path = env_file_path(run_root, linux_username);
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let mut display = None;
+    let mut ws_port = None;
+    let mut geometry = None;
+    let mut vnc_password = None;
+    for line in raw.lines() {
+        let Some((k, v)) = line.split_once('=') else { continue };
+        match k.trim() {
+            "KASM_DISPLAY" => display = Some(v.trim().to_string()),
+            "KASM_WS_PORT" => ws_port = v.trim().parse::<u16>().ok(),
+            "KASM_GEOMETRY" => geometry = Some(v.trim().to_string()),
+            "KASM_VNC_PASSWORD" => vnc_password = Some(v.trim().to_string()),
+            _ => {}
+        }
+    }
+    Some(KasmEnv {
+        display: display?,
+        ws_port: ws_port?,
+        geometry: geometry?,
+        vnc_password: vnc_password?,
+    })
+}
+
+/// Non-secret session metadata persisted alongside the env file so the
+/// session table can be faithfully rebuilt on restart. The VNC password is
+/// deliberately NOT stored here — it lives only in the root-owned 0600 env
+/// file ([`write_env_file`]); rehydrate reads it back from there.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionMeta {
+    pub session_id: String,
+    pub started_at: String,
+}
+
+/// Path of the session-metadata sidecar for `linux_username`.
+pub fn session_meta_path(run_root: &Path, linux_username: &str) -> PathBuf {
+    run_root
+        .join("kasmvnc")
+        .join(format!("{linux_username}.meta.json"))
+}
+
+/// Write the session-metadata sidecar (created atomically). Best-effort caller —
+/// a desktop start still succeeds if this fails (rehydrate falls back to a
+/// synthesized session id).
+pub fn write_session_meta(
+    run_root: &Path,
+    linux_username: &str,
+    meta: &SessionMeta,
+) -> std::io::Result<()> {
+    let dir = run_root.join("kasmvnc");
+    std::fs::create_dir_all(&dir)?;
+    let path = session_meta_path(run_root, linux_username);
+    let json = serde_json::to_vec_pretty(meta)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &json)?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+/// Read the session-metadata sidecar for `linux_username`, if present.
+pub fn read_session_meta(run_root: &Path, linux_username: &str) -> Option<SessionMeta> {
+    let path = session_meta_path(run_root, linux_username);
+    let raw = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// Remove the session-metadata sidecar for `linux_username` (best-effort).
+pub fn remove_session_meta(run_root: &Path, linux_username: &str) {
+    let _ = std::fs::remove_file(session_meta_path(run_root, linux_username));
+}
+
 // ── systemctl abstraction ─────────────────────────────────────────────────────
 
 /// Systemctl operation result for desktop units.
@@ -705,7 +783,25 @@ impl DesktopStore {
         self.sessions
             .lock()
             .unwrap()
-            .insert(linux_username, ds.clone());
+            .insert(linux_username.clone(), ds.clone());
+
+        // Persist non-secret session metadata so the session table can be
+        // faithfully rebuilt after a guest-agent restart (rehydrate()). The VNC
+        // password is NOT written here — it stays in the 0600 env file.
+        if let Err(e) = write_session_meta(
+            &self.run_root,
+            &linux_username,
+            &SessionMeta {
+                session_id: ds.session_id.clone(),
+                started_at: ds.started_at.clone(),
+            },
+        ) {
+            tracing::warn!(
+                user = %linux_username,
+                error = %e,
+                "failed to persist desktop session metadata; rehydrate will synthesize a session id"
+            );
+        }
         Ok(ds)
     }
 
@@ -725,8 +821,87 @@ impl DesktopStore {
         let _lock = self.alloc_lock.lock().await;
         crate::desktop::ports::release(&self.run_root, linux_username)
             .map_err(|e| e.to_string())?;
+        remove_session_meta(&self.run_root, linux_username);
         self.sessions.lock().unwrap().remove(linux_username);
         Ok(())
+    }
+
+    /// Rebuild the in-memory session table from persisted state after a restart.
+    ///
+    /// The session `HashMap` is in-memory and lost when the guest-agent process
+    /// restarts, but the desktops themselves (the `kasmvnc@<user>` systemd
+    /// units) keep running and their port allocations + env files + metadata
+    /// sidecars persist on disk. Without this, `GET /desktops` reports an empty
+    /// table after a restart, so the control plane's single-session reuse check
+    /// misses the live desktop and issues a redundant fresh `/start` (harmless
+    /// since the port is reused and the password is re-applied, but not ideal).
+    ///
+    /// For each persisted allocation whose unit is still `Active`, this reads
+    /// the env file (port/geometry/password) and the metadata sidecar
+    /// (session_id/started_at) and re-records the session so `GET /desktops` is
+    /// truthful and single-session reuse works as designed. Stale allocations
+    /// (unit no longer active) are released so their slot frees up.
+    ///
+    /// Best-effort and idempotent: any per-user error is logged and skipped;
+    /// already-present sessions are left untouched. Returns the count restored.
+    pub async fn rehydrate(&self) -> usize {
+        let allocations = crate::desktop::ports::snapshot(&self.run_root);
+        let mut restored = 0;
+        for (username, alloc) in allocations {
+            // Don't clobber a session already recorded this process lifetime.
+            if self.sessions.lock().unwrap().contains_key(&username) {
+                continue;
+            }
+            let unit = kasmvnc_unit(&username);
+            let active = matches!(
+                self.systemctl.status(&unit).await,
+                Ok(UnitStatus::Active)
+            );
+            if !active {
+                // The desktop is gone; free the stale allocation + metadata so
+                // the display/port slot can be reused.
+                let _ = crate::desktop::ports::release(&self.run_root, &username);
+                remove_session_meta(&self.run_root, &username);
+                continue;
+            }
+            let Some(env) = read_env_file(&self.run_root, &username) else {
+                tracing::warn!(
+                    user = %username,
+                    "kasmvnc unit active but env file missing/unparseable; cannot rehydrate session"
+                );
+                continue;
+            };
+            // Recover the original session id when the sidecar is present;
+            // otherwise synthesize a stable rehydrated id so the desktop is
+            // still reusable by linux_username.
+            let meta = read_session_meta(&self.run_root, &username);
+            let session_id = meta
+                .as_ref()
+                .map(|m| m.session_id.clone())
+                .unwrap_or_else(|| format!("rehydrated:{username}"));
+            let started_at = meta
+                .map(|m| m.started_at)
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+            let ds = DesktopSession {
+                session_id,
+                linux_username: username.clone(),
+                display: format!(":{}", alloc.display),
+                port: env.ws_port,
+                basic_user: KASM_BASIC_USER.to_string(),
+                vnc_password: env.vnc_password,
+                geometry: env.geometry,
+                started_at,
+            };
+            self.sessions
+                .lock()
+                .unwrap()
+                .insert(username.clone(), ds);
+            restored += 1;
+        }
+        if restored > 0 {
+            tracing::info!(restored, "rehydrated desktop sessions from persisted state");
+        }
+        restored
     }
 
     /// Snapshot all active sessions (for heartbeat / list endpoint).
@@ -1072,5 +1247,123 @@ mod tests {
         // overrides it for non-standard installs.
         let def = SetpwApplier::default();
         assert!(def.bin.ends_with("pria-kasm-setpw"));
+    }
+
+    // ── rehydrate ─────────────────────────────────────────────────────────────
+
+    // After a guest-agent restart the in-memory session table is empty, but the
+    // desktop's allocation + env file + metadata sidecar persist and the
+    // `kasmvnc@<user>` unit is still active. rehydrate() must rebuild the
+    // session faithfully so GET /desktops is truthful and single-session reuse
+    // works (no redundant fresh start).
+    #[tokio::test]
+    async fn rehydrate_restores_active_session_from_persisted_state() {
+        let root = tmp_run_root();
+        let ctl = Arc::new(fake::FakeSystemctl::default());
+        // First process lifetime: start a desktop (persists alloc/env/meta).
+        {
+            let store = DesktopStore::new(root.clone(), ctl.clone());
+            store
+                .start("sess_orig".into(), "pria_u_a".into(), "pw_a".into(), Some("1280x800".into()))
+                .await
+                .unwrap();
+        }
+        // Simulate restart: brand-new store over the SAME run_root. Its session
+        // table starts empty, but the unit is still Active in the shared fake.
+        let store2 = DesktopStore::new(root.clone(), ctl.clone());
+        assert!(store2.list().is_empty(), "fresh store starts with no sessions");
+        let restored = store2.rehydrate().await;
+        assert_eq!(restored, 1, "the active desktop must be rehydrated");
+        let s = store2.get("pria_u_a").expect("session present after rehydrate");
+        // Faithful recovery: original session id, port, geometry, password.
+        assert_eq!(s.session_id, "sess_orig");
+        assert_eq!(s.port, 6901);
+        assert_eq!(s.geometry, "1280x800");
+        assert_eq!(s.vnc_password, "pw_a");
+        assert_eq!(s.display, ":1");
+    }
+
+    // A persisted allocation whose unit is no longer active must NOT be
+    // rehydrated, and its stale allocation should be released so the slot frees.
+    #[tokio::test]
+    async fn rehydrate_skips_and_releases_inactive_units() {
+        let root = tmp_run_root();
+        let ctl = Arc::new(fake::FakeSystemctl::default());
+        {
+            let store = DesktopStore::new(root.clone(), ctl.clone());
+            store
+                .start("sess_dead".into(), "pria_u_dead".into(), "pw".into(), None)
+                .await
+                .unwrap();
+        }
+        // Desktop died across the restart.
+        ctl.set_status(&kasmvnc_unit("pria_u_dead"), UnitStatus::Inactive);
+        let store2 = DesktopStore::new(root.clone(), ctl.clone());
+        let restored = store2.rehydrate().await;
+        assert_eq!(restored, 0, "an inactive unit must not be rehydrated");
+        assert!(store2.get("pria_u_dead").is_none());
+        // The stale slot was released → a new user gets display :1 again.
+        let realloc = crate::desktop::ports::allocate(&root, "pria_u_new").unwrap();
+        assert_eq!(realloc.display, 1, "stale allocation must be freed");
+    }
+
+    // Rehydrate is idempotent and never clobbers a session already recorded in
+    // the current process lifetime.
+    #[tokio::test]
+    async fn rehydrate_is_idempotent_and_preserves_live_sessions() {
+        let root = tmp_run_root();
+        let ctl = Arc::new(fake::FakeSystemctl::default());
+        let store = DesktopStore::new(root.clone(), ctl.clone());
+        store
+            .start("sess_live".into(), "pria_u_a".into(), "pw_live".into(), None)
+            .await
+            .unwrap();
+        // Rehydrate must not duplicate or overwrite the live session.
+        assert_eq!(store.rehydrate().await, 0, "live session is not re-restored");
+        let s = store.get("pria_u_a").unwrap();
+        assert_eq!(s.session_id, "sess_live");
+        assert_eq!(s.vnc_password, "pw_live");
+        // Running it again is still a no-op.
+        assert_eq!(store.rehydrate().await, 0);
+    }
+
+    // When the metadata sidecar is missing (e.g. an older desktop started before
+    // this feature), rehydrate still recovers the desktop from the env file and
+    // synthesizes a stable session id so it remains reusable by linux_username.
+    #[tokio::test]
+    async fn rehydrate_synthesizes_session_id_without_sidecar() {
+        let root = tmp_run_root();
+        let ctl = Arc::new(fake::FakeSystemctl::default());
+        {
+            let store = DesktopStore::new(root.clone(), ctl.clone());
+            store
+                .start("sess_orig".into(), "pria_u_a".into(), "pw_a".into(), None)
+                .await
+                .unwrap();
+        }
+        // Remove the sidecar to emulate a pre-feature desktop.
+        remove_session_meta(&root, "pria_u_a");
+        let store2 = DesktopStore::new(root.clone(), ctl.clone());
+        assert_eq!(store2.rehydrate().await, 1);
+        let s = store2.get("pria_u_a").unwrap();
+        assert_eq!(s.session_id, "rehydrated:pria_u_a");
+        assert_eq!(s.vnc_password, "pw_a", "password still recovered from env file");
+    }
+
+    #[test]
+    fn read_env_file_round_trips_written_env() {
+        let root = tmp_run_root();
+        let env = KasmEnv {
+            display: ":3".into(),
+            ws_port: 6903,
+            geometry: "1920x1080".into(),
+            vnc_password: "rt_secret".into(),
+        };
+        write_env_file(&root, "pria_u_rt", &env).unwrap();
+        let back = read_env_file(&root, "pria_u_rt").expect("env file parses");
+        assert_eq!(back.display, ":3");
+        assert_eq!(back.ws_port, 6903);
+        assert_eq!(back.geometry, "1920x1080");
+        assert_eq!(back.vnc_password, "rt_secret");
     }
 }

@@ -332,7 +332,9 @@ async fn emit_principal_audit(
     let kind = match action {
         PrincipalAction::Created => kinds::PRINCIPAL_CREATED,
         PrincipalAction::Disabled => kinds::PRINCIPAL_DISABLED,
-        PrincipalAction::Updated | PrincipalAction::Unchanged => kinds::PRINCIPAL_UPDATED,
+        PrincipalAction::Updated | PrincipalAction::Unchanged | PrincipalAction::Adopted => {
+            kinds::PRINCIPAL_UPDATED
+        }
     };
     let ev = AuditEventBuilder::new(kind)
         .str_field("account_id", account_id)

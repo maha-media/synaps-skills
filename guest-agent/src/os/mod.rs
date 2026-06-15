@@ -50,6 +50,13 @@ pub enum PrincipalAction {
     Updated,
     Unchanged,
     Disabled,
+    /// The deterministic uid was already held by a login under a DIFFERENT
+    /// username (the agent's view and the OS diverged — e.g. an agent restart,
+    /// or a derived-username drift after the email/slug opts changed). Rather
+    /// than abort `useradd` with "UID N is not unique", the existing uid-holder
+    /// was renamed to the desired username and reconciled to the desired state.
+    /// The uid is the stable identity; the username is a derived label.
+    Adopted,
 }
 
 impl PrincipalAction {
@@ -59,6 +66,7 @@ impl PrincipalAction {
             PrincipalAction::Updated => "updated",
             PrincipalAction::Unchanged => "unchanged",
             PrincipalAction::Disabled => "disabled",
+            PrincipalAction::Adopted => "adopted",
         }
     }
 }
@@ -215,6 +223,33 @@ mod fake {
                     })
                 }
                 None => {
+                    // Idempotency hardening (mirrors LinuxUserManager): the
+                    // username is absent, but the deterministic uid may already
+                    // be held by a login under a DIFFERENT name (agent/OS
+                    // divergence — restart or username drift). Adopt the
+                    // existing uid-holder by renaming it to the desired username
+                    // rather than colliding on the uid.
+                    let existing_name = users
+                        .iter()
+                        .find(|(name, rec)| rec.uid == spec.uid && name.as_str() != spec.username)
+                        .map(|(name, _)| name.clone());
+                    if let Some(old_name) = existing_name {
+                        let mut rec = users.remove(&old_name).unwrap();
+                        rec.username = spec.username.clone();
+                        rec.gid = spec.gid;
+                        rec.active = active;
+                        users.insert(spec.username.clone(), rec);
+                        // Carry any supplementary memberships across the rename.
+                        let mut m = self.memberships.lock().unwrap();
+                        if let Some(entry) = m.remove(&old_name) {
+                            m.insert(spec.username.clone(), entry);
+                        }
+                        return Ok(if active {
+                            PrincipalAction::Adopted
+                        } else {
+                            PrincipalAction::Disabled
+                        });
+                    }
                     users.insert(
                         spec.username.clone(),
                         UserRecord {
@@ -433,5 +468,51 @@ mod tests {
     async fn fake_revoke_unknown_user_is_noop() {
         let mgr = FakeUserManager::default();
         assert!(mgr.revoke_group_membership("ghost", "inst_a").await.is_ok());
+    }
+
+    // Idempotency hardening: when the deterministic uid is already held by a
+    // login under a DIFFERENT name (agent/OS divergence — restart or derived
+    // username drift), ensure_user must ADOPT the existing uid-holder (rename it
+    // to the desired username) rather than collide on the uid. Regression guard
+    // for the `/start` 500 `useradd: UID N is not unique`.
+    #[tokio::test]
+    async fn fake_adopts_existing_uid_on_username_drift() {
+        let mgr = FakeUserManager::default().with_user(UserRecord {
+            username: "olddrift_acct".into(),
+            uid: 28146,
+            gid: 14952,
+            active: true,
+        });
+        // The user carried an instance membership before the drift.
+        mgr.ensure_group_membership("olddrift_acct", 60001, "inst_a")
+            .await
+            .unwrap();
+        // Reconcile arrives with the SAME uid but a drifted username.
+        let spec = UserSpec {
+            username: "newname_acct".into(),
+            uid: 28146,
+            gid: 14952,
+            home_dir: None,
+            state: PrincipalState::Active,
+            group_name: Some("acct_acct".into()),
+        };
+        assert_eq!(
+            mgr.ensure_user(&spec).await.unwrap(),
+            PrincipalAction::Adopted,
+            "uid collision under a different name must adopt, not fail"
+        );
+        // The old name is gone; the new name owns the uid.
+        assert!(mgr.lookup("olddrift_acct").await.unwrap().is_none());
+        let rec = mgr.lookup("newname_acct").await.unwrap().unwrap();
+        assert_eq!(rec.uid, 28146);
+        assert!(rec.active);
+        // Supplementary memberships carried across the rename.
+        let m = mgr.memberships_of("newname_acct");
+        assert!(m.iter().any(|(g, n)| *g == 60001 && n == "inst_a"));
+        // Re-running with the now-canonical username is idempotent (Unchanged).
+        assert_eq!(
+            mgr.ensure_user(&spec).await.unwrap(),
+            PrincipalAction::Unchanged
+        );
     }
 }
