@@ -9,7 +9,7 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use pria_guest_agent::api::build_router;
-use pria_guest_agent::os::{FakeUserManager, UserRecord};
+use pria_guest_agent::os::{FakeUserManager, OsUserManager, UserRecord};
 use pria_guest_agent::pria_client::fake::FakePriaClient;
 use pria_guest_agent::test_support::test_state_full;
 
@@ -265,4 +265,110 @@ async fn reconcile_with_instance_groups_grants_membership_and_isolates_dir() {
             "fail-closed error should reference the dir/chown step, got: {err}"
         );
     }
+}
+
+#[tokio::test]
+async fn revoke_instance_removes_only_that_group_and_keeps_account() {
+    // Per-instance DE-authorization: a user authorized on two instances loses
+    // access to ONE of them. The other instance membership and the account
+    // principal itself must be untouched — this is the surgical alternative to
+    // a whole-account `disable`.
+    let pria = Arc::new(FakePriaClient::default());
+    let os = Arc::new(FakeUserManager::default().with_user(UserRecord {
+        username: "pria_u_104251".into(),
+        uid: 104251,
+        gid: 14952,
+        active: true,
+    }));
+    // Pre-seed two instance memberships (the additive grants already happened).
+    os.ensure_group_membership("pria_u_104251", 60001, "inst_a")
+        .await
+        .unwrap();
+    os.ensure_group_membership("pria_u_104251", 60002, "inst_b")
+        .await
+        .unwrap();
+    let state = test_state_full(pria.clone(), os.clone());
+
+    let body = json!({
+        "account_id": "acct_123",
+        "user_id": "user_abc",
+        "linux_username": "pria_u_104251",
+        "instance_groups": [{ "id": "a", "name": "inst_a", "gid": 60001 }],
+        "request_id": "req_revk"
+    });
+    let resp = build_router(state)
+        .oneshot(post("/guest/v1/principals/revoke-instance", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(v["results"][0]["ok"], true);
+    assert_eq!(v["results"][0]["instance_id"], "a");
+    assert_eq!(v["linux_username"], "pria_u_104251");
+
+    // inst_a removed; inst_b (other instance) retained; account still active.
+    let m = os.memberships_of("pria_u_104251");
+    assert!(m.iter().all(|(_, n)| n != "inst_a"), "revoked group removed");
+    assert!(
+        m.iter().any(|(g, n)| *g == 60002 && n == "inst_b"),
+        "other instance retained"
+    );
+    assert!(
+        os.lookup("pria_u_104251").await.unwrap().unwrap().active,
+        "account principal must NOT be disabled by a per-instance revoke"
+    );
+
+    // Audit trail records the surgical revoke.
+    assert!(pria
+        .audits
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|a| a["kind"] == "principal.updated" && a["action"] == "instance_revoked"));
+}
+
+#[tokio::test]
+async fn revoke_instance_is_idempotent_for_non_member() {
+    // Revoking an instance the user no longer holds is a successful no-op.
+    let os = Arc::new(FakeUserManager::default().with_user(UserRecord {
+        username: "pria_u_104251".into(),
+        uid: 104251,
+        gid: 14952,
+        active: true,
+    }));
+    let state = test_state_full(Arc::new(FakePriaClient::default()), os.clone());
+    let body = json!({
+        "account_id": "acct_123",
+        "user_id": "user_abc",
+        "linux_username": "pria_u_104251",
+        "instance_groups": [{ "id": "z", "name": "inst_z", "gid": 60099 }]
+    });
+    let resp = build_router(state)
+        .oneshot(post("/guest/v1/principals/revoke-instance", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(v["results"][0]["ok"], true);
+}
+
+#[tokio::test]
+async fn revoke_instance_wrong_account_is_forbidden() {
+    let state = test_state_full(
+        Arc::new(FakePriaClient::default()),
+        Arc::new(FakeUserManager::default()),
+    );
+    let body = json!({
+        "account_id": "acct_OTHER",
+        "user_id": "u",
+        "linux_username": "x",
+        "instance_groups": []
+    });
+    let resp = build_router(state)
+        .oneshot(post("/guest/v1/principals/revoke-instance", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }

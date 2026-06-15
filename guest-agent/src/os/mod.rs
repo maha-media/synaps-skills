@@ -113,6 +113,19 @@ pub trait OsUserManager: Send + Sync {
         group_name: &str,
     ) -> Result<(), OsError>;
 
+    /// Idempotently REMOVE `username` from the supplementary group
+    /// `group_name`. The per-instance DE-authorization primitive: when a user's
+    /// access to a SINGLE instance is revoked, they leave only that instance's
+    /// `inst_<id>` group — memberships on OTHER instances and the per-account
+    /// PRIMARY group are untouched, so the account is NOT disabled platform-wide.
+    /// Idempotent: removing a non-member (or an absent group) is a successful
+    /// no-op so reconcile reruns converge cleanly.
+    async fn revoke_group_membership(
+        &self,
+        username: &str,
+        group_name: &str,
+    ) -> Result<(), OsError>;
+
     /// Resolve the full numeric group list (primary + supplementary) for a
     /// user. Used for an initgroups-style privilege drop when launching a
     /// session: the synaps child must run with exactly the user's groups (so it
@@ -271,6 +284,20 @@ mod fake {
             }
             Ok(gids)
         }
+
+        async fn revoke_group_membership(
+            &self,
+            username: &str,
+            group_name: &str,
+        ) -> Result<(), OsError> {
+            // Idempotent: dropping the membership of an unknown user / group is a
+            // successful no-op (mirrors `gpasswd -d` tolerating non-members).
+            let mut m = self.memberships.lock().unwrap();
+            if let Some(entry) = m.get_mut(username) {
+                entry.retain(|(_, n)| n != group_name);
+            }
+            Ok(())
+        }
     }
 }
 
@@ -375,5 +402,36 @@ mod tests {
         assert!(gids.contains(&60001));
         assert!(gids.contains(&60002));
         assert!(!gids.contains(&0), "must never include root's gid 0");
+    }
+
+    #[tokio::test]
+    async fn fake_revoke_group_membership_is_surgical_and_idempotent() {
+        let mgr = FakeUserManager::default().with_user(UserRecord {
+            username: "u".into(),
+            uid: 28146,
+            gid: 14952,
+            active: true,
+        });
+        mgr.ensure_group_membership("u", 60001, "inst_a").await.unwrap();
+        mgr.ensure_group_membership("u", 60002, "inst_b").await.unwrap();
+        // Revoke ONLY inst_a — inst_b membership (other instance) must survive.
+        mgr.revoke_group_membership("u", "inst_a").await.unwrap();
+        let m = mgr.memberships_of("u");
+        assert_eq!(m.len(), 1, "only the revoked group is removed");
+        assert!(m.iter().all(|(_, n)| n != "inst_a"), "inst_a removed");
+        assert!(m.iter().any(|(g, n)| *g == 60002 && n == "inst_b"), "inst_b retained");
+        // Re-revoking is an idempotent no-op (not an error).
+        mgr.revoke_group_membership("u", "inst_a").await.unwrap();
+        // The user is still active — per-instance revoke never disables the account.
+        assert!(mgr.lookup("u").await.unwrap().unwrap().active);
+        // Their resolved gids still include the primary + the retained instance.
+        let gids = mgr.resolve_group_gids("u").await.unwrap();
+        assert!(gids.contains(&14952) && gids.contains(&60002) && !gids.contains(&60001));
+    }
+
+    #[tokio::test]
+    async fn fake_revoke_unknown_user_is_noop() {
+        let mgr = FakeUserManager::default();
+        assert!(mgr.revoke_group_membership("ghost", "inst_a").await.is_ok());
     }
 }

@@ -55,6 +55,10 @@ pub fn build_router(state: AppState) -> Router {
             &format!("{prefix}/principals/disable"),
             post(principals::disable),
         )
+        .route(
+            &format!("{prefix}/principals/revoke-instance"),
+            post(principals::revoke_instance),
+        )
         .route(&format!("{prefix}/sessions/start"), post(sessions::start))
         .route(
             &format!("{prefix}/sessions/{{session_id}}/send"),

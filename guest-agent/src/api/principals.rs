@@ -234,6 +234,95 @@ fn ensure_instance_dir(efs_root: &std::path::Path, instance_id: &str, gid: u32) 
     Ok(())
 }
 
+/// Per-instance DE-authorization handler (the inverse of the additive
+/// `instance_groups` grant in `reconcile`). Removes `linux_username` from each
+/// listed instance group so the user loses access to that tenant's private EFS
+/// workspace — WITHOUT touching the account principal or any OTHER instance
+/// group. This is the surgical alternative to `disable` (which locks the whole
+/// account across every instance). Idempotent + fail-open per-group: revoking a
+/// membership the user no longer holds succeeds.
+pub async fn revoke_instance(
+    State(state): State<AppState>,
+    SignedJson { value: req, .. }: SignedJson<RevokeInstanceRequest>,
+) -> Result<Json<RevokeInstanceResponse>, GuestAgentError> {
+    if req.account_id != state.config.account_id.as_str() {
+        return Err(GuestAgentError::new(
+            ErrorCode::ForbiddenAccountVmMismatch,
+            "account mismatch",
+        )
+        .with_request_id(req.request_id.clone()));
+    }
+
+    let mut results = Vec::with_capacity(req.instance_groups.len());
+    for g in &req.instance_groups {
+        match state
+            .os
+            .revoke_group_membership(&req.linux_username, &g.name)
+            .await
+        {
+            Ok(()) => {
+                let ev = AuditEventBuilder::new(kinds::PRINCIPAL_UPDATED)
+                    .str_field("account_id", req.account_id.clone())
+                    .str_field("vm_id", state.config.vm_id.to_string())
+                    .str_field("user_id", req.user_id.clone())
+                    .str_field("linux_username", req.linux_username.clone())
+                    .str_field("action", "instance_revoked")
+                    .str_field("instance_id", g.id.clone())
+                    .str_field("group_name", g.name.clone())
+                    .build();
+                let _ = state.pria.audit(vec![ev]).await;
+                results.push(RevokeInstanceResult {
+                    instance_id: g.id.clone(),
+                    group_name: g.name.clone(),
+                    ok: true,
+                    error: None,
+                });
+            }
+            Err(e) => results.push(RevokeInstanceResult {
+                instance_id: g.id.clone(),
+                group_name: g.name.clone(),
+                ok: false,
+                error: Some(e.to_string()),
+            }),
+        }
+    }
+
+    Ok(Json(RevokeInstanceResponse {
+        request_id: req.request_id,
+        linux_username: req.linux_username,
+        results,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RevokeInstanceRequest {
+    pub account_id: String,
+    pub user_id: String,
+    pub linux_username: String,
+    /// Per-instance groups to REMOVE the user from. Each corresponds to an
+    /// instance whose per-instance authorization has been revoked.
+    #[serde(default)]
+    pub instance_groups: Vec<InstanceGroup>,
+    #[serde(default)]
+    pub request_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RevokeInstanceResult {
+    pub instance_id: String,
+    pub group_name: String,
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RevokeInstanceResponse {
+    pub request_id: Option<String>,
+    pub linux_username: String,
+    pub results: Vec<RevokeInstanceResult>,
+}
+
 async fn emit_principal_audit(
     state: &AppState,
     account_id: &str,

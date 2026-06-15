@@ -212,6 +212,38 @@ impl OsUserManager for LinuxUserManager {
         Ok(())
     }
 
+    async fn revoke_group_membership(
+        &self,
+        username: &str,
+        group_name: &str,
+    ) -> Result<(), OsError> {
+        // Per-instance DE-authorization: remove the user from a single
+        // `inst_<id>` group. Surgical — the user's primary (per-account) group
+        // and every OTHER instance group are untouched, so this does NOT disable
+        // the account platform-wide. Idempotent + fail-open on "already gone":
+        //   * group doesn't exist          → nothing to revoke (Ok)
+        //   * user is not a member          → Ok (gpasswd -d says "not a member")
+        //   * removed                       → Ok
+        let (ok_group, _) = Self::run("getent", &["group", group_name]).await?;
+        if !ok_group {
+            return Ok(());
+        }
+        // `gpasswd -d <user> <group>` removes the user from the group's member
+        // list with explicit argv (no shell). It exits non-zero when the user is
+        // not a member — treat that as an idempotent success.
+        let (ok, out) = Self::run("gpasswd", &["-d", username, group_name]).await?;
+        if !ok {
+            let lower = out.to_lowercase();
+            if lower.contains("not a member") || lower.contains("is not a member of") {
+                return Ok(());
+            }
+            return Err(OsError(format!(
+                "gpasswd -d {group_name} {username} failed: {out}"
+            )));
+        }
+        Ok(())
+    }
+
     async fn resolve_group_gids(&self, username: &str) -> Result<Vec<u32>, OsError> {
         // `id -G <user>` prints the numeric primary + supplementary gids,
         // space-separated. Reflects /etc/group immediately after usermod -aG.
@@ -255,6 +287,19 @@ mod tests {
         let mgr = LinuxUserManager::new();
         // `root` group exists at gid 0; refuse to recreate it at a different gid.
         assert!(mgr.ensure_group(987654, "root").await.is_err());
+    }
+
+    // Revoking membership in a group that does not exist is an idempotent no-op
+    // (no root required — there is no such group to mutate). Guards the
+    // per-instance de-authorization fail-open contract: a revoke for an
+    // already-absent instance group must converge, never error.
+    #[tokio::test]
+    async fn revoke_group_membership_absent_group_is_noop() {
+        let mgr = LinuxUserManager::new();
+        assert!(mgr
+            .revoke_group_membership("nobody", "inst_does_not_exist_zzz")
+            .await
+            .is_ok());
     }
 
     // Disable → enable round-trip on a real throwaway user. Opt-in (needs root):
