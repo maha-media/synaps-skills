@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# pria-kasm-setpw — set the KasmVNC transport (Basic-auth) password for a
+# per-user desktop unit (spec §7.2 kasmvnc@.service ExecStartPre, §7.3).
+#
+# Security invariants (spec §7.3, §16, HS-G1):
+#   * The password is NEVER passed on a command line (argv) to any process —
+#     it is fed to `kasmvncpasswd` via stdin only.
+#   * The password is NEVER logged or echoed.
+#   * The source of the password is the env file / EnvironmentFile only
+#     (`/run/pria/kasmvnc/<user>.env`, mode 0600). This script reads
+#     `KASM_VNC_PASSWORD` from its own environment (populated by systemd's
+#     `EnvironmentFile=`), falling back to parsing the env file directly when
+#     invoked outside systemd.
+#   * The generated passwd file is written under the user's home with mode 0600.
+#
+# Usage: pria-kasm-setpw <linux_username>
+set -euo pipefail
+
+LINUX_USER="${1:?usage: pria-kasm-setpw <linux_username>}"
+RUN_ROOT="${PRIA_RUN_ROOT:-/run/pria}"
+ENV_FILE="${RUN_ROOT}/kasmvnc/${LINUX_USER}.env"
+KASM_BASIC_USER="${KASM_BASIC_USER:-kasm_user}"
+
+# Resolve the password without ever exposing it on argv or in logs.
+pw="${KASM_VNC_PASSWORD:-}"
+if [ -z "${pw}" ]; then
+  if [ ! -r "${ENV_FILE}" ]; then
+    echo "pria-kasm-setpw: env file not readable: ${ENV_FILE}" >&2
+    exit 1
+  fi
+  # Read only the password line; strip the key prefix. Never print the value.
+  pw="$(sed -n 's/^KASM_VNC_PASSWORD=//p' "${ENV_FILE}" | head -n1)"
+fi
+
+if [ -z "${pw}" ]; then
+  echo "pria-kasm-setpw: KASM_VNC_PASSWORD is empty for ${LINUX_USER}" >&2
+  exit 1
+fi
+
+# Resolve the target user's home directory.
+HOME_DIR="$(getent passwd "${LINUX_USER}" | cut -d: -f6)"
+if [ -z "${HOME_DIR}" ]; then
+  HOME_DIR="${HOME:-/home/${LINUX_USER}}"
+fi
+PASSWD_FILE="${HOME_DIR}/.kasmpasswd"
+
+umask 077
+
+# Feed the password to kasmvncpasswd over stdin (NEVER as an argument).
+# `-u <user> -w -r` sets the read/write transport user; the tool prompts for
+# the password on stdin, so we pipe it twice (entry + confirmation).
+if command -v kasmvncpasswd >/dev/null 2>&1; then
+  printf '%s\n%s\n' "${pw}" "${pw}" | kasmvncpasswd -u "${KASM_BASIC_USER}" -w -r "${PASSWD_FILE}" >/dev/null 2>&1
+else
+  # Fallback: legacy `vncpasswd -f` reads the password on stdin and writes the
+  # obfuscated blob to stdout. Still no password on argv.
+  printf '%s\n%s\n' "${pw}" "${pw}" | vncpasswd -f > "${PASSWD_FILE}"
+fi
+
+chmod 0600 "${PASSWD_FILE}"
+# Best-effort ownership fixup when running as root.
+if [ "$(id -u)" = "0" ]; then
+  chown "${LINUX_USER}" "${PASSWD_FILE}" 2>/dev/null || true
+  # KasmVNC defaults to the system snakeoil TLS key. Debian keeps it readable
+  # only by group ssl-cert, while desktops run as unprivileged per-user accounts.
+  # Add the user to ssl-cert so Xvnc can read the key instead of failing before
+  # binding the websocket port. This is local-VM internal TLS only; the browser
+  # still reaches it through Pria's authenticated VNC proxy.
+  if getent group ssl-cert >/dev/null 2>&1; then
+    usermod -aG ssl-cert "${LINUX_USER}" 2>/dev/null || true
+  fi
+  # Ensure systemd user runtime dir ownership is sane for dbus/xfce. On minimal
+  # cloud images, PAM/logind can create /run/user/<uid> as root during service
+  # startup, which makes dconf/ICEauthority fail and tears down the desktop.
+  UID_NUM="$(id -u "${LINUX_USER}" 2>/dev/null || true)"
+  if [ -n "${UID_NUM}" ]; then
+    install -d -m 0700 -o "${LINUX_USER}" -g users "/run/user/${UID_NUM}" 2>/dev/null || true
+  fi
+fi
+
+# Write a robust xstartup. `vncserver -select-de xfce` invokes xfce4-session,
+# which exits immediately in headless/no-logind guests. Starting the components
+# individually under dbus-run-session with compositing off keeps the desktop up;
+# the tail keepalive prevents Xvnc from exiting if one component crashes.
+VNC_DIR="${HOME_DIR}/.vnc"
+install -d -m 0700 -o "${LINUX_USER}" "${VNC_DIR}" 2>/dev/null || mkdir -p "${VNC_DIR}"
+cat > "${VNC_DIR}/xstartup" <<'XSTARTUP'
+#!/bin/sh
+set +e
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null || true
+export XDG_SESSION_TYPE=x11
+export XDG_CURRENT_DESKTOP=XFCE
+xfconf-query -c xfwm4 -p /general/use_compositing -n -t bool -s false 2>/dev/null || true
+dbus-run-session -- sh -c '
+  xfsettingsd &
+  xfwm4 --compositor=off &
+  xfce4-panel &
+  xfdesktop &
+  wait
+' &
+exec tail -f /dev/null
+XSTARTUP
+chmod 0755 "${VNC_DIR}/xstartup"
+chown "${LINUX_USER}" "${VNC_DIR}/xstartup" 2>/dev/null || true
+
+# KasmVNC's vncserver wrapper interactively prompts "Please choose Desktop
+# Environment" on every start unless ~/.vnc/.de-was-selected exists — under
+# systemd that prompt reads EOF and the unit exits 2/INVALIDARGUMENT before the
+# desktop ever binds its port. We ship our own xstartup above, so record that a
+# DE was already selected to suppress the prompt and use our xstartup verbatim.
+touch "${VNC_DIR}/.de-was-selected" 2>/dev/null || true
+chown "${LINUX_USER}" "${VNC_DIR}/.de-was-selected" 2>/dev/null || true
+
+# Scrub the secret from the shell's memory as best we can.
+pw=""
+unset pw
+echo "pria-kasm-setpw: configured KasmVNC transport password for ${LINUX_USER} (redacted)" >&2

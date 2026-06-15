@@ -65,6 +65,7 @@ async fn health_returns_section_6_1_payload() {
         synaps: Arc::new(pria_guest_agent::synaps::launcher::FakeLauncher::default()),
         sessions,
         fsmon: Arc::new(pria_guest_agent::fsmon::client::FakeFsmonControl::healthy()),
+        desktops: pria_guest_agent::test_support::fake_desktop_store(),
     };
 
     let resp = build_router(state)

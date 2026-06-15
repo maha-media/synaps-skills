@@ -75,6 +75,7 @@ fn test_state() -> AppState {
         synaps: Arc::new(pria_guest_agent::synaps::launcher::FakeLauncher::default()),
         sessions,
         fsmon: Arc::new(pria_guest_agent::fsmon::client::FakeFsmonControl::healthy()),
+        desktops: pria_guest_agent::test_support::fake_desktop_store(),
     }
 }
 

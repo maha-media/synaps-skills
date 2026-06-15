@@ -79,6 +79,12 @@ pub trait SessionProcess: Send + Sync {
     async fn cancel(&self) -> Result<(), LaunchError>;
     async fn close(&self, grace_ms: u64) -> Result<(), LaunchError>;
     fn status(&self) -> SessionStatus;
+    /// Take the child's stdout stream exactly once, for the usage-relay reader
+    /// task (spec §5.5 / HS-U6). Returns `None` when unavailable — already taken,
+    /// or a non-process backend (fake / non-unix). Default: `None`.
+    fn take_stdout(&self) -> Option<tokio::process::ChildStdout> {
+        None
+    }
 }
 
 /// Launches session processes.
@@ -153,9 +159,14 @@ pub fn tag_agent_end_usage(raw_event: &Value, identity: &UsageIdentity) -> Optio
     let usage = normalise_usage(usage_raw);
 
     // Drop genuinely empty turns — nothing to bill, nothing to cross-check.
-    let any_tokens = ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"]
-        .iter()
-        .any(|k| usage.get(*k).and_then(|v| v.as_u64()).unwrap_or(0) > 0);
+    let any_tokens = [
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+    ]
+    .iter()
+    .any(|k| usage.get(*k).and_then(|v| v.as_u64()).unwrap_or(0) > 0);
     if !any_tokens {
         return None;
     }
@@ -165,8 +176,12 @@ pub fn tag_agent_end_usage(raw_event: &Value, identity: &UsageIdentity) -> Optio
         .and_then(|m| m.as_str())
         .map(|s| s.to_string());
 
-    let idempotency_key =
-        derive_idempotency_key(&identity.session_id, "agent_end", EVENT_TYPE_LLM_TOKENS, &usage);
+    let idempotency_key = derive_idempotency_key(
+        &identity.session_id,
+        "agent_end",
+        EVENT_TYPE_LLM_TOKENS,
+        &usage,
+    );
 
     let event = UsageEvent {
         idempotency_key,
@@ -190,6 +205,54 @@ pub fn tag_agent_end_usage(raw_event: &Value, identity: &UsageIdentity) -> Optio
         source: SOURCE_RPC_AGENT_END.to_string(),
         events: vec![event],
     })
+}
+
+/// Stream a launched `synaps rpc` child's stdout, metering every billable
+/// `agent_end` usage frame into Pria's signed usage callback (spec §5.5; the
+/// HS-U6 RPC-boundary fallback that ships before the `on_usage` plugin). The
+/// task runs until stdout closes (process exit). Non-usage / unparseable frames
+/// are ignored. The guest agent owns trusted attribution: SynapsCLI core only
+/// emits raw token counts, and [`tag_agent_end_usage`] stamps the
+/// account/vm/user/session identity the core cannot know.
+pub async fn relay_agent_end_usage(
+    stdout: tokio::process::ChildStdout,
+    identity: UsageIdentity,
+    pria: std::sync::Arc<dyn crate::pria_client::PriaCallbackClient>,
+) {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let mut lines = BufReader::new(stdout).lines();
+    loop {
+        match lines.next_line().await {
+            Ok(Some(line)) => {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let Ok(val) = serde_json::from_str::<Value>(trimmed) else {
+                    continue;
+                };
+                if let Some(payload) = tag_agent_end_usage(&val, &identity) {
+                    if let Err(e) = pria.usage(&payload).await {
+                        tracing::warn!(
+                            error = %e,
+                            session_id = %identity.session_id,
+                            "usage relay forward to Pria failed"
+                        );
+                    } else {
+                        tracing::info!(
+                            session_id = %identity.session_id,
+                            "metered agent_end usage to Pria ledger"
+                        );
+                    }
+                }
+            }
+            Ok(None) => break, // EOF: synaps process exited
+            Err(e) => {
+                tracing::warn!(error = %e, "usage relay stdout read failed");
+                break;
+            }
+        }
+    }
 }
 
 // ── AC-B2.2 in-VM `on_usage` plugin signing proxy ────────────────────────────
@@ -311,6 +374,7 @@ mod real {
         pid: u32,
         child: AsyncMutex<Child>,
         status: StdMutex<SessionStatus>,
+        stdout: StdMutex<Option<tokio::process::ChildStdout>>,
     }
 
     pub fn spawn(spec: &LaunchSpec) -> Result<std::sync::Arc<dyn SessionProcess>, LaunchError> {
@@ -341,10 +405,15 @@ mod real {
             .spawn()
             .map_err(|e| LaunchError(format!("failed to spawn synaps: {e}")))?;
         let pid = child.id().unwrap_or(0);
+        let mut child = child;
+        // Take stdout up-front so the usage-relay reader task can own it; the
+        // child stays in the AsyncMutex for stdin writes (send) + lifecycle.
+        let stdout = child.stdout.take();
         Ok(std::sync::Arc::new(ChildProcess {
             pid,
             child: AsyncMutex::new(child),
             status: StdMutex::new(SessionStatus::Running),
+            stdout: StdMutex::new(stdout),
         }))
     }
 
@@ -352,6 +421,10 @@ mod real {
     impl SessionProcess for ChildProcess {
         fn pid(&self) -> u32 {
             self.pid
+        }
+
+        fn take_stdout(&self) -> Option<tokio::process::ChildStdout> {
+            self.stdout.lock().unwrap().take()
         }
 
         async fn send(&self, message: &str) -> Result<(), LaunchError> {
@@ -508,6 +581,53 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn relay_meters_agent_end_frames_from_real_stdout() {
+        use crate::pria_client::fake::FakePriaClient;
+        use std::process::Stdio;
+        use std::sync::Arc;
+        // A real child whose stdout emits noise, one billable agent_end frame,
+        // and a non-usage frame. The relay must meter exactly the billable one.
+        let agent_end = r#"{"type":"agent_end","usage":{"input_tokens":10,"output_tokens":5,"model":"gpt-5.5-codex"}}"#;
+        let script = format!(
+            "echo 'not json'; echo '{}'; echo '{{\"type\":\"synaps.output.delta\"}}'",
+            agent_end
+        );
+        let mut child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn test child");
+        let stdout = child.stdout.take().expect("child stdout");
+        let pria = Arc::new(FakePriaClient::default());
+        relay_agent_end_usage(stdout, identity(), pria.clone()).await;
+        let usages = pria.usages.lock().unwrap();
+        assert_eq!(usages.len(), 1, "exactly one billable agent_end metered");
+        assert_eq!(usages[0].session_id, "sess_5");
+        assert_eq!(usages[0].account_id, "acct_1");
+        assert_eq!(usages[0].source, SOURCE_RPC_AGENT_END);
+    }
+
+    #[tokio::test]
+    async fn relay_drops_empty_turn_and_exits_on_eof() {
+        use crate::pria_client::fake::FakePriaClient;
+        use std::process::Stdio;
+        use std::sync::Arc;
+        // A zero-token agent_end must NOT be billed (spec §5.5 empty-turn drop),
+        // and the relay must return cleanly when stdout closes.
+        let mut child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(r#"echo '{"type":"agent_end","usage":{"input_tokens":0,"output_tokens":0}}'"#)
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn test child");
+        let stdout = child.stdout.take().expect("child stdout");
+        let pria = Arc::new(FakePriaClient::default());
+        relay_agent_end_usage(stdout, identity(), pria.clone()).await;
+        assert!(pria.usages.lock().unwrap().is_empty(), "empty turn not billed");
+    }
+
     #[test]
     fn tag_agent_end_usage_builds_raw_only_payload() {
         let raw = json!({
@@ -528,7 +648,9 @@ mod tests {
         assert_eq!(ev.event_type, "llm.tokens");
         assert_eq!(ev.model.as_deref(), Some("claude-sonnet-4-test"));
         assert!(ev.provider.is_none());
-        assert!(ev.idempotency_key.starts_with("synaps:sess_5:agent_end:llm.tokens:"));
+        assert!(ev
+            .idempotency_key
+            .starts_with("synaps:sess_5:agent_end:llm.tokens:"));
         assert_eq!(ev.usage["input_tokens"], 1234);
         // Raw-only: the serialised event must not carry credits.
         let v = serde_json::to_value(ev).unwrap();
@@ -599,7 +721,10 @@ mod tests {
         assert_eq!(payload.events.len(), 1);
         let ev = &payload.events[0];
         // Plugin-derived idempotency key + provider/model preserved verbatim.
-        assert_eq!(ev.idempotency_key, "synaps:sess_5:msg_123:llm.tokens:deadbeefdeadbeef");
+        assert_eq!(
+            ev.idempotency_key,
+            "synaps:sess_5:msg_123:llm.tokens:deadbeefdeadbeef"
+        );
         assert_eq!(ev.provider.as_deref(), Some("anthropic"));
         assert_eq!(ev.model.as_deref(), Some("claude-sonnet-4-test"));
         assert_eq!(ev.usage["input_tokens"], 1234);

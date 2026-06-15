@@ -6,6 +6,7 @@ use axum::routing::get;
 use axum::Router;
 
 use crate::config::Config;
+use crate::desktop::kasmvnc::DesktopStore;
 use crate::fsmon::client::FsmonControl;
 use crate::hmac::HmacVerifier;
 use crate::os::OsUserManager;
@@ -15,6 +16,7 @@ use crate::sessions::SessionStore;
 use crate::synaps::launcher::SynapsLauncher;
 use crate::versions::Versions;
 
+pub mod desktop;
 pub mod fsmon;
 pub mod health;
 pub mod policy;
@@ -35,6 +37,8 @@ pub struct AppState {
     pub synaps: Arc<dyn SynapsLauncher>,
     pub sessions: Arc<SessionStore>,
     pub fsmon: Arc<dyn FsmonControl>,
+    /// Desktop session store (KasmVNC lifecycle, spec §5.4).
+    pub desktops: Arc<DesktopStore>,
 }
 
 /// Build the axum router for the configured route prefix.
@@ -72,5 +76,15 @@ pub fn build_router(state: AppState) -> Router {
         .route(&format!("{prefix}/usage"), post(usage::ingest))
         .route(&format!("{prefix}/fsmon/status"), get(fsmon::status))
         .route(&format!("{prefix}/fsmon/reload"), post(fsmon::reload))
+        // Desktop / KasmVNC lifecycle (spec §5.4, §8.2)
+        .route(
+            &format!("{prefix}/desktops/start"),
+            post(desktop::start_desktop),
+        )
+        .route(
+            &format!("{prefix}/desktops/{{linux_username}}/stop"),
+            post(desktop::stop_desktop),
+        )
+        .route(&format!("{prefix}/desktops"), get(desktop::list_desktops))
         .with_state(state)
 }

@@ -41,9 +41,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         runtime.clone(),
     ));
     let fsmon: std::sync::Arc<dyn pria_guest_agent::fsmon::client::FsmonControl> =
-        std::sync::Arc::new(pria_guest_agent::fsmon::client::UdsFsmonControl::new(
-            config.fsmon.socket.clone(),
-        ));
+        std::sync::Arc::new(
+            pria_guest_agent::fsmon::client::UdsFsmonControl::new(config.fsmon.socket.clone())
+                .with_daemon(
+                    std::path::PathBuf::from("/usr/local/sbin/synaps_fsmon"),
+                    config.fsmon.forward_socket.clone(),
+                ),
+        );
+    // Desktop store uses run_root for persisted allocations + env files.
+    let desktops = Arc::new(
+        pria_guest_agent::desktop::kasmvnc::DesktopStore::new(
+            config.paths.run_root.clone(),
+            Arc::new(pria_guest_agent::desktop::kasmvnc::RealSystemctl),
+        )
+        .with_port_readiness(Arc::new(
+            pria_guest_agent::desktop::kasmvnc::TcpPortReadiness::new(
+                std::time::Duration::from_secs(25),
+            ),
+        )),
+    );
     let state = AppState {
         config: Arc::new(config),
         hmac: Arc::new(hmac),
@@ -54,6 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         synaps,
         sessions,
         fsmon,
+        desktops,
     };
 
     let _heartbeat = pria_guest_agent::supervisor::spawn_heartbeat_loop(state.clone());

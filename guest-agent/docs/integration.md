@@ -56,3 +56,41 @@ The guest agent does **not** fork or duplicate the peer contracts:
   protocol defined in `pria-fsmon-plugin/.../control.rs`.
 - It writes the session-context schema defined in
   `pria-session-context-plugin/docs/session-context.schema.json`.
+
+## 4. Synaps OAuth credential contract (spec §8 G8, §11.3) — NO core change
+
+The real Synaps usage call (E2E step 14) must use the OpenAI **Codex / GPT-5.5**
+OAuth path. This is **already fully supported by SynapsCLI** — no core change is
+required (HS-S1 / HS-G5 do NOT fire):
+
+- **OAuth flow:** `crates/agent-core/src/core/auth/openai_codex.rs` implements the
+  full PKCE flow for provider `openai-codex` (client id
+  `app_EMoamEEZ73f0CkXaXp7hrann`, ChatGPT auth) and persists
+  `{type:"oauth", refresh, access, expires, account_id}` to `auth.json`.
+- **Credential storage:** `auth.json` lives under `base_dir()` =
+  `$SYNAPS_BASE_DIR` or `$HOME/.synaps-cli` (`core/config.rs`). The guest-agent
+  launches `synaps` with `env_clear()` + a controlled allowlist plus the
+  Pria-supplied session `environment` map (`api/sessions.rs` →
+  `LaunchSpec.env`). The bootstrap therefore delivers the per-user
+  `openai-codex` credential by injecting `auth.json` into a per-user dir and
+  setting `SYNAPS_BASE_DIR` (or `HOME`) in the session `environment` — no env
+  var or file path needs SynapsCLI changes.
+- **Model routing:** `openai-codex/gpt-5.5` resolves via
+  `crates/agent-engine/src/runtime/openai/registry.rs::resolve_codex_shorthand`
+  (line 308) against the static catalog
+  (`crates/agent-engine/src/runtime/openai/catalog/codex.rs` lists `gpt-5.5`).
+  The engine refreshes the token automatically via
+  `auth::ensure_fresh_provider_token(client, "openai-codex")`
+  (`crates/agent-core/src/core/auth/token.rs:178`).
+- **Usage attribution:** the `on_usage` hook (protocol v2,
+  `crates/agent-engine/src/extensions/hooks/events.rs`, permission `LlmContent`
+  in `crates/agent-engine/src/extensions/permissions.rs`) carries raw token
+  usage.
+  `pria-session-context-plugin` (manifest `protocol_version: 2`, subscribes
+  `on_usage`) forwards it to the guest-agent usage proxy, which signs +
+  attributes (`src/synaps/launcher.rs::tag_plugin_usage`). The permission model
+  is sufficient (HS-S2 does NOT fire).
+- **Anthropic OAuth is explicitly NOT used** (spec §2.13).
+
+**Conclusion:** the OAuth Codex/GPT-5.5 path is drivable end-to-end using
+existing SynapsCLI capabilities. No SynapsCLI HARD STOP.

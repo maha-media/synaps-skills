@@ -1,0 +1,22 @@
+[Unit]
+Description=KasmVNC desktop for %i
+After=network-online.target
+
+[Service]
+User=%i
+PAMName=login
+EnvironmentFile=/run/pria/kasmvnc/%i.env
+# Systemd runs the service as User=%i; the leading '+' keeps only this helper
+# privileged so it can install the password file and make the system snakeoil TLS
+# key readable by the per-user KasmVNC process. ExecStart still runs as %i.
+ExecStartPre=+/usr/local/sbin/pria-kasm-setpw %i
+# KasmVNC's vncserver wrapper daemonizes unless -fg is present. Under systemd,
+# daemonizing causes the service cgroup to be reaped and the desktop disappears.
+# Use a robust xstartup (written by pria-kasm-setpw) instead of -select-de, which
+# exits quickly in headless guests when xfce4-session/dbus/compositing is unhappy.
+ExecStart=/usr/bin/vncserver ${KASM_DISPLAY} -fg -geometry ${KASM_GEOMETRY} -websocketPort ${KASM_WS_PORT} -interface 0.0.0.0
+ExecStop=/usr/bin/vncserver -kill ${KASM_DISPLAY}
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

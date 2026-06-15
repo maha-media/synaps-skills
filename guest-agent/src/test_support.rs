@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::api::AppState;
 use crate::config::Config;
+use crate::desktop::kasmvnc::{DesktopStore, FakeSystemctl};
 use crate::hmac::HmacVerifier;
 use crate::os::{FakeUserManager, OsUserManager};
 use crate::pria_client::PriaCallbackClient;
@@ -98,6 +99,13 @@ fn assemble(
     let versions = Arc::new(Versions::detect(&cfg));
     let runtime = Arc::new(RuntimeState::new());
     let sessions = Arc::new(SessionStore::new(runtime.clone()));
+    // Desktop store uses a temp dir per test so tests are isolated.
+    let desktop_run_root =
+        std::env::temp_dir().join(format!("ga-desktop-{}", uuid::Uuid::new_v4()));
+    let desktops = Arc::new(DesktopStore::new(
+        desktop_run_root,
+        Arc::new(FakeSystemctl::default()),
+    ));
     AppState {
         config: Arc::new(cfg),
         hmac: Arc::new(HmacVerifier::disabled("acct_123", "vm_456")),
@@ -108,5 +116,14 @@ fn assemble(
         synaps,
         sessions,
         fsmon: Arc::new(crate::fsmon::client::FakeFsmonControl::healthy()),
+        desktops,
     }
+}
+
+/// Build a fresh [`DesktopStore`] backed by a [`FakeSystemctl`] and a temp dir.
+/// Integration tests that construct `AppState` directly should use this for the
+/// `desktops` field.
+pub fn fake_desktop_store() -> Arc<DesktopStore> {
+    let root = std::env::temp_dir().join(format!("ga-desktop-{}", uuid::Uuid::new_v4()));
+    Arc::new(DesktopStore::new(root, Arc::new(FakeSystemctl::default())))
 }

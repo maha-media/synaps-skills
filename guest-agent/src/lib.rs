@@ -7,6 +7,7 @@
 //! SynapsCLI core (see `docs/contract.md` §5 / plan §4 HARD STOPs).
 
 pub mod config;
+pub mod desktop;
 pub mod error;
 pub mod fsmon;
 pub mod hmac;

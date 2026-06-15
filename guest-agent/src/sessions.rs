@@ -83,8 +83,13 @@ impl SessionStore {
     /// `None` for an unknown session so the proxy can reject it.
     pub fn identity_tags(&self, session_id: &str) -> Option<(String, String, String)> {
         let map = self.sessions.lock().unwrap();
-        map.get(session_id)
-            .map(|e| (e.account_id.clone(), e.instance_id.clone(), e.user_id.clone()))
+        map.get(session_id).map(|e| {
+            (
+                e.account_id.clone(),
+                e.instance_id.clone(),
+                e.user_id.clone(),
+            )
+        })
     }
 
     /// Remove a session (on close/exit) and decrement the active counter.

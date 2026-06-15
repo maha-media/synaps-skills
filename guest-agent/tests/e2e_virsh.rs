@@ -118,12 +118,21 @@ fsmon:
     );
     let config = Config::from_yaml(&yaml).unwrap();
 
-    let os = Arc::new(FakeUserManager::default().with_user(UserRecord {
-        username: "pria_u_55001".into(),
-        uid: 55001,
-        gid: 55001,
-        active: true,
-    }));
+    let os = Arc::new(
+        FakeUserManager::default()
+            .with_user(UserRecord {
+                username: "pria_u_55001".into(),
+                uid: 55001,
+                gid: 55001,
+                active: true,
+            })
+            .with_user(UserRecord {
+                username: "pria_u_55002".into(),
+                uid: 55002,
+                gid: 55002,
+                active: true,
+            }),
+    );
     let runtime = Arc::new(RuntimeState::new());
     let sessions = Arc::new(SessionStore::new(runtime.clone()));
     let versions = Arc::new(Versions::detect(&config));
@@ -139,6 +148,7 @@ fsmon:
         synaps: Arc::new(FakeLauncher::default()),
         sessions,
         fsmon: Arc::new(FakeFsmonControl::healthy()),
+        desktops: pria_guest_agent::test_support::fake_desktop_store(),
     };
 
     let app = build_router(state);
@@ -288,6 +298,124 @@ async fn e2e_signed_loop() {
     assert!(
         audit_count >= 3,
         "expected >=3 signed audit callbacks, got {audit_count}"
+    );
+}
+
+/// §9 multi-user concurrency proof, fully signed: two Pria users → two Linux
+/// principals → two KasmVNC desktops on distinct ports with distinct passwords,
+/// then heartbeat `vnc.sessions[]` fidelity, then independent close (closing
+/// user A leaves user B's desktop intact). Also asserts the VNC password never
+/// leaks into the Pria audit callbacks (HS-G1).
+#[tokio::test]
+async fn e2e_signed_multiuser_desktops() {
+    let (pria_base, received) = spawn_fake_pria().await;
+    let (ga_base, _efs) = spawn_guest_agent(&pria_base).await;
+    let client = reqwest::Client::new();
+    let signer = OutboundSigner::new(SECRET.to_vec(), "key_e2e", ACCOUNT, VM);
+
+    let pw_a = "vnc_secret_user_a_zzz";
+    let pw_b = "vnc_secret_user_b_yyy";
+
+    // §9 step 6/8 — reconcile + start two desktops over signed calls.
+    let mut started = Vec::new();
+    for (user, sess, pw) in [
+        ("pria_u_55001", "sess_user_a", pw_a),
+        ("pria_u_55002", "sess_user_b", pw_b),
+    ] {
+        let (st, v) = signed_post(
+            &client,
+            &signer,
+            &ga_base,
+            "/guest/v1/desktops/start",
+            serde_json::json!({
+                "session_id": sess,
+                "linux_username": user,
+                "vnc_password": pw,
+            }),
+            Some(sess),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "desktop start failed for {user}: {v}");
+        started.push(v);
+    }
+
+    // Distinct ports + distinct displays (spec §9: 6901/6902).
+    let port_a = started[0]["port"].as_u64().unwrap();
+    let port_b = started[1]["port"].as_u64().unwrap();
+    assert_ne!(port_a, port_b, "ports must be distinct per user");
+    let ports: std::collections::HashSet<u64> = [port_a, port_b].into();
+    assert!(ports.contains(&6901) && ports.contains(&6902));
+    assert_ne!(started[0]["display"], started[1]["display"]);
+    // Distinct passwords echoed back to the controller (spec §9).
+    assert_ne!(started[0]["password"], started[1]["password"]);
+    assert_eq!(started[0]["password"], pw_a);
+    assert_eq!(started[1]["password"], pw_b);
+
+    // §9 heartbeat `vnc.sessions[]` fidelity via the list snapshot the heartbeat
+    // builder consumes (GET is unsigned, like /health).
+    let list: serde_json::Value = client
+        .get(format!("{ga_base}/guest/v1/desktops"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let sessions = list["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 2, "two concurrent desktops expected");
+    let hb_ports: std::collections::HashSet<u64> = sessions
+        .iter()
+        .map(|s| s["port"].as_u64().unwrap())
+        .collect();
+    assert_eq!(hb_ports, ports, "heartbeat ports must match started ports");
+    // The controller needs the password (basic auth) — it is present here but
+    // must NOT have leaked into any audit callback (asserted below).
+    for s in sessions {
+        assert_eq!(s["basic_user"], "kasm_user");
+        assert!(s["password"].as_str().is_some_and(|p| !p.is_empty()));
+    }
+
+    // §9 independent close — stop user A only; user B must remain.
+    let (st, _v) = signed_post(
+        &client,
+        &signer,
+        &ga_base,
+        "/guest/v1/desktops/pria_u_55001/stop",
+        serde_json::json!({ "reason": "user_closed" }),
+        Some("sess_user_a"),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+
+    let list: serde_json::Value = client
+        .get(format!("{ga_base}/guest/v1/desktops"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let remaining = list["sessions"].as_array().unwrap();
+    assert_eq!(remaining.len(), 1, "closing A must leave B running");
+    assert_eq!(remaining[0]["linux_username"], "pria_u_55002");
+
+    // HS-G1: the VNC password must NEVER appear in any Pria audit callback.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let got = received.lock().unwrap();
+    let mut saw_desktop_audit = false;
+    for (path, body) in got.iter() {
+        let blob = serde_json::to_string(body).unwrap();
+        assert!(
+            !blob.contains(pw_a) && !blob.contains(pw_b),
+            "VNC password leaked into Pria callback {path}: {blob}"
+        );
+        if blob.contains("desktop.started") || blob.contains("desktop.stopped") {
+            saw_desktop_audit = true;
+        }
+    }
+    assert!(
+        saw_desktop_audit,
+        "expected desktop lifecycle audit callbacks to be emitted"
     );
 }
 

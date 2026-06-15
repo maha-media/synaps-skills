@@ -54,7 +54,12 @@ pub async fn apply(
 
     let mut warnings = Vec::new();
 
-    // Push to fsmon (kernel enforcement, HS-8). fsmon down => warn, not fail.
+    // Push to fsmon (kernel enforcement, HS-8). fsmon is not started at boot
+    // (boot-time whole-mount FAN_*_PERM marking deadlocks the guest), so activate
+    // it on demand here before pushing the policy. fsmon down => warn, not fail.
+    if let Err(e) = state.fsmon.ensure_running().await {
+        warnings.push(format!("fsmon_activation: {e}"));
+    }
     let fsmon_applied = match state.fsmon.apply_policy(&compiled.doc).await {
         Ok(_) => {
             state.runtime.set_fsmon_status(FsmonStatus::Healthy);

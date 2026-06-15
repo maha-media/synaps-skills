@@ -5,10 +5,10 @@
 
 use std::sync::Arc;
 
+use pria_guest_agent::config::Config;
 use pria_guest_agent::hmac::HmacVerifier;
 use pria_guest_agent::pria_client::fake::FakePriaClient;
 use pria_guest_agent::pria_client::{HttpPriaClient, OutboundSigner, PriaCallbackClient};
-use pria_guest_agent::config::Config;
 use pria_guest_agent::synaps::launcher::{tag_agent_end_usage, UsageIdentity};
 use serde_json::json;
 
@@ -96,7 +96,10 @@ async fn agent_end_tagged_forwarded() {
     assert_eq!(p.events[0].model.as_deref(), Some("claude-sonnet-4-test"));
     // Raw-only: serialised payload carries no credits anywhere.
     let v = serde_json::to_value(p).unwrap();
-    assert!(v.to_string().find("credits").is_none(), "raw-only invariant");
+    assert!(
+        v.to_string().find("credits").is_none(),
+        "raw-only invariant"
+    );
 }
 
 /// Non-`agent_end` RPC events are ignored by the meter (relay should skip).
@@ -230,7 +233,10 @@ async fn plugin_usage_proxy_restamps_and_forwards() {
     assert_eq!(p.vm_id, "vm_456");
     assert_eq!(p.replica_id, "replica_0");
     assert_eq!(p.source, "synaps-hook-on-usage");
-    assert_eq!(p.events[0].idempotency_key, "synaps:sess_abc:msg_123:llm.tokens:deadbeefdeadbeef");
+    assert_eq!(
+        p.events[0].idempotency_key,
+        "synaps:sess_abc:msg_123:llm.tokens:deadbeefdeadbeef"
+    );
     assert!(!serde_json::to_string(&*p).unwrap().contains("credits"));
 }
 
@@ -241,11 +247,14 @@ async fn plugin_usage_proxy_rejects_unknown_session() {
     let pria = Arc::new(FakePriaClient::default());
     let env = started_env(pria.clone());
     let resp = build_router(env.state.clone())
-        .oneshot(post("/guest/v1/usage", json!({
-            "session_id": "sess_NOT_STARTED",
-            "events": [{ "idempotency_key": "k", "type": "llm.tokens",
-                         "occurred_at": "t", "usage": {"input_tokens": 1}, "metadata": {} }]
-        })))
+        .oneshot(post(
+            "/guest/v1/usage",
+            json!({
+                "session_id": "sess_NOT_STARTED",
+                "events": [{ "idempotency_key": "k", "type": "llm.tokens",
+                             "occurred_at": "t", "usage": {"input_tokens": 1}, "metadata": {} }]
+            }),
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);

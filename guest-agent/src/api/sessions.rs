@@ -15,6 +15,7 @@ use crate::paths::ensure_under;
 use crate::pria_client::{kinds, AuditEventBuilder};
 use crate::sessions::SessionEntry;
 use crate::synaps::launcher::LaunchSpec;
+use crate::synaps::launcher::{relay_agent_end_usage, UsageIdentity};
 use crate::synaps::session_context::{now_timestamps, write_context, SessionContext};
 
 #[derive(Debug, Deserialize)]
@@ -185,6 +186,24 @@ pub async fn start(
             .with_request_id(rid.clone())
     })?;
     let pid = process.pid();
+
+    // Spawn the usage-relay reader: stream synaps `rpc` stdout and meter every
+    // billable `agent_end` frame into Pria's signed usage callback (spec §5.5,
+    // HS-U6). The guest agent stamps trusted account/vm/user/session identity
+    // that SynapsCLI core cannot know.
+    if let Some(stdout) = process.take_stdout() {
+        let identity = UsageIdentity {
+            account_id: req.account_id.clone(),
+            instance_id: req.instance_id.clone(),
+            user_id: req.user_id.clone(),
+            vm_id: req.vm_id.clone(),
+            replica_id: state.config.replica_id.clone(),
+            session_id: req.session_id.clone(),
+            ephemeral_task_id: None,
+        };
+        let pria = state.pria.clone();
+        tokio::spawn(relay_agent_end_usage(stdout, identity, pria));
+    }
 
     state.sessions.insert(SessionEntry {
         session_id: req.session_id.clone(),

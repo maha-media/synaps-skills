@@ -16,8 +16,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 pub use payloads::{
-    kinds, AuditEventBuilder, CredentialRequestPayload, HeartbeatPayload, SessionEventPayload,
-    UsageEvent, UsagePayload,
+    kinds, AuditEventBuilder, CredentialRequestPayload, HeartbeatPayload, HeartbeatVnc,
+    SessionEventPayload, UsageEvent, UsagePayload, VncSessionEntry,
 };
 pub use signer::OutboundSigner;
 
@@ -200,7 +200,10 @@ impl PriaCallbackClient for HttpPriaClient {
             return Ok(());
         }
         let body = serde_json::to_vec(p).map_err(|e| CallbackError::Network(e.to_string()))?;
-        match self.post_signed(USAGE_PATH, &body, Some(&p.session_id)).await {
+        match self
+            .post_signed(USAGE_PATH, &body, Some(&p.session_id))
+            .await
+        {
             Ok(_) => Ok(()),
             Err(e) => {
                 // Spool and swallow — usage must never crash the hot path. The

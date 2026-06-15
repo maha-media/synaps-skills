@@ -30,6 +30,36 @@ pub struct HeartbeatPayload {
     pub policy_hash: Option<String>,
     pub fsmon_status: String,
     pub timestamp: String,
+    /// Active KasmVNC desktop sessions (spec §8.2 `vnc.sessions[]`).
+    /// Omitted from the payload when no desktop sessions are running.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vnc: Option<HeartbeatVnc>,
+}
+
+/// The `vnc` sub-object in the heartbeat (spec §8.2).
+#[derive(Debug, Clone, Serialize)]
+pub struct HeartbeatVnc {
+    /// One entry per active KasmVNC session.
+    pub sessions: Vec<VncSessionEntry>,
+}
+
+/// A single VNC session entry within the heartbeat (spec §8.2).
+///
+/// `password` is included because the Pria control plane requires it to
+/// authenticate VNC proxy connections via `Basic kasm_user:<password>`.
+/// **SECURITY**: this struct must never appear in log output — the Pria
+/// backend receives it over HMAC-signed TLS and must treat `password` as
+/// a credential (store encrypted, never log).
+#[derive(Debug, Clone, Serialize)]
+pub struct VncSessionEntry {
+    pub session_id: String,
+    pub linux_username: String,
+    pub display: String,
+    pub port: u16,
+    pub basic_user: String,
+    /// VNC transport password — required by Pria VNC proxy (spec §5.1).
+    /// NEVER log this field.
+    pub password: String,
 }
 
 /// Session event payload (spec §7.3) — bridged into Pria's Agent transport.
@@ -179,7 +209,11 @@ pub fn derive_idempotency_key(
 ) -> String {
     format!(
         "synaps:{}:{}:{}:{}",
-        if session_id.is_empty() { "nosession" } else { session_id },
+        if session_id.is_empty() {
+            "nosession"
+        } else {
+            session_id
+        },
         correlator,
         event_type,
         usage_hash(normalised),

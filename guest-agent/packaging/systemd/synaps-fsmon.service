@@ -1,0 +1,10 @@
+[Unit]
+Description=Synaps fsmon
+After=pria-guest-agent.service
+
+[Service]
+ExecStart=/usr/local/sbin/synaps_fsmon --socket /run/pria/fsmon.sock
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

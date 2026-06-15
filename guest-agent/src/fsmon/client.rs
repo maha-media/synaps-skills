@@ -42,18 +42,44 @@ pub trait FsmonControl: Send + Sync {
     async fn apply_policy(&self, doc: &PolicyDoc) -> Result<FsmonStats, FsmonError>;
     async fn ping(&self) -> Result<(), FsmonError>;
     async fn stats(&self) -> Result<FsmonStats, FsmonError>;
+    /// Ensure the fsmon daemon is running and its control socket is reachable.
+    ///
+    /// fsmon is NOT started at boot — marking the whole `/` mount with
+    /// `FAN_OPEN_PERM` before userspace is ready deadlocks the guest. Instead it
+    /// is activated on demand the first time a policy is applied (post-boot the
+    /// monitor runs without deadlocking). Default: assume externally managed.
+    async fn ensure_running(&self) -> Result<(), FsmonError> {
+        Ok(())
+    }
 }
 
 /// UDS-backed control client.
 pub struct UdsFsmonControl {
     socket_path: std::path::PathBuf,
+    /// Path to the `synaps_fsmon` binary for on-demand activation.
+    daemon_bin: std::path::PathBuf,
+    /// Optional audit-forward socket the daemon connects back to.
+    forward_socket: Option<std::path::PathBuf>,
 }
 
 impl UdsFsmonControl {
     pub fn new(socket_path: impl Into<std::path::PathBuf>) -> Self {
         Self {
             socket_path: socket_path.into(),
+            daemon_bin: std::path::PathBuf::from("/usr/local/sbin/synaps_fsmon"),
+            forward_socket: None,
         }
+    }
+
+    /// Configure the on-demand daemon binary + forward socket (production wiring).
+    pub fn with_daemon(
+        mut self,
+        daemon_bin: impl Into<std::path::PathBuf>,
+        forward_socket: Option<std::path::PathBuf>,
+    ) -> Self {
+        self.daemon_bin = daemon_bin.into();
+        self.forward_socket = forward_socket;
+        self
     }
 
     async fn round_trip(&self, req: &ControlRequest) -> Result<FsmonStats, FsmonError> {
@@ -112,6 +138,71 @@ impl FsmonControl for UdsFsmonControl {
 
     async fn stats(&self) -> Result<FsmonStats, FsmonError> {
         self.round_trip(&ControlRequest::Stats).await
+    }
+
+    async fn ensure_running(&self) -> Result<(), FsmonError> {
+        // Already up?
+        if self.ping().await.is_ok() {
+            return Ok(());
+        }
+        // Spawn the daemon over the whole `/` mount with a minimal allow-all
+        // policy (the real policy is hot-pushed via apply_policy right after).
+        // Starting post-boot avoids the boot-time fanotify deadlock.
+        let spool = self
+            .socket_path
+            .parent()
+            .map(|p| p.join("fsmon-spool"))
+            .unwrap_or_else(|| std::path::PathBuf::from("/run/pria/fsmon-spool"));
+        let policy = self
+            .socket_path
+            .parent()
+            .map(|p| p.join("fsmon-bootstrap-policy.json"))
+            .unwrap_or_else(|| std::path::PathBuf::from("/run/pria/fsmon-bootstrap-policy.json"));
+        // Write a minimal allow-all bootstrap policy so the daemon never denies a
+        // boot-critical path before the real policy lands.
+        let _ = std::fs::write(
+            &policy,
+            br#"{"default_decision":"allow","principals":[],"rules":[],"immutable_prefixes":[]}"#,
+        );
+        let mut cmd = tokio::process::Command::new(&self.daemon_bin);
+        cmd.arg("run")
+            .arg("--mount")
+            .arg("/")
+            .arg("--control")
+            .arg(&self.socket_path)
+            .arg("--spool")
+            .arg(&spool)
+            .arg("--policy")
+            .arg(&policy);
+        if let Some(fwd) = &self.forward_socket {
+            cmd.arg("--forward").arg(fwd);
+        }
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // Detach: the daemon must outlive this request handler.
+        #[cfg(unix)]
+        {
+            unsafe {
+                cmd.pre_exec(|| {
+                    // New session so it isn't reaped with the request task.
+                    libc::setsid();
+                    Ok(())
+                });
+            }
+        }
+        cmd.spawn()
+            .map_err(|e| FsmonError::Unavailable(format!("failed to spawn synaps_fsmon: {e}")))?;
+        // Wait for the control socket to come up (poll ping up to ~8s).
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            if self.ping().await.is_ok() {
+                return Ok(());
+            }
+        }
+        Err(FsmonError::Unavailable(
+            "synaps_fsmon did not become ready within timeout".into(),
+        ))
     }
 }
 

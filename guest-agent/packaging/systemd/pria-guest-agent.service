@@ -1,0 +1,14 @@
+[Unit]
+Description=Pria guest agent
+After=network-online.target cloud-final.service
+Wants=network-online.target
+ConditionPathExists=/etc/pria/guest-agent.yaml
+ConditionPathExists=/etc/pria/guest-agent.hmac
+
+[Service]
+ExecStart=/usr/local/sbin/pria-guest-agent --config /etc/pria/guest-agent.yaml
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
