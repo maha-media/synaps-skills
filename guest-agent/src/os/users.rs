@@ -194,6 +194,40 @@ impl OsUserManager for LinuxUserManager {
         let (_ok, _out) = Self::run("pkill", &["-TERM", "-U", &uid.to_string()]).await?;
         Ok(0)
     }
+
+    async fn ensure_group_membership(
+        &self,
+        username: &str,
+        gid: u32,
+        group_name: &str,
+    ) -> Result<(), OsError> {
+        // Create the per-instance group at its deterministic gid (idempotent,
+        // fail-closed on gid/name collisions), then add the user. `usermod -aG`
+        // is additive and idempotent — re-adding an existing member succeeds.
+        self.ensure_group(gid, group_name).await?;
+        let (ok, out) = Self::run("usermod", &["-aG", group_name, username]).await?;
+        if !ok {
+            return Err(OsError(format!("usermod -aG {group_name} failed: {out}")));
+        }
+        Ok(())
+    }
+
+    async fn resolve_group_gids(&self, username: &str) -> Result<Vec<u32>, OsError> {
+        // `id -G <user>` prints the numeric primary + supplementary gids,
+        // space-separated. Reflects /etc/group immediately after usermod -aG.
+        let (ok, out) = Self::run("id", &["-G", username]).await?;
+        if !ok {
+            return Err(OsError(format!("id -G {username} failed: {out}")));
+        }
+        let gids: Vec<u32> = out
+            .split_whitespace()
+            .filter_map(|tok| tok.parse::<u32>().ok())
+            .collect();
+        if gids.is_empty() {
+            return Err(OsError(format!("id -G {username} returned no gids")));
+        }
+        Ok(gids)
+    }
 }
 
 #[cfg(test)]

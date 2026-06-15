@@ -31,6 +31,12 @@ pub struct LaunchSpec {
     pub args: Vec<String>,
     pub uid: u32,
     pub gid: u32,
+    /// Full supplementary group list (primary + per-instance `inst_<id>`
+    /// groups) for an initgroups-style privilege drop. When non-empty the
+    /// child runs with EXACTLY these groups — gaining its authorized instance
+    /// groups and dropping the agent's (root's) supplementary groups. Empty
+    /// keeps the historical behavior (no setgroups).
+    pub groups: Vec<u32>,
     pub cwd: Option<PathBuf>,
     pub env: HashMap<String, String>,
     pub context_path: PathBuf,
@@ -380,12 +386,44 @@ mod real {
     pub fn spawn(spec: &LaunchSpec) -> Result<std::sync::Arc<dyn SessionProcess>, LaunchError> {
         let mut cmd = Command::new(&spec.binary);
         cmd.args(&spec.args)
-            .uid(spec.uid)
-            .gid(spec.gid)
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // Manual, ordered privilege drop via `pre_exec` (initgroups-style).
+        // We deliberately do NOT use tokio's `.uid()/.gid()` (nor std's unstable
+        // `.groups()`): the drop MUST be setgroups → setgid → setuid, all while
+        // still privileged. Setting the supplementary group list to EXACTLY the
+        // user's groups both (a) grants the user's `inst_<id>` instance groups
+        // (per-instance tenant isolation) and (b) DROPS root's supplementary
+        // groups the agent would otherwise leak into the session (spec §16.3).
+        // `ProcessLauncher::launch` already refused uid/gid 0 before this point.
+        {
+            use std::os::unix::process::CommandExt as StdCommandExt;
+            let uid = spec.uid as libc::uid_t;
+            let gid = spec.gid as libc::gid_t;
+            let groups: Vec<libc::gid_t> =
+                spec.groups.iter().map(|g| *g as libc::gid_t).collect();
+            // SAFETY: pre_exec runs in the forked child before exec. We only call
+            // async-signal-safe syscalls (setgroups/setgid/setuid) over an owned,
+            // pre-allocated gid slice — no allocation, no locks.
+            unsafe {
+                cmd.as_std_mut().pre_exec(move || {
+                    if !groups.is_empty()
+                        && libc::setgroups(groups.len() as _, groups.as_ptr()) != 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::setgid(gid) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::setuid(uid) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
         // Forward the minimal safe env + the (best-effort) session-context env.
         for var in ["PATH", "LANG", "TERM"] {
             if let Ok(v) = std::env::var(var) {
@@ -788,6 +826,7 @@ mod tests {
             args: vec![],
             uid: 0,
             gid: 0,
+            groups: vec![],
             cwd: None,
             env: HashMap::new(),
             context_path: "/tmp/ctx.json".into(),

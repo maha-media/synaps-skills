@@ -9,7 +9,7 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use pria_guest_agent::api::build_router;
-use pria_guest_agent::os::{FakeUserManager, UserRecord};
+use pria_guest_agent::os::{FakeUserManager, OsUserManager, UserRecord};
 use pria_guest_agent::pria_client::fake::FakePriaClient;
 use pria_guest_agent::synaps::launcher::FakeLauncher;
 use pria_guest_agent::test_support::{test_env, TestEnv};
@@ -100,6 +100,17 @@ async fn start_writes_context_launches_nonroot_and_audits() {
     assert_eq!(launches[0].uid, 104251);
     assert_eq!(launches[0].gid, 104251);
     assert_ne!(launches[0].uid, 0);
+    // Privilege drop carries the user's resolved group list (here just the
+    // primary gid) so the child runs setgroups → it never inherits root's
+    // supplementary groups (spec §16.3).
+    assert!(
+        launches[0].groups.contains(&104251),
+        "launch must carry the user's primary gid for setgroups"
+    );
+    assert!(
+        !launches[0].groups.contains(&0),
+        "launch group list must never contain root's gid 0"
+    );
 
     assert!(pria
         .audits
@@ -108,6 +119,39 @@ async fn start_writes_context_launches_nonroot_and_audits() {
         .iter()
         .any(|a| a["kind"] == "session.started"));
     assert_eq!(state.runtime.active_sessions(), 1);
+}
+
+#[tokio::test]
+async fn start_passes_instance_group_to_setgroups() {
+    // A user who has joined an instance group must have that gid in the launch
+    // group list — this is the link that makes per-instance dir access work
+    // (the child runs with the `inst_<id>` group via setgroups).
+    let pria = Arc::new(FakePriaClient::default());
+    let launcher = Arc::new(FakeLauncher::default());
+    let os = Arc::new(FakeUserManager::default().with_user(UserRecord {
+        username: "pria_u_104251".into(),
+        uid: 104251,
+        gid: 104251,
+        active: true,
+    }));
+    os.ensure_group_membership("pria_u_104251", 60001, "inst_x")
+        .await
+        .unwrap();
+    let env = test_env(pria.clone(), os.clone(), launcher.clone());
+    let body = start_body(&env);
+
+    let resp = build_router(env.state.clone())
+        .oneshot(post("/guest/v1/sessions/start", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let launches = launcher.launches.lock().unwrap();
+    assert!(
+        launches[0].groups.contains(&104251) && launches[0].groups.contains(&60001),
+        "launch groups must include the primary gid AND the joined instance gid, got {:?}",
+        launches[0].groups
+    );
 }
 
 #[tokio::test]

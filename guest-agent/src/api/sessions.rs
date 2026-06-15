@@ -136,6 +136,31 @@ pub async fn start(
         ));
     }
 
+    // Per-instance tenant isolation (Track G): ensure the session's working
+    // directory exists, is owned by the launching user, and is private to the
+    // instance group. The parent `instances/<id>` dir carries the setgid bit +
+    // the `inst_<id>` group (set at reconcile), so the freshly created subtree
+    // inherits that group; we then take ownership for the user and lock mode to
+    // 2770 (no "other" access). A user not in `inst_<id>` cannot traverse here.
+    if let Err(e) = prepare_workspace_dir(&req.workspace_dir, req.uid) {
+        return Err(err(
+            ErrorCode::InternalError,
+            &format!("failed to prepare workspace dir: {e}"),
+        ));
+    }
+
+    // Resolve the launching user's full group list for an initgroups-style
+    // privilege drop. The synaps child must run with EXACTLY these groups so it
+    // (a) gains its authorized `inst_<id>` instance groups and (b) drops the
+    // agent's root supplementary groups (spec §16.3). Fail-closed: a session
+    // that can't resolve groups would either leak root groups or lose instance
+    // access, so refuse rather than launch with the wrong group set.
+    let groups = state
+        .os
+        .resolve_group_gids(&req.linux_username)
+        .await
+        .map_err(|e| err(ErrorCode::InternalError, &format!("resolve groups: {e}")))?;
+
     // Write the session-context file (spec §6.4 step 3 / §8 / HS-2).
     let (issued, expires, created) = now_timestamps(60);
     let transport = match &req.transport {
@@ -176,6 +201,7 @@ pub async fn start(
         args: vec!["rpc".to_string()],
         uid: req.uid,
         gid: req.gid,
+        groups,
         cwd: Some(req.workspace_dir.clone()),
         env: req.environment.clone(),
         context_path: written.path.clone(),
@@ -372,4 +398,34 @@ pub async fn status(
 /// path (re-exported for tests).
 pub fn is_abs(p: &Path) -> bool {
     p.is_absolute()
+}
+
+/// Create the session working directory and make it private to the launching
+/// user + the instance group it inherits (per-instance tenant isolation).
+///
+///   * `create_dir_all` materializes the per-instance subtree
+///     (`instances/<id>/work/<user>`); intermediate dirs inherit the
+///     `inst_<id>` group from the setgid parent created at reconcile.
+///   * `chown(uid, -1)` gives the user ownership while KEEPING the inherited
+///     instance group (gid `-1` = unchanged) so group collaboration still works.
+///   * mode `2770` = owner+group rwx, NO "other" access, setgid preserved so
+///     new files keep the instance group. A user outside `inst_<id>` is denied.
+fn prepare_workspace_dir(dir: &Path, uid: u32) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(dir).map_err(|e| format!("create_dir_all: {e}"))?;
+    // 0o2770 — setgid + rwxrwx--- (owner + instance group only). This is what
+    // actually enforces isolation: the dir's group is the inherited `inst_<id>`
+    // group, group members get rwx, and there is NO "other" access.
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o2770))
+        .map_err(|e| format!("set_permissions: {e}"))?;
+    // chown owner → uid (group unchanged: -1, keep the inherited instance gid).
+    // Best-effort: a member of the instance group already has rwx via the group
+    // bits above, so ownership is a convenience (cleaner `ls`, owner-delete),
+    // not the access mechanism. Requires root (prod always is); skipped silently
+    // where unprivileged so the access path still works.
+    let c_path = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes())
+        .map_err(|e| format!("path nul: {e}"))?;
+    // SAFETY: valid NUL-terminated path; gid u32::MAX == (gid_t)-1 = unchanged.
+    let _ = unsafe { libc::chown(c_path.as_ptr(), uid, u32::MAX) };
+    Ok(())
 }

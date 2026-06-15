@@ -12,6 +12,16 @@ use crate::paths::has_no_traversal;
 use crate::pria_client::{kinds, AuditEventBuilder};
 
 #[derive(Debug, Deserialize)]
+pub struct InstanceGroup {
+    /// Instance ObjectId (the EFS subdirectory name under `instances/`).
+    pub id: String,
+    /// Deterministic Linux group name (`inst_<slug>`).
+    pub name: String,
+    /// Deterministic gid (instance band, 60000–64999).
+    pub gid: u32,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct DesiredPrincipal {
     pub user_id: String,
     pub linux_username: String,
@@ -27,6 +37,12 @@ pub struct DesiredPrincipal {
     pub group_name: Option<String>,
     #[serde(default)]
     pub instance_ids: Vec<String>,
+    /// Per-instance groups the user is authorized for. The guest ensures each
+    /// group exists, adds the user to it, and materializes a private EFS
+    /// workspace directory for the instance (`instances/<id>`, 2770/setgid,
+    /// owned root:`gid`). This is the per-instance tenant isolation boundary.
+    #[serde(default)]
+    pub instance_groups: Vec<InstanceGroup>,
 }
 
 fn default_state() -> String {
@@ -102,6 +118,31 @@ pub async fn reconcile(
         };
         match state.os.ensure_user(&spec).await {
             Ok(action) => {
+                // Per-instance tenant isolation: only materialize instance
+                // groups + private dirs for an ACTIVE principal (a disabled one
+                // gets no new grants). Fail-closed — if we cannot create the
+                // isolation boundary the principal reconcile fails so the
+                // session never launches into a shared/world dir.
+                let mut iso_err: Option<String> = None;
+                if desired_state == PrincipalState::Active {
+                    if let Err(e) =
+                        apply_instance_isolation(&state, &d.linux_username, &d.instance_groups).await
+                    {
+                        iso_err = Some(e);
+                    }
+                }
+                if let Some(e) = iso_err {
+                    results.push(ReconcileResult {
+                        user_id: d.user_id.clone(),
+                        linux_username: d.linux_username.clone(),
+                        uid: d.uid,
+                        state: d.state.clone(),
+                        action: "failed".to_string(),
+                        ok: false,
+                        error: Some(e),
+                    });
+                    continue;
+                }
                 emit_principal_audit(&state, &req.account_id, d, action).await;
                 results.push(ReconcileResult {
                     user_id: d.user_id.clone(),
@@ -131,6 +172,66 @@ pub async fn reconcile(
         request_id: req.request_id,
         results,
     }))
+}
+
+/// Materialize per-instance tenant isolation for `username`: for each
+/// authorized instance group, (1) ensure the group exists + the user is a
+/// member, and (2) create the instance's private EFS directory
+/// (`<efs_root>/instances/<id>`) owned `root:<gid>`, mode `2770` + setgid.
+///
+/// Fail-closed: any error aborts (returns `Err`) so the principal reconcile
+/// fails and the session does not launch — never silently degrade to a
+/// world-readable or shared workspace. Idempotent across reruns.
+async fn apply_instance_isolation(
+    state: &AppState,
+    username: &str,
+    groups: &[InstanceGroup],
+) -> Result<(), String> {
+    let efs_root = state.config.paths.efs_root.as_path();
+    for g in groups {
+        // Validate the instance id is a safe single path component (it becomes
+        // a directory name under efs_root/instances).
+        if g.id.is_empty()
+            || g.id.contains('/')
+            || g.id.contains('\\')
+            || g.id == "."
+            || g.id == ".."
+        {
+            return Err(format!("invalid instance id '{}'", g.id));
+        }
+        state
+            .os
+            .ensure_group_membership(username, g.gid, &g.name)
+            .await
+            .map_err(|e| format!("group membership {}: {e}", g.name))?;
+        ensure_instance_dir(efs_root, &g.id, g.gid)
+            .map_err(|e| format!("instance dir {}: {e}", g.id))?;
+    }
+    Ok(())
+}
+
+/// Create (idempotently) `<efs_root>/instances/<instance_id>` as the instance's
+/// private shared root: owned `root:<gid>`, mode `2770` with the setgid bit so
+/// every file/dir created beneath it inherits the `inst_<id>` group. Members of
+/// that group collaborate; non-members get no access (no "other" bits).
+fn ensure_instance_dir(efs_root: &std::path::Path, instance_id: &str, gid: u32) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = efs_root.join("instances").join(instance_id);
+    // Defense in depth: the resolved path must stay under efs_root.
+    if !crate::paths::is_under(efs_root, &dir) {
+        return Err("path escapes efs_root".to_string());
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create_dir_all: {e}"))?;
+    let c_path = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes())
+        .map_err(|e| format!("path nul: {e}"))?;
+    // SAFETY: valid NUL-terminated path; owner root (0), group → instance gid.
+    let rc = unsafe { libc::chown(c_path.as_ptr(), 0, gid) };
+    if rc != 0 {
+        return Err(format!("chown: {}", std::io::Error::last_os_error()));
+    }
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o2770))
+        .map_err(|e| format!("set_permissions: {e}"))?;
+    Ok(())
 }
 
 async fn emit_principal_audit(

@@ -99,6 +99,26 @@ pub trait OsUserManager: Send + Sync {
 
     /// Kill processes owned by `uid`. Returns the number signalled.
     async fn kill_user_processes(&self, uid: u32) -> Result<u32, OsError>;
+
+    /// Idempotently ensure the group `group_name` exists at `gid` and that
+    /// `username` is a member of it. Used for per-instance tenant isolation:
+    /// each authorized Instance is a Linux group (`inst_<id>`) the user joins,
+    /// gating access to that instance's private EFS workspace. Additive — a
+    /// user accumulates memberships across the instances they're authorized on;
+    /// revocation is the disable path's concern.
+    async fn ensure_group_membership(
+        &self,
+        username: &str,
+        gid: u32,
+        group_name: &str,
+    ) -> Result<(), OsError>;
+
+    /// Resolve the full numeric group list (primary + supplementary) for a
+    /// user. Used for an initgroups-style privilege drop when launching a
+    /// session: the synaps child must run with exactly the user's groups (so it
+    /// gains `inst_<id>` access and DROPS root's supplementary groups), not
+    /// inherit the agent's root group set.
+    async fn resolve_group_gids(&self, username: &str) -> Result<Vec<u32>, OsError>;
 }
 
 /// Deterministic UID derivation (spec §6.2 "deterministic UID/GID consistency
@@ -130,6 +150,8 @@ mod fake {
     #[derive(Default)]
     pub struct FakeUserManager {
         users: Mutex<HashMap<String, UserRecord>>,
+        /// username → set of (gid, group_name) supplementary memberships.
+        memberships: Mutex<HashMap<String, Vec<(u32, String)>>>,
         pub killed: Mutex<Vec<u32>>,
     }
 
@@ -137,6 +159,16 @@ mod fake {
         pub fn with_user(self, rec: UserRecord) -> Self {
             self.users.lock().unwrap().insert(rec.username.clone(), rec);
             self
+        }
+
+        /// Test introspection: the supplementary groups a user has joined.
+        pub fn memberships_of(&self, username: &str) -> Vec<(u32, String)> {
+            self.memberships
+                .lock()
+                .unwrap()
+                .get(username)
+                .cloned()
+                .unwrap_or_default()
         }
     }
 
@@ -207,6 +239,38 @@ mod fake {
             self.killed.lock().unwrap().push(uid);
             Ok(0)
         }
+
+        async fn ensure_group_membership(
+            &self,
+            username: &str,
+            gid: u32,
+            group_name: &str,
+        ) -> Result<(), OsError> {
+            // The user must exist to join a group (fail-closed, mirrors usermod).
+            if !self.users.lock().unwrap().contains_key(username) {
+                return Err(OsError(format!("no such user {username}")));
+            }
+            let mut m = self.memberships.lock().unwrap();
+            let entry = m.entry(username.to_string()).or_default();
+            if !entry.iter().any(|(g, _)| *g == gid) {
+                entry.push((gid, group_name.to_string()));
+            }
+            Ok(())
+        }
+
+        async fn resolve_group_gids(&self, username: &str) -> Result<Vec<u32>, OsError> {
+            let users = self.users.lock().unwrap();
+            let rec = users
+                .get(username)
+                .ok_or_else(|| OsError(format!("no such user {username}")))?;
+            let mut gids = vec![rec.gid];
+            for (g, _) in self.memberships_of(username) {
+                if !gids.contains(&g) {
+                    gids.push(g);
+                }
+            }
+            Ok(gids)
+        }
     }
 }
 
@@ -265,5 +329,51 @@ mod tests {
             group_name: None,
         };
         assert!(mgr.ensure_user(&spec).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn fake_group_membership_is_additive_and_idempotent() {
+        let mgr = FakeUserManager::default().with_user(UserRecord {
+            username: "u".into(),
+            uid: 28146,
+            gid: 14952,
+            active: true,
+        });
+        // Join two instance groups; re-joining one is a no-op.
+        mgr.ensure_group_membership("u", 60001, "inst_a").await.unwrap();
+        mgr.ensure_group_membership("u", 60002, "inst_b").await.unwrap();
+        mgr.ensure_group_membership("u", 60001, "inst_a").await.unwrap();
+        let m = mgr.memberships_of("u");
+        assert_eq!(m.len(), 2, "duplicate membership must not double-add");
+        assert!(m.iter().any(|(g, n)| *g == 60001 && n == "inst_a"));
+        assert!(m.iter().any(|(g, n)| *g == 60002 && n == "inst_b"));
+    }
+
+    #[tokio::test]
+    async fn fake_group_membership_fails_for_unknown_user() {
+        let mgr = FakeUserManager::default();
+        assert!(mgr
+            .ensure_group_membership("ghost", 60001, "inst_a")
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn fake_resolve_group_gids_includes_primary_and_memberships() {
+        let mgr = FakeUserManager::default().with_user(UserRecord {
+            username: "u".into(),
+            uid: 28146,
+            gid: 14952,
+            active: true,
+        });
+        mgr.ensure_group_membership("u", 60001, "inst_a").await.unwrap();
+        mgr.ensure_group_membership("u", 60002, "inst_b").await.unwrap();
+        let gids = mgr.resolve_group_gids("u").await.unwrap();
+        // Primary gid first, then the joined instance gids — the exact set the
+        // launcher hands to setgroups (drops root's groups).
+        assert_eq!(gids[0], 14952, "primary gid must lead the group list");
+        assert!(gids.contains(&60001));
+        assert!(gids.contains(&60002));
+        assert!(!gids.contains(&0), "must never include root's gid 0");
     }
 }
