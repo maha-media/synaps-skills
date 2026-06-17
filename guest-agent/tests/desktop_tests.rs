@@ -453,6 +453,98 @@ async fn stop_desktop_with_instance_id_stops_only_that_institution() {
 }
 
 #[tokio::test]
+async fn start_desktop_three_instances_same_user_distinct_and_reopen_is_stable() {
+    // Staging regression: one Linux user opening THREE institution desktops must
+    // get THREE independent desktops (distinct port/display/session_id), all
+    // listed with their own instance_id. Reopening one instance with its existing
+    // session_id is idempotent (same port/display — the control-plane reuse path),
+    // and stopping the middle one leaves the other two live.
+    let (env, _ctl) = desktop_test_env();
+    let app = build_router(env.state);
+
+    let mut ports = std::collections::HashSet::new();
+    let mut displays = std::collections::HashSet::new();
+    let mut by_inst = std::collections::HashMap::new();
+    for (sid, inst, pw) in [
+        ("s_i1", "inst1", "pw1"),
+        ("s_i2", "inst2", "pw2"),
+        ("s_i3", "inst3", "pw3"),
+    ] {
+        let r = app
+            .clone()
+            .oneshot(post(
+                "/guest/v1/desktops/start",
+                json!({
+                    "session_id": sid, "linux_username": "pria_u_a",
+                    "vnc_password": pw, "instance_id": inst
+                }),
+            ))
+            .await
+            .unwrap();
+        let b = body_json(r.into_body()).await;
+        assert_eq!(b["instance_id"], inst);
+        assert_eq!(b["session_id"], sid);
+        ports.insert(b["port"].as_u64().unwrap());
+        displays.insert(b["display"].as_str().unwrap().to_string());
+        by_inst.insert(inst, (b["port"].as_u64().unwrap(), b["display"].as_str().unwrap().to_string()));
+    }
+    assert_eq!(ports.len(), 3, "three institutions → three distinct ports");
+    assert_eq!(displays.len(), 3, "three institutions → three distinct displays");
+
+    // GET /desktops lists all three with distinct instance_id + distinct ports.
+    let resp = app.clone().oneshot(get("/guest/v1/desktops")).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    let sessions = body["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 3);
+    let listed_instances: std::collections::HashSet<&str> =
+        sessions.iter().map(|s| s["instance_id"].as_str().unwrap()).collect();
+    for inst in ["inst1", "inst2", "inst3"] {
+        assert!(listed_instances.contains(inst), "{inst} must be listed");
+    }
+
+    // Reopen inst2 with ITS existing session id (control-plane reuse): same key →
+    // same port/display, no new desktop spawned.
+    let reopen = app
+        .clone()
+        .oneshot(post(
+            "/guest/v1/desktops/start",
+            json!({
+                "session_id": "s_i2", "linux_username": "pria_u_a",
+                "vnc_password": "pw2b", "instance_id": "inst2"
+            }),
+        ))
+        .await
+        .unwrap();
+    let rb = body_json(reopen.into_body()).await;
+    assert_eq!(rb["instance_id"], "inst2");
+    assert_eq!(rb["port"].as_u64().unwrap(), by_inst["inst2"].0, "reopen keeps inst2's port");
+    assert_eq!(rb["display"].as_str().unwrap(), by_inst["inst2"].1, "reopen keeps inst2's display");
+    let resp = app.clone().oneshot(get("/guest/v1/desktops")).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["sessions"].as_array().unwrap().len(), 3, "reopen did not spawn a 4th desktop");
+
+    // Stop only the middle institution; the other two remain live.
+    app.clone()
+        .oneshot(post(
+            "/guest/v1/desktops/pria_u_a/stop",
+            json!({ "reason": "done", "instance_id": "inst2" }),
+        ))
+        .await
+        .unwrap();
+    let resp = app.oneshot(get("/guest/v1/desktops")).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    let remaining: std::collections::HashSet<&str> = body["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["instance_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(remaining.len(), 2);
+    assert!(remaining.contains("inst1") && remaining.contains("inst3"));
+    assert!(!remaining.contains("inst2"), "only inst2 was stopped");
+}
+
+#[tokio::test]
 async fn start_desktop_accepts_camelcase_instance_id_alias() {
     // During the control-plane transition the client may send camelCase.
     let (env, _ctl) = desktop_test_env();
