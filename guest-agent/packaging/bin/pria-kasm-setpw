@@ -13,12 +13,26 @@
 #     invoked outside systemd.
 #   * The generated passwd file is written under the user's home with mode 0600.
 #
-# Usage: pria-kasm-setpw <linux_username>
+# Usage: pria-kasm-setpw <linux_username> [context_key]
+#
+# When [context_key] is supplied (instance-aware desktop, spec §6.5) the password
+# is written to a CONTEXT-SPECIFIC file (`~/.vnc/pria-<context_key>.passwd`) and
+# the env file read is `/run/pria/kasmvnc/<context_key>.env`, so two concurrent
+# desktops for the SAME Linux user never clobber each other's transport
+# credential. With no context_key the legacy single-desktop behaviour is used
+# (`~/.kasmpasswd`, `/run/pria/kasmvnc/<user>.env`).
 set -euo pipefail
 
-LINUX_USER="${1:?usage: pria-kasm-setpw <linux_username>}"
+LINUX_USER="${1:?usage: pria-kasm-setpw <linux_username> [context_key]}"
+CONTEXT_KEY="${2:-}"
 RUN_ROOT="${PRIA_RUN_ROOT:-/run/pria}"
-ENV_FILE="${RUN_ROOT}/kasmvnc/${LINUX_USER}.env"
+# The env file is keyed by context when one is supplied (matches the guest-agent
+# DesktopStore which writes /run/pria/kasmvnc/<context_key>.env), else by user.
+if [ -n "${CONTEXT_KEY}" ]; then
+  ENV_FILE="${RUN_ROOT}/kasmvnc/${CONTEXT_KEY}.env"
+else
+  ENV_FILE="${RUN_ROOT}/kasmvnc/${LINUX_USER}.env"
+fi
 KASM_BASIC_USER="${KASM_BASIC_USER:-kasm_user}"
 
 # Resolve the password without ever exposing it on argv or in logs.
@@ -43,24 +57,45 @@ if [ -z "${HOME_DIR}" ]; then
   HOME_DIR="${HOME:-/home/${LINUX_USER}}"
 fi
 PASSWD_FILE="${HOME_DIR}/.kasmpasswd"
+# Context-aware (instance-isolated) password file so a second desktop for the
+# SAME Linux user does not overwrite the first desktop's credential (spec §6.5).
+if [ -n "${CONTEXT_KEY}" ]; then
+  install -d -m 0700 "${HOME_DIR}/.vnc" 2>/dev/null || mkdir -p "${HOME_DIR}/.vnc"
+  PASSWD_FILE="${HOME_DIR}/.vnc/pria-${CONTEXT_KEY}.passwd"
+fi
 
 umask 077
 
 # Feed the password to kasmvncpasswd over stdin (NEVER as an argument).
 # `-u <user> -w -r` sets the read/write transport user; the tool prompts for
 # the password on stdin, so we pipe it twice (entry + confirmation).
-if command -v kasmvncpasswd >/dev/null 2>&1; then
-  printf '%s\n%s\n' "${pw}" "${pw}" | kasmvncpasswd -u "${KASM_BASIC_USER}" -w -r "${PASSWD_FILE}" >/dev/null 2>&1
-else
-  # Fallback: legacy `vncpasswd -f` reads the password on stdin and writes the
-  # obfuscated blob to stdout. Still no password on argv.
-  printf '%s\n%s\n' "${pw}" "${pw}" | vncpasswd -f > "${PASSWD_FILE}"
+write_passwd() {
+  _target="$1"
+  if command -v kasmvncpasswd >/dev/null 2>&1; then
+    printf '%s\n%s\n' "${pw}" "${pw}" | kasmvncpasswd -u "${KASM_BASIC_USER}" -w -r "${_target}" >/dev/null 2>&1
+  else
+    # Fallback: legacy `vncpasswd -f` reads the password on stdin and writes the
+    # obfuscated blob to stdout. Still no password on argv.
+    printf '%s\n%s\n' "${pw}" "${pw}" | vncpasswd -f > "${_target}"
+  fi
+  chmod 0600 "${_target}"
+  if [ "$(id -u)" = "0" ]; then
+    chown "${LINUX_USER}" "${_target}" 2>/dev/null || true
+  fi
+}
+
+write_passwd "${PASSWD_FILE}"
+# For instance-aware contexts also refresh the default ~/.kasmpasswd so the
+# desktop has a working credential on KasmVNC builds that have not been wired to
+# the per-context password file yet (true per-context isolation is validated at
+# AMI bake — see the EC2 substrate runbook). Harmless for the legacy path where
+# PASSWD_FILE already IS ~/.kasmpasswd.
+if [ -n "${CONTEXT_KEY}" ]; then
+  write_passwd "${HOME_DIR}/.kasmpasswd"
 fi
 
-chmod 0600 "${PASSWD_FILE}"
 # Best-effort ownership fixup when running as root.
 if [ "$(id -u)" = "0" ]; then
-  chown "${LINUX_USER}" "${PASSWD_FILE}" 2>/dev/null || true
   # KasmVNC defaults to the system snakeoil TLS key. Debian keeps it readable
   # only by group ssl-cert, while desktops run as unprivileged per-user accounts.
   # Add the user to ssl-cert so Xvnc can read the key instead of failing before

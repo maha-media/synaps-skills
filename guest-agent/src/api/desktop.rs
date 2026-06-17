@@ -41,6 +41,21 @@ pub struct StartDesktopRequest {
     /// Optional geometry override (default `1280x800`).
     #[serde(default)]
     pub geometry: Option<String>,
+    /// Institution/digital-twin context (spec §6.1). Desktop identity is
+    /// `(account_id, linux_username, instance_id)`: with an `instance_id` the
+    /// same Linux user gets an INDEPENDENT desktop per institution. Optional for
+    /// backward compatibility (a legacy control plane omits it). `camelCase`
+    /// aliases accepted during the control-plane transition.
+    #[serde(default, alias = "instanceId")]
+    pub instance_id: Option<String>,
+    #[serde(default, alias = "accountId")]
+    pub account_id: Option<String>,
+    #[serde(default, alias = "vmId")]
+    pub vm_id: Option<String>,
+    #[serde(default, alias = "workspaceDir")]
+    pub workspace_dir: Option<String>,
+    #[serde(default, alias = "sessionDir")]
+    pub session_dir: Option<String>,
     #[serde(default)]
     pub request_id: Option<String>,
 }
@@ -58,6 +73,10 @@ pub struct StartDesktopResponse {
     pub password: String,
     pub started_at: String,
     pub status: &'static str,
+    /// Echo the institution/digital-twin context so the control plane can bind
+    /// the workspace runtime to the desktop it actually started (spec §6.1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
 }
 
 pub async fn start_desktop(
@@ -89,6 +108,14 @@ pub async fn start_desktop(
         ));
     }
 
+    let context = crate::desktop::kasmvnc::DesktopContext {
+        instance_id: req.instance_id.clone(),
+        account_id: req.account_id.clone(),
+        vm_id: req.vm_id.clone(),
+        workspace_dir: req.workspace_dir.clone(),
+        session_dir: req.session_dir.clone(),
+    };
+
     let ds = state
         .desktops
         .start(
@@ -96,6 +123,7 @@ pub async fn start_desktop(
             req.linux_username.clone(),
             req.vnc_password.clone(),
             req.geometry.clone(),
+            context,
         )
         .await
         .map_err(|e| {
@@ -109,6 +137,7 @@ pub async fn start_desktop(
         .str_field("vm_id", state.config.vm_id.to_string())
         .str_field("session_id", ds.session_id.clone())
         .str_field("linux_username", ds.linux_username.clone())
+        .str_field("instance_id", ds.instance_id.clone().unwrap_or_default())
         .str_field("display", ds.display.clone())
         .str_field("port", ds.port.to_string())
         .build();
@@ -124,6 +153,7 @@ pub async fn start_desktop(
         password: ds.vnc_password,
         started_at: ds.started_at,
         status: "running",
+        instance_id: ds.instance_id,
     }))
 }
 
@@ -133,6 +163,10 @@ pub async fn start_desktop(
 pub struct StopDesktopRequest {
     #[serde(default)]
     pub reason: Option<String>,
+    /// Stop only THIS institution's desktop for the user (spec §6.3). When
+    /// absent, the legacy single-desktop key (linux_username) is stopped.
+    #[serde(default, alias = "instanceId")]
+    pub instance_id: Option<String>,
     #[serde(default)]
     pub request_id: Option<String>,
 }
@@ -151,14 +185,19 @@ pub async fn stop_desktop(
 ) -> Result<Json<StopDesktopResponse>, GuestAgentError> {
     let rid = req.request_id.clone();
 
-    state.desktops.stop(&linux_username).await.map_err(|e| {
-        GuestAgentError::new(ErrorCode::InternalError, e).with_request_id(rid.clone())
-    })?;
+    state
+        .desktops
+        .stop(&linux_username, req.instance_id.as_deref())
+        .await
+        .map_err(|e| {
+            GuestAgentError::new(ErrorCode::InternalError, e).with_request_id(rid.clone())
+        })?;
 
     let ev = crate::pria_client::AuditEventBuilder::new("desktop.stopped")
         .str_field("account_id", state.config.account_id.to_string())
         .str_field("vm_id", state.config.vm_id.to_string())
         .str_field("linux_username", linux_username.clone())
+        .str_field("instance_id", req.instance_id.clone().unwrap_or_default())
         .opt_str("reason", req.reason.clone())
         .build();
     let _ = state.pria.audit(vec![ev]).await;

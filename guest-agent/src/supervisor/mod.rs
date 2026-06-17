@@ -133,11 +133,23 @@ mod tests {
             Arc::new(FakeSystemctl::default()),
         ));
         store
-            .start("sess_1".into(), "pria_u_a".into(), "pw_a".into(), None)
+            .start(
+                "sess_1".into(),
+                "pria_u_a".into(),
+                "pw_a".into(),
+                None,
+                Default::default(),
+            )
             .await
             .unwrap();
         store
-            .start("sess_2".into(), "pria_u_b".into(), "pw_b".into(), None)
+            .start(
+                "sess_2".into(),
+                "pria_u_b".into(),
+                "pw_b".into(),
+                None,
+                Default::default(),
+            )
             .await
             .unwrap();
         state.desktops = store;

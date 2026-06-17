@@ -74,6 +74,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .with_password_applier(Arc::new(
             pria_guest_agent::desktop::kasmvnc::SetpwApplier::default(),
+        ))
+        .with_unit_generator(Arc::new(
+            pria_guest_agent::desktop::kasmvnc::FileUnitGenerator::default(),
         )),
     );
     let state = AppState {

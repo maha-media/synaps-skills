@@ -365,3 +365,109 @@ async fn list_desktops_after_stop_removes_session() {
         "session must be removed after stop"
     );
 }
+
+// ── instance-aware desktop identity (spec §4.2, §6.1, §6.3) ───────────────────
+
+#[tokio::test]
+async fn start_desktop_two_instances_same_user_coexist_with_distinct_ports() {
+    // CORE multi-institution invariant over the HTTP surface: one Linux user,
+    // two institutions → two live desktops with distinct ports, both listed,
+    // each echoing its own instance_id.
+    let (env, _ctl) = desktop_test_env();
+    let app = build_router(env.state);
+
+    let r1 = app
+        .clone()
+        .oneshot(post(
+            "/guest/v1/desktops/start",
+            json!({
+                "session_id": "s_i1", "linux_username": "pria_u_a",
+                "vnc_password": "pw1", "instance_id": "inst1"
+            }),
+        ))
+        .await
+        .unwrap();
+    let b1 = body_json(r1.into_body()).await;
+    let r2 = app
+        .clone()
+        .oneshot(post(
+            "/guest/v1/desktops/start",
+            json!({
+                "session_id": "s_i2", "linux_username": "pria_u_a",
+                "vnc_password": "pw2", "instance_id": "inst2"
+            }),
+        ))
+        .await
+        .unwrap();
+    let b2 = body_json(r2.into_body()).await;
+
+    assert_eq!(b1["instance_id"], "inst1");
+    assert_eq!(b2["instance_id"], "inst2");
+    assert_ne!(b1["port"], b2["port"], "each institution gets its own port");
+
+    // GET /desktops lists both with distinct instance_id.
+    let resp = app.oneshot(get("/guest/v1/desktops")).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    let sessions = body["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 2);
+    let instances: std::collections::HashSet<&str> = sessions
+        .iter()
+        .map(|s| s["instance_id"].as_str().unwrap())
+        .collect();
+    assert!(instances.contains("inst1"));
+    assert!(instances.contains("inst2"));
+}
+
+#[tokio::test]
+async fn stop_desktop_with_instance_id_stops_only_that_institution() {
+    let (env, _ctl) = desktop_test_env();
+    let app = build_router(env.state);
+
+    for (sid, inst, pw) in [("s_i1", "inst1", "pw1"), ("s_i2", "inst2", "pw2")] {
+        app.clone()
+            .oneshot(post(
+                "/guest/v1/desktops/start",
+                json!({
+                    "session_id": sid, "linux_username": "pria_u_a",
+                    "vnc_password": pw, "instance_id": inst
+                }),
+            ))
+            .await
+            .unwrap();
+    }
+
+    // Stop only inst1.
+    app.clone()
+        .oneshot(post(
+            "/guest/v1/desktops/pria_u_a/stop",
+            json!({ "reason": "done", "instance_id": "inst1" }),
+        ))
+        .await
+        .unwrap();
+
+    let resp = app.oneshot(get("/guest/v1/desktops")).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    let sessions = body["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1, "only inst1 stopped; inst2 still live");
+    assert_eq!(sessions[0]["instance_id"], "inst2");
+}
+
+#[tokio::test]
+async fn start_desktop_accepts_camelcase_instance_id_alias() {
+    // During the control-plane transition the client may send camelCase.
+    let (env, _ctl) = desktop_test_env();
+    let app = build_router(env.state);
+    let resp = app
+        .oneshot(post(
+            "/guest/v1/desktops/start",
+            json!({
+                "session_id": "s_cc", "linux_username": "pria_u_a",
+                "vnc_password": "pw", "instanceId": "instCC"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["instance_id"], "instCC");
+}
