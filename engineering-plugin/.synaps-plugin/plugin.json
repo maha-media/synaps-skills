@@ -1,7 +1,7 @@
 {
   "name": "engineering",
-  "version": "0.5.0-beta",
-  "description": "Engineering discipline skills — code review, security review, TDD, debugging, spec-driven development, incremental implementation, planning, verification, worktree-based isolation, multi-agent convergence loops, and the HTML Plan Ecosystem (live plans-server + Plan Inbox). Battle-tested patterns for shipping reliable software.",
+  "version": "0.6.0-beta",
+  "description": "Engineering discipline skills — code review, security review, TDD, debugging, spec-driven development, incremental implementation, planning, verification, worktree-based isolation, multi-agent convergence loops, automated test harness (external oracle/harness proof), tmux fleet orchestration (orchestrator/coder split), and the HTML Plan Ecosystem (live plans-server + Plan Inbox). Battle-tested patterns for shipping reliable software.",
   "author": {
     "name": "Haseeb Khalid",
     "url": "https://github.com/HaseebKhalid1507"

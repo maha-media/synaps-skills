@@ -17,6 +17,8 @@ Disciplined software delivery skills for Synaps agents. These skills favor small
 | `code-review` | Before merge or when evaluating a code change |
 | `security-review` | User input, secrets, auth, plugins, sidecars, shell, filesystem, network, or external I/O are involved |
 | `convergence-loop` | A pre-planned multi-agent designer/builder/tester/judge loop is justified |
+| `automated-test-harness` | Behavior must be proven by an external harness/oracle (ActorSim, AgentSim, DomProbe, FaultInj), never by the coder asserting its own success |
+| `tmux-fleet-orchestration` | An orchestrator drives a fleet of coder agents in tmux panes — pane addressing, Plan Inbox polling, precise-prompt dispatch |
 
 ## Common Flows
 
