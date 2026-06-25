@@ -132,14 +132,15 @@ function createServer(opts) {
       q = {}; for (const [k, v] of u.searchParams) q[k] = v;
     } catch (_) { return send(res, 400, "bad url"); }
 
-    // token gate (all routes)
+    // --- assets (served before token gate; confined by safeRealpath + isInside) ---
+    if (pathname.startsWith("/_assets/")) {
+      return serveAsset(res, pathname.slice("/_assets/".length));
+    }
+
+    // token gate (all non-asset routes)
     if (!checkToken(req, q)) return sendJson(res, 401, { error: "unauthorized" });
 
     try {
-      // --- assets ---
-      if (pathname.startsWith("/_assets/")) {
-        return serveAsset(res, pathname.slice("/_assets/".length));
-      }
       // --- sidebar shell ---
       if (pathname === "/" || pathname === "/index.html") {
         return send(res, 200, renderShell(), { "Content-Type": "text/html; charset=utf-8" });
