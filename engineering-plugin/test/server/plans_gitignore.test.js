@@ -51,14 +51,72 @@ test("appendEvent scaffolds .plans/.gitignore that ignores runtime artifacts", (
   }
 });
 
-test("ensurePlansGitignore is idempotent and does not clobber an existing file", () => {
+// G1 — Option A managed-block merge semantics. Existing files gain the block on
+// upgrade; user content outside the markers is never touched.
+
+const MANAGED_BEGIN = "# >>> engineering plans (managed — do not edit inside) >>>";
+const MANAGED_END = "# <<< engineering plans (managed) <<<";
+
+function readGi(repo) {
+  return fs.readFileSync(path.join(repo, ".plans", ".gitignore"), "utf8");
+}
+
+test("ensurePlansGitignore appends the managed block to an existing file, preserving user lines byte-for-byte", () => {
   const repo = tmpRepo();
   const giDir = path.join(repo, ".plans");
   fs.mkdirSync(giDir, { recursive: true });
   const gi = path.join(giDir, ".gitignore");
-  fs.writeFileSync(gi, "# custom user content\n");
+  const userContent = "# my custom rules\nsecrets.txt\n*.bak\n";
+  fs.writeFileSync(gi, userContent);
   store.ensurePlansGitignore(repo);
-  assert.strictEqual(fs.readFileSync(gi, "utf8"), "# custom user content\n");
+  const out = readGi(repo);
+  // Every original byte is preserved at the head of the file.
+  assert.ok(out.startsWith(userContent), "user content must be preserved byte-for-byte at the head");
+  // The managed block was appended.
+  assert.ok(out.includes(MANAGED_BEGIN) && out.includes(MANAGED_END), "managed block markers must be present");
+  for (const pat of ["agents.json", "*.events.json", "*.notes.json", "*.oracle.jsonl", "*.tmp-*", "*.lock"]) {
+    assert.ok(out.includes(pat), `block should list ${pat}`);
+  }
+  // User rules still ignore-effective; plan docs never added.
+  assert.ok(out.includes("secrets.txt") && out.includes("*.bak"), "user rules retained");
+  assert.ok(!out.includes("plan.html"), "plan.html must never be added as a rule");
+});
+
+test("ensurePlansGitignore is a byte-identical no-op when the managed block is already up to date", () => {
+  const repo = tmpRepo();
+  store.ensurePlansGitignore(repo);           // create
+  const first = readGi(repo);
+  store.ensurePlansGitignore(repo);           // second call
+  const second = readGi(repo);
+  assert.strictEqual(second, first, "second call must produce a byte-identical file (idempotent)");
+  // And appending to an already-migrated existing file is also a no-op.
+  store.ensurePlansGitignore(repo);
+  assert.strictEqual(readGi(repo), first, "third call must remain byte-identical");
+});
+
+test("ensurePlansGitignore replaces only the block interior when the patterns change, preserving surrounding user content", () => {
+  const repo = tmpRepo();
+  const giDir = path.join(repo, ".plans");
+  fs.mkdirSync(giDir, { recursive: true });
+  const gi = path.join(giDir, ".gitignore");
+  // A file with a STALE managed block (only one outdated pattern inside) wrapped
+  // by user content above and below.
+  const before = "# header user line\nkeep-me.log\n";
+  const after = "# trailing user line\nalso-keep.tmp\n";
+  const staleBlock = [MANAGED_BEGIN, "*.events.json", MANAGED_END].join("\n");
+  fs.writeFileSync(gi, before + staleBlock + "\n" + after);
+  store.ensurePlansGitignore(repo);
+  const out = readGi(repo);
+  // Surrounding user content preserved exactly.
+  assert.ok(out.startsWith(before), "content before the block preserved byte-for-byte");
+  assert.ok(out.endsWith(after), "content after the block preserved byte-for-byte");
+  // Interior now carries the full current pattern set.
+  for (const pat of ["agents.json", "*.notes.json", "*.oracle.jsonl", "*.tmp-*", "*.lock"]) {
+    assert.ok(out.includes(pat), `interior should be updated to include ${pat}`);
+  }
+  // Exactly one managed block (no duplication).
+  assert.strictEqual(out.split(MANAGED_BEGIN).length - 1, 1, "exactly one begin marker");
+  assert.strictEqual(out.split(MANAGED_END).length - 1, 1, "exactly one end marker");
 });
 
 test("plan documents are NOT ignored by the scaffolded patterns", () => {
