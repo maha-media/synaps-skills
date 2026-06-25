@@ -146,6 +146,25 @@ From 24 failure memories:
 - Implications of success
 - ANY communication suggesting completion/correctness
 
+## HTML Plan Ecosystem integration
+
+When the HTML Plan Ecosystem is in use (schema `engplan/1`):
+
+- **Evidence attaches to `type:"evidence"` sections.** Fresh verification
+  output (test runs, build exit codes, red→green proofs) is recorded as
+  `type:"evidence"` sections on the `<slug>.plan.html` artifact, linked to the
+  task it verifies. Claims live next to their evidence, auditable.
+- **Reconcile the Plan Inbox before any completion claim.** This is checkpoint
+  3 of the reconcile loop. Acknowledge and resolve every open event
+  (incorporate / reject / defer / block) before asserting "done". An
+  unreconciled inbox means the claim is premature.
+- **"Done" means a machine can rebuild + re-verify unattended.** A task is not
+  complete until a machine can rebuild the artifact and re-run verification
+  with no human present — **including simulated human actions** (approvals,
+  inbox steering, UI interactions driven headlessly by the automated harness).
+  If completion depends on a human re-running something by hand, it is not done.
+- Do not bind any server to `0.0.0.0` and do not load assets from a CDN.
+
 ## The Bottom Line
 
 **No shortcuts for verification.**

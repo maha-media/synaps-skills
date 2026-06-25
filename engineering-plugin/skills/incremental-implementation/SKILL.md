@@ -132,6 +132,39 @@ After each increment:
 - [ ] New functionality works as expected
 - [ ] Change is committed with a descriptive message
 
+## HTML Plan Ecosystem integration
+
+When the HTML Plan Ecosystem is in use (schema `engplan/1`), implementation
+keeps the `<slug>.plan.html` artifact live:
+
+- **Flip task `state` live.** As work moves through the increment cycle, update
+  each `type:"task"` section's `state`: `todo → doing` when you pick it up,
+  `doing → done` when its acceptance criteria are met and verified. The plan
+  document is the live status, not a stale snapshot.
+- **Reconcile the Plan Inbox before each slice.** Before starting any slice,
+  read and reconcile the inbox (incorporate / reject / defer / block each open
+  event). Steering arrives as explicit, durable events — never as hidden
+  mid-run context.
+- **Each slice's verification includes the relevant harness scenario.** A slice
+  is not verified until its acceptance criteria are proven red→green by the
+  feature's automated harness scenario (the harness defined in
+  **planning-and-task-breakdown**), exercised without a human.
+- Do not bind any server to `0.0.0.0` and do not load assets from a CDN.
+
+## Subagent dispatch + coder/model doctrine
+
+- **Subagents are the coders.** The orchestrator delegates the coding to a
+  subagent in its own worktree rather than editing ship code itself.
+- **Dispatch rule (hard).** Every subagent dispatch must include either an
+  `agent` name or an inline `system_prompt` — **never neither**. Dispatching
+  with neither raises:
+  `Must provide either 'agent' (name) or 'system_prompt' (inline). Got neither.`
+- **Model inheritance.** `model = explicit ?? session` (i.e.
+  `model = explicit_model ?? session_model`) — inherit the **session model**,
+  never a silent weaker default. Overrides require recorded justification.
+- **Poll-and-steer over sleep.** The orchestrator polls coder status and steers
+  via the Plan Inbox; it does not insert long blocking sleeps.
+
 ## Common Rationalizations
 
 | Rationalization | Reality |
@@ -151,6 +184,12 @@ After each increment:
 - Building abstractions before the third use case demands it
 - Touching files outside task scope "while I'm here"
 - Editing files on the primary checkout instead of the worktree
+- Task `state` left stale in `<slug>.plan.html` while work has moved on
+- Starting a slice without reconciling the Plan Inbox
+- Coder dispatched with neither `agent` nor `system_prompt`
+- Coder dispatched with a silent default model instead of the session model
+- Orchestrator wrote ship code directly instead of delegating to a coder subagent
+- Orchestrator idle-sleeping instead of polling + steering
 
 ## Verification
 

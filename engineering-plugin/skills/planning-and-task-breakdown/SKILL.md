@@ -235,6 +235,10 @@ If a task is L or larger, break it down further. Agents perform best on S and M 
 - Threshold or axis weights adjusted after the first score (goalpost
   moving — defeats the loop)
 - Agent silently changed `convergence: none` → `informed`/`holdout` mid-run
+- No automated build+test harness task set in the plan (the plan is incomplete)
+- Human-in-the-loop steps with no task that simulates them headlessly
+- Coder dispatch planned with neither `agent` nor `system_prompt`
+- Coder dispatch planned with a silent default model instead of the session model
 
 ## Verification
 
@@ -246,4 +250,6 @@ Before starting implementation:
 - [ ] Checkpoints exist between major phases
 - [ ] Convergence mode declared (`none` | `informed` | `holdout`)
 - [ ] If not `none`: threshold, axis weights, and loop bounds fixed
+- [ ] Automated build+test harness task set present (headless, simulates any human-in-the-loop steps)
+- [ ] Every planned coder dispatch resolves to `(agent | system_prompt)` and sets `model = explicit ?? session`
 - [ ] Dedicated worktree created and active (`git worktree list` shows it; `pwd` is inside it)

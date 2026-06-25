@@ -157,6 +157,24 @@ mod complete_task {
 - Test names that don't describe expected behavior
 - Skipping tests to make the suite pass
 
+## Subagent dispatch + coder/model doctrine
+
+When tests and code are written by a dispatched subagent (e.g. the Designer or
+Builder role of **convergence-loop**, or any orchestrated coder):
+
+- **Subagents are the coders.** The orchestrator delegates writing the tests
+  and implementation to a subagent in its own worktree rather than editing ship
+  code itself.
+- **Dispatch rule (hard).** Every subagent dispatch must include either an
+  `agent` name or an inline `system_prompt` — **never neither**. Dispatching
+  with neither raises:
+  `Must provide either 'agent' (name) or 'system_prompt' (inline). Got neither.`
+- **Model inheritance.** `model = explicit ?? session` (i.e.
+  `model = explicit_model ?? session_model`) — inherit the **session model**,
+  never a silent weaker default. Overrides require recorded justification.
+- **Poll-and-steer over sleep.** The orchestrator polls coder status and steers
+  via the Plan Inbox; it does not insert long blocking sleeps.
+
 ## Verification
 
 After completing any implementation:
