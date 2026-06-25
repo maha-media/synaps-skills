@@ -7,7 +7,9 @@
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
     "harness": "node test/harness/cli.js",
-    "e2e": "node test/harness/e2e.js"
+    "e2e": "node test/harness/e2e.js",
+    "oracle:test": "node --test \"test/oracle-harness/**/*.test.js\"",
+    "oracle:e2e": "node tools/oracle/e2e.js"
   },
   "engines": {
     "node": ">=18"

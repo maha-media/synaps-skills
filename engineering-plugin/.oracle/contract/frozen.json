@@ -1,0 +1,384 @@
+{
+  "schema": "oracle/1",
+  "kind": "contract",
+  "name": "html-plan-ecosystem",
+  "version": "1.0.0",
+  "frozen_at": "2025-06-25T00:00:00.000Z",
+  "frozen_by_lineage": "architect",
+  "note": "Frozen from the observable behavior of the P0-P5 build + parent spec html-plan-ecosystem.md. This is the shared ground truth for Designer (adversary) and Builder. Re-freeze is a controlled commit-reveal event, never an ad-hoc edit.",
+  "data_schemas": {
+    "engplan/1": {
+      "plan": {
+        "required": [
+          "schema",
+          "kind",
+          "slug",
+          "title",
+          "status",
+          "sections"
+        ],
+        "schema_const": "engplan/1",
+        "kind_enum": [
+          "plan",
+          "spec"
+        ],
+        "status_enum": [
+          "drafting",
+          "approved",
+          "in_progress",
+          "done",
+          "blocked"
+        ],
+        "convergence_enum": [
+          "none",
+          "informed",
+          "holdout"
+        ],
+        "id_pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+        "id_max_len": 200,
+        "sections_is_array": true,
+        "rejects": [
+          "unsupported schema",
+          "invalid kind",
+          "missing/invalid slug",
+          "missing title",
+          "invalid status",
+          "duplicate section id",
+          "non-array sections"
+        ]
+      },
+      "section": {
+        "required": [
+          "id",
+          "heading",
+          "type"
+        ],
+        "type_enum": [
+          "prose",
+          "task",
+          "risk",
+          "gate",
+          "criteria",
+          "evidence"
+        ],
+        "state_enum": [
+          "todo",
+          "doing",
+          "done",
+          "blocked"
+        ],
+        "approval_enum": [
+          "none",
+          "needs-human-review",
+          "approved"
+        ],
+        "risk_enum": [
+          "none",
+          "risky",
+          "security-sensitive"
+        ],
+        "optional_array_string": [
+          "acceptance",
+          "verification",
+          "depends_on"
+        ]
+      },
+      "event": {
+        "required": [
+          "plan_id",
+          "section_id",
+          "type",
+          "actor"
+        ],
+        "type_enum": [
+          "comment",
+          "request_change",
+          "block",
+          "approve",
+          "reprioritize",
+          "mark_risky",
+          "add_acceptance_criterion",
+          "clarify",
+          "force_verification",
+          "defer",
+          "split_task",
+          "merge_task",
+          "escalate_convergence",
+          "require_security_review",
+          "do_not_touch"
+        ],
+        "actor_enum": [
+          "human",
+          "orchestrator",
+          "agent"
+        ],
+        "status_enum": [
+          "open",
+          "acknowledged",
+          "incorporated",
+          "rejected",
+          "deferred",
+          "blocked"
+        ],
+        "status_default": "open",
+        "agent_status_enum": [
+          null,
+          "incorporated",
+          "rejected",
+          "deferred",
+          "blocked"
+        ],
+        "rejects": [
+          "missing plan_id",
+          "missing section_id",
+          "invalid type",
+          "invalid actor",
+          "invalid status",
+          "non-string text"
+        ]
+      },
+      "note": {
+        "is": "event with type=comment",
+        "required": [
+          "plan_id",
+          "section_id",
+          "actor"
+        ]
+      }
+    },
+    "oracle/1": {
+      "contract": {
+        "required": [
+          "schema",
+          "kind",
+          "version",
+          "frozen_at",
+          "data_schemas",
+          "endpoints",
+          "exit_codes",
+          "lifecycle",
+          "error_taxonomy"
+        ]
+      },
+      "verdict": {
+        "required": [
+          "schema",
+          "kind",
+          "round",
+          "counts",
+          "categories",
+          "audit_id",
+          "nonce"
+        ]
+      }
+    }
+  },
+  "lifecycle": {
+    "name": "event-status state machine (engplan/1 §3.3)",
+    "initial": "open",
+    "terminal": [
+      "incorporated",
+      "rejected",
+      "deferred"
+    ],
+    "transitions": {
+      "open": [
+        "acknowledged",
+        "blocked"
+      ],
+      "acknowledged": [
+        "incorporated",
+        "rejected",
+        "deferred",
+        "blocked"
+      ],
+      "blocked": [
+        "acknowledged",
+        "incorporated",
+        "rejected",
+        "deferred"
+      ],
+      "incorporated": [],
+      "rejected": [],
+      "deferred": []
+    },
+    "invariants": [
+      "events are append-only (an appended event is never removed or reordered)",
+      "illegal transition throws ValidationError, never silently mutates",
+      "a terminal status has no outgoing transitions"
+    ]
+  },
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/",
+      "ok": 200,
+      "content_type": "text/html",
+      "desc": "sidebar shell"
+    },
+    {
+      "method": "GET",
+      "path": "/index.html",
+      "ok": 200,
+      "content_type": "text/html"
+    },
+    {
+      "method": "GET",
+      "path": "/_assets/<name>",
+      "ok": 200,
+      "errors": [
+        403,
+        404
+      ],
+      "desc": "static asset, path-confined"
+    },
+    {
+      "method": "GET",
+      "path": "/plan/<id>",
+      "ok": 200,
+      "content_type": "text/html",
+      "errors": [
+        400,
+        404
+      ],
+      "desc": "serves artifact with #plan json + injected token"
+    },
+    {
+      "method": "GET",
+      "path": "/api/plans",
+      "ok": 200,
+      "json": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/agents",
+      "ok": 200,
+      "json": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/agents",
+      "ok": 200,
+      "json": true,
+      "errors": [
+        400
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/agents/<id>",
+      "ok": 200,
+      "json": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/agents/stream",
+      "ok": 200,
+      "content_type": "text/event-stream",
+      "errors": [
+        503
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/stream",
+      "ok": 200,
+      "content_type": "text/event-stream",
+      "errors": [
+        400,
+        503
+      ],
+      "desc": "per-plan SSE; ?slug="
+    },
+    {
+      "method": "GET",
+      "path": "/api/notes",
+      "ok": 200,
+      "json": true,
+      "errors": [
+        400
+      ],
+      "desc": "?slug=; returns {events,notes}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/notes",
+      "ok": 200,
+      "json": true,
+      "errors": [
+        400,
+        413
+      ],
+      "desc": "append note; 413 on cap/too-large"
+    },
+    {
+      "method": "POST",
+      "path": "/api/respond",
+      "ok": 200,
+      "json": true,
+      "errors": [
+        400
+      ],
+      "desc": "agent respond → incorporated/rejected/deferred + changed_sections + responded_at"
+    },
+    {
+      "method": "POST",
+      "path": "/api/reconcile",
+      "ok": 200,
+      "json": true,
+      "errors": [
+        400
+      ]
+    }
+  ],
+  "server_invariants": [
+    "binds 127.0.0.1 only (loopback); never 0.0.0.0",
+    "SSE connection cap returns 503 beyond maxSseConnections",
+    "every write stays inside .plans/ (write-confinement); path traversal and symlink escape rejected",
+    "unknown route → 404; bad json body → 400; internal error → 500 with {error:'internal'} (no stack leak)",
+    "/plan/<id> with invalid id → 400; unknown id → 404",
+    "served artifact injects a per-server token; static fallback present"
+  ],
+  "rpc_methods": {
+    "transport": "JSON-RPC 2.0 over stdio (Content-Length framing)",
+    "methods": [
+      "initialize",
+      "ping",
+      "plan/serve",
+      "plan/list",
+      "plan/reconcile"
+    ],
+    "error_unknown_method": -32601,
+    "error_handler_failure": -32000
+  },
+  "exit_codes": {
+    "0": "success",
+    "2": "usage error (missing/invalid args for new|open|list|serve|reconcile)"
+  },
+  "store_limits": {
+    "maxEventsPerPlan": 1000,
+    "maxBodyBytes": 262144,
+    "writable_filenames": [
+      "<slug>.notes.json",
+      "<slug>.events.json",
+      "agents.json"
+    ],
+    "writable_root": ".plans/"
+  },
+  "error_taxonomy": [
+    "validation-error",
+    "schema-mismatch",
+    "illegal-transition",
+    "path-escape",
+    "write-confinement-violation",
+    "cap-exceeded",
+    "not-found",
+    "bad-request",
+    "forbidden",
+    "too-many-streams",
+    "internal-error",
+    "crash"
+  ],
+  "_hash": "sha256:4a3947e19da55019b8a79f26e6f61487068d6ea7b9028aceb14f45c15cfb3cc1",
+  "_frozen_at": "2026-06-25T14:23:36.919Z"
+}
