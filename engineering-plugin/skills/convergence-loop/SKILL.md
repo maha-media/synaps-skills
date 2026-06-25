@@ -5,6 +5,8 @@ description: Drives multi-agent convergence loops — designer, builder, tester,
 
 # Convergence Loop
 
+*Where this fits: spans **implement → verify → review** — the orchestration layer that runs the coder/orchestrator split and oracle verdict scoring when a single agent can't self-verify.*
+
 Some work is too complex, too biased-toward-the-author, or too consequential for a single agent to verify itself. A convergence loop splits the work across role-specialised agents, isolates them from each other's biases, scores the result against the spec, and iterates until the score crosses a threshold or the loop gives up explicitly.
 
 This skill is **advisory** — it describes the pattern. To run it, an orchestrator dispatches each role as a **fresh, blocking, one-shot subagent** and routes only explicit artifacts between roles. The orchestrator owns the budget, the worktree, the information walls, and the context packet given to each role.
@@ -394,3 +396,10 @@ the verdict, emit `checkpoint.reached`, write the resume token, then suspend.
 Compaction happens *between* checkpoints, never inside one. After compaction,
 continue from the resume token **without waiting for a human** unless
 `next_action` is explicitly human-gated.
+
+## Related skills
+
+- **planning-and-task-breakdown** — supplies the checkpoints and acceptance criteria each loop scores against.
+- **verification-before-completion** — the evidence-before-claims discipline the tester/judge roles enforce.
+- **code-review** — consumes the loop's oracle verdict at the final review gate.
+- **worktrees-by-default** — each role-agent operates in its own isolated worktree.

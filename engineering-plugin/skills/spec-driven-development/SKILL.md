@@ -5,6 +5,8 @@ description: Creates specs before coding. Use when starting a new project, featu
 
 # Spec-Driven Development
 
+*Where this fits: the front of the **plan** stage of plan → implement → verify → review — the source of truth written before any task breakdown or code.*
+
 Write a structured specification before writing any code. The spec is the shared source of truth — it defines what we're building, why, and how we'll know it's done. Code without a spec is guessing.
 
 ## When to Use
@@ -145,3 +147,9 @@ Before proceeding to implementation:
 - [ ] Boundaries (Always/Ask/Never) are defined
 - [ ] Spec is saved to a file in the repository
 - [ ] A dedicated worktree exists for the implementation (see **worktrees-by-default**)
+
+## Related skills
+
+- **planning-and-task-breakdown** — decomposes this spec into implementable tasks.
+- **type-driven-design** — turns the spec's enums and invariants into boundary types.
+- **worktrees-by-default** — the isolated worktree the spec is implemented in.

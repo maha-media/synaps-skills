@@ -5,6 +5,8 @@ description: Structured multi-axis code review. Use before merging any change, a
 
 # Code Review and Quality
 
+*Where this fits: the **review** stage of plan → implement → verify → review — the final gate before merge, after verification has produced evidence.*
+
 Multi-dimensional code review with quality gates. Every change gets reviewed before merge — no exceptions.
 
 **The approval standard:** Approve when a change definitely improves overall code health, even if it isn't perfect. Perfect code doesn't exist — the goal is continuous improvement. Don't block because it isn't how you would've written it.
@@ -177,3 +179,10 @@ Before approving:
 - [ ] Build/lint checks are clean for the project type
 - [ ] Change is appropriately sized
 - [ ] No secrets, credentials, or sensitive data in the diff
+
+## Related skills
+
+- **verification-before-completion** — produces the evidence (green gates, oracle verdict) this review consumes.
+- **security-review** — the dedicated deep-dive for the Security axis.
+- **test-driven-development** — the red→green tests whose intent you read first.
+- **type-driven-design** — the reference for the Type/Invariants axis.

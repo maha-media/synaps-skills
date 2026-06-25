@@ -5,6 +5,8 @@ description: Use when designing typed APIs, protocol/config boundaries, domain m
 
 # Type-Driven Design
 
+*Where this fits: the **implement** stage of plan → implement → verify → review — encoding the spec's invariants into types at the boundary as code is written.*
+
 Represent domain ideas as types. Make invalid states hard to express, validate untrusted input once at the boundary, and keep the safe path simple at the call site.
 
 This skill is not a license to build type machinery for its own sake. Abstract from working code and real invariants. If a type does not prevent a bug, clarify an API, or remove repeated validation, it probably is not earning its cost.
@@ -275,3 +277,9 @@ Before considering the design ready:
 - [ ] Dangerous operations are isolated behind visibly named types/functions
 - [ ] The safe path is the easiest path at the call site
 - [ ] The abstraction earns its complexity
+
+## Related skills
+
+- **spec-driven-development** — the source of the enums, schemas, and invariants encoded as types.
+- **security-review** — boundary parsing closes a large class of untrusted-input findings.
+- **code-review** — the Type/Invariants axis evaluates this work at review time.

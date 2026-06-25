@@ -5,6 +5,8 @@ description: Use before merging code that handles user input, secrets, auth, plu
 
 # Security Review
 
+*Where this fits: the **review** stage of plan → implement → verify → review — the security-focused deep-dive that complements the general code review before merge.*
+
 Perform a focused review of trust boundaries, privileged operations, and failure modes. Keep it practical: identify what an attacker or untrusted input can influence, what privilege the code has, and whether checks happen before the dangerous operation.
 
 ## Threat Surface First
@@ -167,3 +169,9 @@ Before passing the review:
 - [ ] Secrets are not exposed in code, logs, errors, tests, or fixtures
 - [ ] Resource usage is bounded or intentionally documented
 - [ ] Critical and Important findings are resolved or explicitly accepted by policy
+
+## Related skills
+
+- **code-review** — the general review this skill's Security axis expands on.
+- **type-driven-design** — parse-at-the-boundary types that close many input-validation findings.
+- **verification-before-completion** — the evidence discipline behind a fail-closed verdict.

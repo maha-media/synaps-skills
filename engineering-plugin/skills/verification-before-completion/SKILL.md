@@ -5,6 +5,8 @@ description: Use before claiming work is complete, fixed, or passing, or before 
 
 # Verification Before Completion
 
+*Where this fits: the **verify** stage of plan → implement → verify → review — and the canonical owner of the evidence-before-claims rule the other skills reference.*
+
 ## Overview
 
 Claiming work is complete without fresh verification evidence is invalid. Evidence before claims.
@@ -184,3 +186,9 @@ precondition, per checkpoint-aware-compaction §8):
 
 Until that triad is true, do not emit `checkpoint.reached` and do not permit
 compaction — the boundary is not durable yet.
+
+## Related skills
+
+- **test-driven-development** — supplies the red→green proofs that are core verification evidence.
+- **code-review** — consumes this verified evidence at the merge gate.
+- **systematic-debugging** — the loop you enter when verification surfaces a failure.

@@ -5,6 +5,8 @@ description: Drives development with tests. Use when implementing any logic, fix
 
 # Test-Driven Development
 
+*Where this fits: the **implement** stage of plan → implement → verify → review — and the canonical owner of the red→green cycle the other skills reference.*
+
 Write a failing test before writing the code that makes it pass. For bug fixes, reproduce the bug with a test before attempting a fix. Tests are proof — "seems right" is not done.
 
 ## The TDD Cycle
@@ -185,3 +187,10 @@ After completing any implementation:
 - [ ] No tests were skipped or disabled
 - [ ] Coverage hasn't decreased
 - [ ] Tests and implementation live on the worktree branch (see **worktrees-by-default**)
+
+## Related skills
+
+- **incremental-implementation** — applies the red→green cycle slice by slice.
+- **verification-before-completion** — the broader gate that red→green evidence feeds.
+- **systematic-debugging** — uses a failing reproduction test as the entry point to a fix.
+- **code-review** — reads these tests first to understand intent.

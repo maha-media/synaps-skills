@@ -5,6 +5,8 @@ description: Isolates every implementation in a dedicated git worktree. Use when
 
 # Worktrees By Default
 
+*Where this fits: spans the whole plan → implement → verify → review flow — the isolation substrate every other skill assumes its work runs inside.*
+
 Every implementation, fix, or refactor happens inside a dedicated `git worktree`. The primary clone stays clean and on the integration branch. This is non-negotiable for any work that mutates files in the repository.
 
 ## The Iron Rule
@@ -249,3 +251,10 @@ After PR merges (cleanup gate — run before claiming the task is done):
 - [ ] `git branch` no longer lists the merged feature branch
 - [ ] `git fetch --prune` has dropped the remote tracking ref
 - [ ] `~/Projects/<org>/.worktrees/<repo>-<slug>/` directory no longer exists on disk
+
+## Related skills
+
+- **spec-driven-development** — the spec that justifies opening a worktree.
+- **incremental-implementation** — the slices that run inside the worktree.
+- **test-driven-development** — tests and code both live on the worktree branch.
+- **systematic-debugging** — fixes happen on a `fix/<slug>` worktree.
