@@ -13,11 +13,11 @@ function raw(base, method, p, body, headers) {
   return new Promise((resolve, reject) => {
     const u = new URL(p, base);
     const data = body == null ? null : (typeof body === "string" ? body : JSON.stringify(body));
-    const r = http.request(u, { method, headers: Object.assign({ "Content-Type": "application/json" }, headers || {}) }, (res) => {
+    const r = http.request(u, { method, agent: false, headers: Object.assign({ "Content-Type": "application/json", "Connection": "close" }, headers || {}) }, (res) => {
       const chunks = []; res.on("data", (c) => chunks.push(c));
       res.on("end", () => { const text = Buffer.concat(chunks).toString("utf8"); let json = null; try { json = JSON.parse(text); } catch (_) {} resolve({ status: res.statusCode, text, json }); });
     });
-    r.on("error", reject);
+    r.on("error", (e) => resolve({ status: 0, reset: true, error: String(e.code || e.message), text: "", json: null }));
     if (data) r.write(data);
     r.end();
   });
