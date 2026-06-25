@@ -12,3 +12,4 @@ node_modules/
 .oracle/reveal/commit_reveal.log
 .oracle/reveal/lineage.log
 .plans/*.oracle.jsonl
+.plans/*.events.json
