@@ -97,4 +97,35 @@ function treeClean(repoRoot, opts) {
   return String(res.stdout == null ? "" : res.stdout).trim().length === 0;
 }
 
-module.exports = { headCommit, treeClean, defaultRun };
+/**
+ * `git log --oneline <range>` → array of commit lines (newest first), each a
+ * trimmed non-empty string like "b344bf1 fix oracle survivors". Supports §6
+ * step 2 of the artifact-anchored summary ("what landed"). Throws if git fails.
+ * @param {string} repoRoot
+ * @param {string} range e.g. "<base>..HEAD" (or "" / undefined → whole history)
+ * @param {{run?: Function}} [opts]
+ * @returns {string[]} commit oneline strings (may be empty)
+ */
+function logOneline(repoRoot, range, opts) {
+  assertRepoRoot(repoRoot);
+  const run = runnerOf(opts);
+  const args = ["log", "--oneline"];
+  if (typeof range === "string" && range.length > 0) {
+    args.push(range);
+  } else if (range !== undefined && range !== null && typeof range !== "string") {
+    throw new Error("range must be a string when provided");
+  }
+  const res = run(args, repoRoot) || {};
+  if (res.status !== 0) {
+    throw new Error(
+      "git log --oneline failed (status " + String(res.status) + ")" +
+        (res.stderr ? ": " + String(res.stderr).trim() : "")
+    );
+  }
+  return String(res.stdout == null ? "" : res.stdout)
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+}
+
+module.exports = { headCommit, treeClean, logOneline, defaultRun };
