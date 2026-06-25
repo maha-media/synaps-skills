@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Structured multi-axis code review. Use before merging any change, after completing features, or when evaluating code from any source.
+description: Structured multi-axis code review. Use before merging any change, after completing features, or when evaluating code from any source. Consumes the adversarial test oracle verdict (oracle/1) from the engineering ecosystem and posts findings to the Plan Inbox.
 ---
 
 # Code Review and Quality
@@ -93,6 +93,41 @@ Categorize ALL findings with severity:
 ### Positives
 - [What was done well — acknowledge good patterns]
 ```
+
+## Oracle verdict gate
+
+Correctness is not established by the coder's own tests. A builder grading its
+own homework is the henhouse guarding itself — green tests written by the author
+prove only internal consistency, not external correctness.
+
+- **Consume the oracle verdict.** The reviewer reads the adversarial test oracle
+  verdict (`oracle/1` schema, produced by `tools/oracle/`) as the authoritative
+  signal of correctness, instead of re-deriving correctness from the coder's own
+  suite. The oracle's tests are authored independently of the builder (see
+  **write-segregation** in security-review).
+- **Gate on it.** If the oracle verdict is `fail` (or absent/stale), the review
+  cannot reach APPROVE on the Correctness axis — regardless of how green the
+  coder's own tests are.
+- **Coder tests are still evidence** of intent and regression coverage — read
+  them first (see Review Process) — but they do not substitute for the oracle.
+
+See the **automated-test-harness** skill for how the oracle is generated and
+frozen, and **verification-before-completion** for the evidence-before-claims
+discipline that the verdict gate enforces.
+
+## Plan Inbox findings
+
+Post review findings as events on the relevant plan section so they are tracked
+where the work lives, not buried in chat:
+
+- `POST /api/notes` with `{ section_id, type, actor, text }`.
+- Use `type: "request_change"` for 🔴/🟡 findings that must be addressed and
+  `type: "block"` for findings that gate the merge outright.
+- `actor` identifies the reviewer (human or agent); `text` carries the finding
+  in the Review Output Format below.
+
+This keeps the verdict, the findings, and the plan section cross-linked through
+the plans-server Plan Inbox.
 
 ## Change Sizing
 
