@@ -5,6 +5,8 @@ description: Delivers changes incrementally. Use when implementing any feature o
 
 # Incremental Implementation
 
+*Where this fits: the **implement** stage of plan → implement → verify → review — turning planned tasks into working slices, each one verified before the next.*
+
 Build in thin vertical slices — implement one piece, test it, verify it, then expand. Each increment leaves the system in a working, testable state.
 
 ## The Increment Cycle
@@ -209,3 +211,10 @@ the verdict, emit `checkpoint.reached`, write the resume token, then suspend.
 Compaction happens *between* checkpoints, never inside one. After compaction,
 continue from the resume token **without waiting for a human** unless
 `next_action` is explicitly human-gated.
+
+## Related skills
+
+- **planning-and-task-breakdown** — defines the tasks and checkpoints each slice delivers against.
+- **test-driven-development** — the red→green cycle that proves each slice (canonical owner of red→green).
+- **verification-before-completion** — the gate each slice must pass before expanding.
+- **worktrees-by-default** — the isolated worktree every slice is built in.

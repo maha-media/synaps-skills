@@ -5,6 +5,8 @@ description: Breaks work into ordered tasks. Use when you have a spec or clear r
 
 # Planning and Task Breakdown
 
+*Where this fits: the **plan** stage of plan → implement → verify → review — turning a spec into ordered, checkpoint-sized tasks for implementation.*
+
 Decompose work into small, verifiable tasks with explicit acceptance criteria. Every task should be small enough to implement, test, and verify in a single focused session.
 
 ## The Planning Process
@@ -261,3 +263,10 @@ compaction §8, the checkpoints **are** the compaction schedule, so phases must
 be sized to land a **durable artifact at each checkpoint** — a commit, a verdict,
 a recorded decision. A phase that cannot land a durable artifact at its
 checkpoint is too large; split it.
+
+## Related skills
+
+- **spec-driven-development** — supplies the spec this breakdown decomposes.
+- **incremental-implementation** — consumes these tasks as implementation slices.
+- **convergence-loop** — scores delivery against the checkpoints defined here.
+- **worktrees-by-default** — each plan is implemented in its own worktree.

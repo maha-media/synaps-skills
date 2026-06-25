@@ -5,6 +5,8 @@ description: Guides systematic root-cause debugging. Use when tests fail, builds
 
 # Systematic Debugging
 
+*Where this fits: the **verify** stage of plan → implement → verify → review — the root-cause loop you enter when a gate goes red instead of green.*
+
 When something breaks, stop adding features, preserve evidence, and follow a structured process. Guessing wastes time.
 
 ## The Stop-the-Line Rule
@@ -219,3 +221,9 @@ After fixing a bug:
 - [ ] Build succeeds
 - [ ] Original bug scenario verified end-to-end
 - [ ] Fix lives on a `fix/<slug>` worktree branch, primary checkout untouched
+
+## Related skills
+
+- **test-driven-development** — write the failing regression test that reproduces the bug first (red→green).
+- **verification-before-completion** — confirm the fix end-to-end with recorded evidence.
+- **worktrees-by-default** — debug and fix on a `fix/<slug>` worktree, not the primary checkout.
