@@ -31,3 +31,15 @@ Audit of open-decision resolutions confirmed at each checkpoint (spec §9).
   verdict carrying test source, asserted values, raw inputs, hidden file paths, forbidden
   keys, or out-of-taxonomy categories. Builder sees `.oracle/hidden/labels.json` (labels
   only). Overfitting to public does not pass hidden (proven O1-5).
+
+## C-O2
+- **#3 Property/generative framework:** vendored tiny seeded generator + shrinker
+  (`tools/oracle/gen.js`) — dependency-free, deterministic by seed. Property engine
+  `tools/oracle/properties.js` fires N≥1000 cases, shrinks to a minimal counterexample,
+  and emits category-only signals across the boundary.
+- **#2 Mutation tooling:** custom contract-tied operator set (`tools/oracle/mutate.js`,
+  10 operators mapping to status codes / exit codes / lifecycle / caps / loopback /
+  confinement). Mutation gate `tools/oracle/mutation_gate.js` runs the grading suite
+  against each mutant; kill-rate ≥ 0.8 required. A strong suite is ACCEPTED (10/10
+  killed); a deliberately weak suite is REJECTED (0/10) — the oracle self-validates.
+  Fuzz harness `tools/oracle/fuzz.js` is bounded and finds planted crashes.

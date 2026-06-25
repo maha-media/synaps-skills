@@ -66,6 +66,7 @@ function createSut(opts) {
 
   const sut = {
     contractSurface: true,
+    buildRoot: mod.root,
     EngPlan: mod.EngPlan,
     parsePlan: (raw) => mod.EngPlan.parseEngPlan(raw),
     parseEvent: (raw) => mod.EngPlan.parseEvent(raw),
@@ -91,6 +92,17 @@ function createSut(opts) {
     cleanup() {
       for (const s of servers) { try { s.close(() => {}); } catch (_) {} }
       for (const d of repos) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (_) {} }
+    },
+
+    /** Run the product CLI (bin/plan.js) from the target build; returns {status,stdout,stderr}. */
+    runCli(args, env) {
+      const cp = require("node:child_process");
+      const repo = makeRepo(); repos.push(repo);
+      return cp.spawnSync(process.execPath, ["bin/plan.js", ...args], {
+        cwd: mod.root, encoding: "utf8",
+        env: Object.assign({}, process.env, { REPO_ROOT: repo }, env || {}),
+        timeout: 10000,
+      });
     },
   };
   return sut;
