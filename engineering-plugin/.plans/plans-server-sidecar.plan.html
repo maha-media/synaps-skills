@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="engplan-schema" content="engplan/1">
+<title>Plans Server as On-Demand Repo-Singleton Sidecar</title>
+<link rel="stylesheet" href="/_assets/plan.css">
+<script defer src="/_assets/engplan.js"></script>
+<script defer src="/_assets/md.js"></script>
+<script defer src="/_assets/sanitize.js"></script>
+<script defer src="/_assets/plan.js"></script>
+<script>window.addEventListener("error",function(){},true);</script>
+</head>
+<body>
+<script id="plan" type="application/json">
+{
+  "schema": "engplan/1",
+  "kind": "plan",
+  "slug": "plans-server-sidecar",
+  "title": "Plans Server as On-Demand Repo-Singleton Sidecar",
+  "status": "in_progress",
+  "convergence": "none",
+  "created_at": "2026-06-26T01:00:00.000Z",
+  "updated_at": "2026-06-26T01:00:00.000Z",
+  "sections": [
+    {
+      "id": "objective",
+      "heading": "Objective",
+      "type": "prose",
+      "md": "Turn the plans server from a **manually-run foreground process** (today: `plan serve` in a tmux window, never exits) into an **on-demand, repo-singleton sidecar** an orchestrator can spawn with one idempotent call.\n\n**Two hard requirements:**\n1. **Spawn on demand** \u2014 an orchestrator runs one command and gets back a live `{url, token}`; it does not babysit a foreground process or a dedicated tmux window.\n2. **Exactly one server per repo** \u2014 concurrent/ repeated spawns must converge on a single running instance. Re-invoking returns the *existing* server; a crashed/stale instance is detected and replaced; nothing leaks duplicate ports.\n\n**Coder:** tmux agent in pane `27:0.1` (model: session `claude-opus-4-8`). **Orchestrator:** plans, reviews, steers, verifies \u2014 never writes product code. Node stdlib only, loopback-only, token-gated."
+    },
+    {
+      "id": "current-state",
+      "heading": "Current state & gap",
+      "type": "prose",
+      "md": "`bin/plan.js serve` calls `startServer` \u2192 `createServer().listen(0,'127.0.0.1')` and prints the URL; it blocks forever. `plan new` / `plan open` do the same inline, so every invocation spins up a **new** server on a **new** ephemeral port \u2014 N invocations = N servers. The Synaps extension (`runStdioExtension`) already lazily starts one HTTP server per *session* via the `plan/serve` RPC, but there is **no repo-scoped coordination**: two sessions or two orchestrators on the same repo each get their own server. There is no health endpoint, no server record, no stop command, no stale-instance detection."
+    },
+    {
+      "id": "design",
+      "heading": "Design \u2014 repo-singleton lifecycle",
+      "type": "prose",
+      "md": "A small lifecycle manager keyed by **repo root**, backed by a gitignored **server record** and an atomic **lock**:\n\n- **Server record** `.plans/.server.json` (gitignored): `{ pid, port, token, url, started_at, plans_dir }`, written atomically by the daemon *after* it is listening.\n- **`ensureServer(repoRoot)` (idempotent discover-or-spawn):**\n  1. Read the record. If `pid` is **alive** AND `GET /api/health` answers with the matching token \u2192 **reuse** \u2192 return `{url, token, reused:true}`.\n  2. Otherwise acquire an `O_EXCL` lock `.plans/.server.lock`; **re-check** the record under the lock (double-checked locking) \u2014 if a peer just won, reuse it.\n  3. Spawn a **detached** daemon (`node bin/plan.js __daemon`, `detached:true`, `stdio:'ignore'`, `.unref()`), bound to a loopback ephemeral port. The daemon writes the record once listening and removes it on `SIGTERM`/exit. Parent polls for the record (\u2264 ~3 s) then returns `{url, token, reused:false}`. Release the lock.\n- **Stale handling:** record present but `pid` dead \u2192 reap the record and respawn. `pid` alive but health fails (possible pid reuse) \u2192 treat as down, respawn; never blind-kill an unverified pid.\n- **Health:** new `GET /api/health` \u2192 token-gated `{ ok:true, pid, started_at, plans_dir }` (cheap, no plan I/O).\n- **Stop:** `stopServer(repoRoot)` reads the record, `SIGTERM`s the pid, removes the record.\n\nAll of this is loopback-only and token-gated exactly as today; no new network surface, no external deps."
+    },
+    {
+      "id": "decision-lifetime",
+      "heading": "OPEN QUESTION \u2014 daemon lifetime & sidecar registration",
+      "type": "prose",
+      "md": "**Two coupled calls I want your decision on before the coder starts S0.**\n\n**(1) Lifetime model.**\n- **Option A \u2014 detached persistent daemon (recommended).** The server outlives the spawning session and is *shared across all sessions/orchestrators on that repo*. Lifecycle: explicit `plan down` + an **idle auto-shutdown** (no requests for N minutes \u2192 self-exit, record removed). *Pro:* true per-repo singleton; survives session restarts; matches \"one server per repo.\" *Con:* a background process you must reason about (mitigated by idle-timeout + `plan status`/`plan down`).\n- **Option B \u2014 session-bound.** The server dies with the process/session that spawned it. *Pro:* no lingering daemon. *Con:* not actually shared across sessions \u2014 re-spawns per session; weaker singleton.\n\n**(2) Formal Synaps sidecar entry (`provides.sidecar`, protocol v2).** Add a manifest sidecar with a `plans` lifecycle command that, on `trigger`, calls `ensureServer` and emits the URL via a `status`/`insert_text` frame \u2014 **in addition to** the CLI? Or ship the CLI surface now and defer the manifest sidecar entry?\n\n**My recommendation: A + add the sidecar entry.** Option A is the only model that satisfies \"one server per repo\" across sessions; the CLI `plan up/down/status` is the workhorse and the `provides.sidecar` entry gives orchestrators the official spawn surface. **S0\u2013S2 are written for Option A**; if you pick B, S0 drops the idle-timeout + detach and binds lifetime to the parent. S5 (sidecar manifest) is gated on call (2). Answer via the Plan Inbox or just tell me A/B and yes/defer on the sidecar entry."
+    },
+    {
+      "id": "convergence",
+      "heading": "Convergence mode",
+      "type": "prose",
+      "md": "`convergence: none`, but **concurrency is the headline risk** \u2014 the singleton guarantee lives or dies on race-safe locking and stale detection. S2 is a dedicated concurrency/stale test task and S6 is a mandatory unattended harness that hammers ensureServer in parallel. If review finds the race handling shaky, escalate to `informed`."
+    },
+    {
+      "id": "task-S0",
+      "heading": "S0 \u2014 Lifecycle core: ensureServer / stopServer / status (pending decision)",
+      "type": "task",
+      "state": "blocked",
+      "md": "**Blocked on the OPEN QUESTION.** New `engineering-plugin/lib/server_lifecycle.js`:\n- `serverRecordPath`, `readRecord`, `writeRecord` (atomic), `isAlive(pid)` (`process.kill(pid,0)`), `health(url, token, timeoutMs)`.\n- `ensureServer(repoRoot, opts)` \u2014 discover-or-spawn per the Design section, race-safe via `.plans/.server.lock` (O_EXCL) + double-checked record read; detached daemon spawn (Option A) or parent-bound (Option B).\n- `stopServer(repoRoot)`, `serverStatus(repoRoot)` \u2192 `{ state: 'running'|'stale'|'down', ...record }`.\n- Add a `__daemon` entry to `bin/plan.js`: createServer\u2192listen\u2192write record\u2192clean up record on SIGTERM/exit; **idle auto-shutdown** if Option A.\n- Add `GET /api/health` to `extensions/plans_server.js` (token-gated, no plan I/O).",
+      "acceptance": [
+        "ensureServer returns {url, token} and a single server answers /api/health with the token",
+        "Second ensureServer on the same repo returns the SAME port/token (reused:true), spawns nothing new",
+        "Stale record (pid dead) is reaped and a new server spawned",
+        "stopServer SIGTERMs the pid and removes the record; serverStatus then reports 'down'",
+        "GET /api/health is token-gated (401 without token) and does no plan I/O"
+      ]
+    },
+    {
+      "id": "task-S1",
+      "heading": "S1 \u2014 CLI surface: plan up / down / status; rewire new/open",
+      "type": "task",
+      "state": "blocked",
+      "md": "In `bin/plan.js`: add `plan up` (idempotent `ensureServer`, print `url`/`token`, return immediately), `plan down` (`stopServer`), `plan status` (`serverStatus`, human-readable). Rewire `plan new` and `plan open` to use `ensureServer` (spawn-or-reuse, open browser, return) instead of the blocking foreground `startServer`. Keep `plan serve` as an explicit **foreground/debug** mode (documented as non-singleton).",
+      "acceptance": [
+        "plan up prints url+token and exits 0 without blocking; second plan up reuses (same port)",
+        "plan down stops the server; plan status reflects running/down accurately",
+        "plan open <slug> reuses the singleton (no new port) and opens the browser",
+        "plan serve still works as a foreground debug server (documented)"
+      ],
+      "deps": [
+        "task-S0"
+      ]
+    },
+    {
+      "id": "task-S2",
+      "heading": "S2 \u2014 Concurrency & stale-instance tests (the singleton proof)",
+      "type": "task",
+      "state": "blocked",
+      "md": "The core guarantee under test. Add `test/server/server_lifecycle.test.js`:\n- **Parallel ensure:** fire K concurrent `ensureServer` calls (Promise.all / child procs) \u2192 exactly ONE server (one pid, one port); the rest reuse. Assert a single record and one live listener.\n- **Stale reap:** write a record with a bogus/dead pid \u2192 ensureServer respawns and overwrites.\n- **Healthy reuse:** ensure twice \u2192 identical port/token, no respawn.\n- **Lock contention:** simulate a held lock \u2192 ensure waits/retries then converges (no duplicate).\nProvide a captured RED run (e.g. against a deliberately non-locking stub) then GREEN. Clean up all spawned daemons in afterEach.",
+      "acceptance": [
+        "K concurrent ensureServer calls yield exactly one pid/port (asserted)",
+        "Stale (dead-pid) record triggers exactly one respawn",
+        "Healthy reuse path does not spawn a second process",
+        "No orphaned daemons after the suite (afterEach reaps)"
+      ],
+      "deps": [
+        "task-S0"
+      ]
+    },
+    {
+      "id": "cp-1",
+      "heading": "Checkpoint \u2014 singleton core green",
+      "type": "criteria",
+      "md": "Durable artifact: a commit with S0\u2013S2 and a green suite, proving the repo-singleton guarantee under concurrency. Reconcile the Plan Inbox before continuing.",
+      "criteria": [
+        "Decision recorded (lifetime A/B, sidecar yes/defer); S0 reflects it",
+        "S2 concurrency + stale tests present with captured red\u2192green",
+        "Full suite green: node --test \"test/**/*.test.js\""
+      ]
+    },
+    {
+      "id": "task-S3",
+      "heading": "S3 \u2014 gitignore the server record + lock",
+      "type": "task",
+      "state": "blocked",
+      "md": "Add `.server.json` and `.server.lock` to `PLANS_GITIGNORE_PATTERNS` in `lib/store.js` (they live in `.plans/`, are runtime-only, must never be committed). Update the dogfood `.plans/.gitignore` managed block. Verify `git status` stays clean after `plan up`/`plan down`.",
+      "acceptance": [
+        ".server.json and .server.lock added to the managed gitignore block",
+        "git status clean after plan up + plan down (no newly-tracked runtime files)",
+        "Existing gitignore tests still green (managed-block merge intact)"
+      ],
+      "deps": [
+        "task-S0"
+      ]
+    },
+    {
+      "id": "task-S4",
+      "heading": "S4 \u2014 extension RPC becomes singleton-aware",
+      "type": "task",
+      "state": "blocked",
+      "md": "Rewire `runStdioExtension`'s `plan/serve` RPC (and add `plan/down`, `plan/status`) to go through `ensureServer`/`stopServer`/`serverStatus` so the Synaps extension shares the same repo-singleton as the CLI \u2014 a session and a CLI orchestrator on one repo hit ONE server. Preserve the existing initialize/hook/shutdown handshake.",
+      "acceptance": [
+        "plan/serve RPC returns the singleton url/port (same as CLI plan up)",
+        "plan/down and plan/status RPCs added and exercised in a test",
+        "initialize/hook.handle/shutdown handshake unchanged (existing tests green)"
+      ],
+      "deps": [
+        "task-S0"
+      ]
+    },
+    {
+      "id": "task-S5",
+      "heading": "S5 \u2014 provides.sidecar manifest entry (gated on decision)",
+      "type": "task",
+      "state": "blocked",
+      "md": "**Only if the human says include the sidecar entry.** Add a `provides.sidecar` block (protocol v2) to `.synaps-plugin/plugin.json` with a `plans` lifecycle command, plus a thin `bin/plans-sidecar.js` that speaks the v2 frames: emit `hello` on start; on `trigger{name:'plans'}` call `ensureServer` and emit a `status`/`insert_text` frame carrying the URL; on `shutdown` exit cleanly (leave the daemon running per Option A, or stop it per Option B). Validate with `plugin-maker lint` if available. If the human says defer \u2192 mark this task done with a one-line 'deferred' note.",
+      "acceptance": [
+        "provides.sidecar (protocol 2) present with a 'plans' lifecycle command (or task explicitly deferred)",
+        "bin/plans-sidecar.js emits hello + a URL-bearing status/insert_text on trigger (unit-tested via stdio frames)",
+        "Manifest still valid (plugin-maker lint clean if available)"
+      ],
+      "deps": [
+        "task-S0",
+        "task-S1"
+      ]
+    },
+    {
+      "id": "task-S6",
+      "heading": "S6 \u2014 Unattended sidecar harness",
+      "type": "task",
+      "state": "blocked",
+      "md": "Mandatory harness (`test/harness/plans_sidecar.js`, wired as an npm script): headlessly proves the whole lifecycle with NO human in the loop \u2014 `plan up` spawns one server; K parallel ensures stay singleton; `/api/health` answers; a killed daemon is reaped and respawned; `plan down` stops it and leaves the tree clean; (Option A) idle-timeout self-exit observed within a shortened test window. Emit a clear red\u2192green summary and reap every spawned process on exit.",
+      "acceptance": [
+        "One command runs the full lifecycle headlessly and exits 0",
+        "Asserts singleton under parallel spawn + stale respawn + clean stop",
+        "No orphaned daemons or dirty tree after the run; full suite green (count reported)"
+      ],
+      "deps": [
+        "task-S0",
+        "task-S1",
+        "task-S2",
+        "task-S3",
+        "task-S4"
+      ]
+    },
+    {
+      "id": "gate-land",
+      "heading": "Gate \u2014 review & land",
+      "type": "gate",
+      "approval": "none",
+      "md": "S0\u2013S6 green (S5 per decision), suite green, no orphaned daemons, tree clean. Orchestrator reviews the five-axis diff (special attention to the race-safe locking and stale detection), lands `feat/plans-server-sidecar` to `main`, pushes `origin`+`gitlab` in parity, and re-syncs the installed plugin (`lib/`, `bin/`, `extensions/`, manifest)."
+    }
+  ]
+}
+</script>
+<div id="app">Loading… open via the Plans server for live mode.</div>
+<script>if(!window.PlanRenderer){var b=document.createElement("script");b.src="./_assets/plan.js";document.head.appendChild(b);}</script>
+</body>
+</html>
