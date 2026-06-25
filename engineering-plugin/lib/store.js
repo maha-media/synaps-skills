@@ -24,11 +24,38 @@ function allowedWriteTarget(repoRoot, filename) {
   const plansDir = plansDirOf(repoRoot);
   const target = safeRealpath(plansDir, filename);
   if (!isInside(plansDir, target)) throw new Error("write escapes .plans/");
+  ensurePlansGitignore(repoRoot);
   return target;
 }
 
 function eventsFile(slug) { return slug + ".events.json"; }
 function notesFile(slug) { return slug + ".notes.json"; }
+
+// Runtime artifacts the plans server rewrites continuously. Self-confined to
+// .plans/ so every project that uses the engineering toolkit is correct by
+// default — no root .gitignore edits required. Plan documents (*.plan.html)
+// and _assets/ stay tracked intentionally.
+const PLANS_GITIGNORE = [
+  "# Engineering plugin runtime artifacts — auto-generated. Do not commit.",
+  "# Plan documents (*.plan.html) and _assets/ stay tracked.",
+  "agents.json",
+  "*.events.json",
+  "*.notes.json",
+  "*.oracle.jsonl",
+  "*.tmp-*",
+  "*.lock",
+  "",
+].join("\n");
+
+/** Idempotently ensure .plans/.gitignore exists. Cheap stat on the happy path. */
+function ensurePlansGitignore(repoRoot) {
+  const gi = path.join(plansDirOf(repoRoot), ".gitignore");
+  try {
+    if (fs.existsSync(gi)) return;
+    fs.mkdirSync(path.dirname(gi), { recursive: true });
+    fs.writeFileSync(gi, PLANS_GITIGNORE);
+  } catch (_) { /* best-effort; never block a write on ignore scaffolding */ }
+}
 
 function readJsonArray(file) {
   try {
@@ -151,6 +178,6 @@ function respondToEvent(repoRoot, slug, eventId, resp, opts) {
 }
 
 module.exports = {
-  DEFAULTS, plansDirOf, eventsFile, notesFile, allowedWriteTarget,
+  DEFAULTS, plansDirOf, eventsFile, notesFile, allowedWriteTarget, ensurePlansGitignore,
   readNotes, appendEvent, writeEvents, respondToEvent, findEvent, atomicWrite, genId,
 };

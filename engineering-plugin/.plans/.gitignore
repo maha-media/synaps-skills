@@ -1,0 +1,8 @@
+# Engineering plugin runtime artifacts — auto-generated. Do not commit.
+# Plan documents (*.plan.html) and _assets/ stay tracked.
+agents.json
+*.events.json
+*.notes.json
+*.oracle.jsonl
+*.tmp-*
+*.lock

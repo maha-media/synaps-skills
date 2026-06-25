@@ -53,6 +53,7 @@ function planNew(repoRoot, kind, slug, opts) {
   const plansDir = path.join(repoRoot, ".plans");
   const assetsOut = path.join(plansDir, "_assets");
   fs.mkdirSync(assetsOut, { recursive: true });
+  store.ensurePlansGitignore(repoRoot); // keep runtime artifacts out of git from the start
   // copy fallback assets once (static file:// support, spec §4.4/§4.5)
   for (const a of FALLBACK_ASSETS) {
     try { fs.copyFileSync(path.join(PLUGIN_DIR, "assets", a), path.join(assetsOut, a)); } catch (_) {}
