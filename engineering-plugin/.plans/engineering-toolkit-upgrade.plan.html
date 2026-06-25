@@ -21,7 +21,7 @@
   "status": "in_progress",
   "convergence": "none",
   "created_at": "2026-06-25T19:30:28.675Z",
-  "updated_at": "2026-06-25T19:30:28.675Z",
+  "updated_at": "2026-06-25T19:55:00.000Z",
   "sections": [
     {
       "id": "objective",
@@ -45,7 +45,7 @@
       "id": "task-PV1",
       "heading": "P-V1 \u2014 Exempt /_assets/* from the token gate",
       "type": "task",
-      "state": "todo",
+      "state": "done",
       "md": "In `engineering-plugin/extensions/plans_server.js`, move the `/_assets/` branch (currently lines 140\u2013142) to run **before** the token gate (line 136), or short-circuit `checkToken` for `pathname.startsWith(\"/_assets/\")`. Preserve `safeRealpath` + `isInside` confinement. Do **not** exempt any `/api/*` or `/plan/*` route.",
       "acceptance": [
         "GET /_assets/plan.js returns 200 WITHOUT a token",
@@ -57,7 +57,7 @@
       "id": "task-PV2",
       "heading": "P-V2 \u2014 Token from URL in renderer (CSP-safe)",
       "type": "task",
-      "state": "todo",
+      "state": "done",
       "md": "In `engineering-plugin/assets/plan.js`, add a token resolver used by both the notes fetch (~line 120) and the SSE subscribe (~line 211): use the injected global if present, else `new URLSearchParams(window.location.search).get('token')`, else `ctx.token`, else empty. Must remain Node-test-safe (guard `typeof window`).",
       "acceptance": [
         "Opening /plan/<slug>?token=T hydrates #app",
@@ -69,7 +69,7 @@
       "id": "task-PV3",
       "heading": "P-V3 \u2014 Red\u2192green regression tests",
       "type": "task",
-      "state": "todo",
+      "state": "done",
       "md": "Add tests proving both fixes, with a captured RED run first:\n- server test: `/_assets/plan.js` returns 200 without token; `/api/plans` still 401 without token.\n- renderer test: token resolver returns the `?token=` value when the global is unset (inject a fake `window.location`).",
       "acceptance": [
         "Show failing run on pre-fix code (red proof)",
@@ -81,7 +81,7 @@
       "id": "task-PV4",
       "heading": "P-V4 \u2014 Live-render verification + browser open",
       "type": "task",
-      "state": "todo",
+      "state": "done",
       "md": "Orchestrator restarts the server, confirms all four `/_assets/*.js` return 200 unauthenticated, confirms the rendered `/plan/<slug>` hydrates (no lingering \"Loading\u2026\"), then `plan serve` + opens the browser so the human sees the live plan.",
       "acceptance": [
         "Human confirms the plan renders live in a browser"
@@ -98,8 +98,8 @@
       "id": "gate-viewer",
       "heading": "Gate \u2014 Viewer live",
       "type": "gate",
-      "approval": "needs-human-review",
-      "md": "P-V1..P-V4 green and the human has seen the plan render live in a browser. Unblocks Phase 2 (P-S*)."
+      "approval": "approved",
+      "md": "P-V1..P-V4 green and the human has seen the plan render live in a browser. Unblocks Phase 2 (P-S*).\n\n**\u2705 VERIFIED 2026-06-25:** assets serve 200 token-free, /api still 401, headless hydration 5/5 sections, and the human confirmed the live render in a browser. Phase 2 (P-S*) unblocked."
     }
   ]
 }
