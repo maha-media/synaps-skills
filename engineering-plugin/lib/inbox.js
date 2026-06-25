@@ -10,13 +10,19 @@ const EngPlan = require("../assets/engplan.js");
 // unresolved: open/acknowledged comment|request_change|clarify
 // needs_review: sections with approval==needs-human-review + open `approve` requests
 function isOpenish(ev) { return ev.status === "open" || ev.status === "acknowledged"; }
+// A block stays "active" (halts dependents, counts as blocking) until it is
+// resolved to a terminal state (incorporated|rejected|deferred). The non-terminal
+// agent_status "blocked" means the agent acknowledged it as a real stop (§3.4).
+function isActiveBlock(ev) {
+  return ev.type === "block" && !EngPlan.isTerminal(ev.status);
+}
 
 function computeAttention(events, plan) {
   let blocking = 0, unresolved = 0, needs_review = 0, new_criteria = 0;
   (events || []).forEach((ev) => {
+    if (ev.type === "block") { if (isActiveBlock(ev)) blocking++; return; }
     if (!isOpenish(ev)) return;
-    if (ev.type === "block") blocking++;
-    else if (ev.type === "comment" || ev.type === "request_change" || ev.type === "clarify") unresolved++;
+    if (ev.type === "comment" || ev.type === "request_change" || ev.type === "clarify") unresolved++;
     else if (ev.type === "approve") needs_review++;
     else if (ev.type === "add_acceptance_criterion") new_criteria++;
   });
@@ -29,11 +35,11 @@ function computeAttention(events, plan) {
   };
 }
 
-// Sections that currently carry an open/acknowledged block.
+// Sections that currently carry an active block.
 function blockedSections(events) {
   const set = new Set();
   (events || []).forEach((ev) => {
-    if (ev.type === "block" && isOpenish(ev)) set.add(ev.section_id);
+    if (isActiveBlock(ev)) set.add(ev.section_id);
   });
   return set;
 }
@@ -126,5 +132,5 @@ function defaultEvaluate(ev, plan) {
 }
 
 module.exports = {
-  computeAttention, blockedSections, haltedTasks, canStart, reconcile, defaultEvaluate,
+  computeAttention, blockedSections, haltedTasks, canStart, reconcile, defaultEvaluate, isActiveBlock,
 };

@@ -5,7 +5,7 @@
   "description": "HTML Plan Ecosystem — plans-server extension, renderer, and headless harness (Node stdlib only, no network install).",
   "type": "commonjs",
   "scripts": {
-    "test": "node --test test/",
+    "test": "node --test \"test/**/*.test.js\"",
     "harness": "node test/harness/cli.js",
     "e2e": "node test/harness/e2e.js"
   },
