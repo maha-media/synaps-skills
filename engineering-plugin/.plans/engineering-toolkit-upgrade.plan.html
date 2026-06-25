@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="engplan-schema" content="engplan/1">
+<title>Engineering Toolkit Upgrade — Live Viewer Fix + Skill Improvements</title>
+<link rel="stylesheet" href="/_assets/plan.css">
+<script defer src="/_assets/engplan.js"></script>
+<script defer src="/_assets/md.js"></script>
+<script defer src="/_assets/sanitize.js"></script>
+<script defer src="/_assets/plan.js"></script>
+<script>window.addEventListener("error",function(){},true);</script>
+</head>
+<body>
+<script id="plan" type="application/json">
+{
+  "schema": "engplan/1",
+  "kind": "plan",
+  "slug": "engineering-toolkit-upgrade",
+  "title": "Engineering Toolkit Upgrade \u2014 Live Viewer Fix + Skill Improvements",
+  "status": "in_progress",
+  "convergence": "none",
+  "created_at": "2026-06-25T19:30:28.675Z",
+  "updated_at": "2026-06-25T19:55:00.000Z",
+  "sections": [
+    {
+      "id": "objective",
+      "heading": "Objective",
+      "type": "prose",
+      "md": "Make the HTML Plan Ecosystem **actually viewable in a browser**, then use that working live view to drive a quality upgrade of the engineering toolkit skills.\n\n**Coder:** tmux agent in pane `27:0.1`. **Orchestrator:** plans, reviews, steers, verifies \u2014 never writes product code.\n\nPhase 1 (P-V*) unblocks the viewer (the page currently sits forever on _\"Loading\u2026 open via the Plans server for live mode.\"_). Phase 2 (P-S*) improves the remaining skills."
+    },
+    {
+      "id": "decision-rootcause",
+      "heading": "Root cause of the \"Loading\u2026\" stall",
+      "type": "prose",
+      "md": "The renderer never runs because of a **self-inconsistent security design** in `extensions/plans_server.js`:\n\n1. **Assets are token-gated (primary bug).** The token gate at **line 136** runs for *all* routes, including `/_assets/*` (served at line 140). The page's asset script tags carry **no token**, so every renderer script returns **HTTP 401**. Verified: `GET /_assets/plan.js` \u2192 401; with `?token=` \u2192 200.\n2. **Token delivered via a CSP-blocked inline script (secondary bug).** The token is injected as an inline script setting `window.__PLAN_TOKEN__` (**line 109**), but the CSP at **line 71** is `script-src 'self'` with **no `'unsafe-inline'`**, so the browser blocks it \u2192 the global is never set \u2192 API/SSE calls (`assets/plan.js` ~120, ~211) would 401 even if assets loaded.\n\nBoth must be fixed for live mode to work."
+    },
+    {
+      "id": "decision-fix",
+      "heading": "Fix approach",
+      "type": "prose",
+      "md": "**Exempt static assets from auth; deliver the token without inline JS.**\n\n- **Fix A:** Serve `/_assets/*` **before** the token gate (static renderer code is non-sensitive: JS/CSS, identical for every viewer, no plan data). Keep path-confinement (`safeRealpath`/`isInside`) intact.\n- **Fix B:** Make `assets/plan.js` derive the token from `window.location.search` (`?token=`) as a fallback when the injected global is unset \u2014 the page URL already carries it, so no inline script is needed and CSP stays strict. Keep the existing global path as primary.\n\n**Rejected:** adding `'unsafe-inline'` to CSP (weakens the XSS posture we deliberately built); per-response CSP nonce (more moving parts than needed)."
+    },
+    {
+      "id": "task-PV1",
+      "heading": "P-V1 \u2014 Exempt /_assets/* from the token gate",
+      "type": "task",
+      "state": "done",
+      "md": "In `engineering-plugin/extensions/plans_server.js`, move the `/_assets/` branch (currently lines 140\u2013142) to run **before** the token gate (line 136), or short-circuit `checkToken` for `pathname.startsWith(\"/_assets/\")`. Preserve `safeRealpath` + `isInside` confinement. Do **not** exempt any `/api/*` or `/plan/*` route.",
+      "acceptance": [
+        "GET /_assets/plan.js returns 200 WITHOUT a token",
+        "GET /api/plans WITHOUT token still returns 401",
+        "Path confinement preserved (../ escapes still 403)"
+      ]
+    },
+    {
+      "id": "task-PV2",
+      "heading": "P-V2 \u2014 Token from URL in renderer (CSP-safe)",
+      "type": "task",
+      "state": "done",
+      "md": "In `engineering-plugin/assets/plan.js`, add a token resolver used by both the notes fetch (~line 120) and the SSE subscribe (~line 211): use the injected global if present, else `new URLSearchParams(window.location.search).get('token')`, else `ctx.token`, else empty. Must remain Node-test-safe (guard `typeof window`).",
+      "acceptance": [
+        "Opening /plan/<slug>?token=T hydrates #app",
+        "SSE connects: network shows /api/stream?...&token=T \u2192 200",
+        "Node tests still pass (no window dependency at require time)"
+      ]
+    },
+    {
+      "id": "task-PV3",
+      "heading": "P-V3 \u2014 Red\u2192green regression tests",
+      "type": "task",
+      "state": "done",
+      "md": "Add tests proving both fixes, with a captured RED run first:\n- server test: `/_assets/plan.js` returns 200 without token; `/api/plans` still 401 without token.\n- renderer test: token resolver returns the `?token=` value when the global is unset (inject a fake `window.location`).",
+      "acceptance": [
+        "Show failing run on pre-fix code (red proof)",
+        "Green after fix",
+        "Full suite green: node --test"
+      ]
+    },
+    {
+      "id": "task-PV4",
+      "heading": "P-V4 \u2014 Live-render verification + browser open",
+      "type": "task",
+      "state": "done",
+      "md": "Orchestrator restarts the server, confirms all four `/_assets/*.js` return 200 unauthenticated, confirms the rendered `/plan/<slug>` hydrates (no lingering \"Loading\u2026\"), then `plan serve` + opens the browser so the human sees the live plan.",
+      "acceptance": [
+        "Human confirms the plan renders live in a browser"
+      ]
+    },
+    {
+      "id": "task-PS1",
+      "heading": "P-S1 \u2014 Skill upgrade scope (after viewer works)",
+      "type": "task",
+      "state": "todo",
+      "md": "Once the live view works, finalize the skill-improvement scope with the human and break it into checkpointed tasks: wire the 3 un-integrated skills (`code-review`, `security-review`, `type-driven-design`) into the new ecosystem (oracle verdict, Plan Inbox findings, harness mandate), plus a toolkit-wide consistency sweep. Drive each via the `27:0.1` coder agent, watched live in this plan."
+    },
+    {
+      "id": "gate-viewer",
+      "heading": "Gate \u2014 Viewer live",
+      "type": "gate",
+      "approval": "approved",
+      "md": "P-V1..P-V4 green and the human has seen the plan render live in a browser. Unblocks Phase 2 (P-S*).\n\n**\u2705 VERIFIED 2026-06-25:** assets serve 200 token-free, /api still 401, headless hydration 5/5 sections, and the human confirmed the live render in a browser. Phase 2 (P-S*) unblocked."
+    }
+  ]
+}
+</script>
+<div id="app">Loading… open via the Plans server for live mode.</div>
+<script>if(!window.PlanRenderer){var b=document.createElement("script");b.src="./_assets/plan.js";document.head.appendChild(b);}</script>
+</body>
+</html>

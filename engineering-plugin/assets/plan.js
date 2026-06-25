@@ -117,7 +117,7 @@
     };
     var f = (ctx.fetch) || (typeof fetch !== "undefined" ? fetch : null);
     if (f) {
-      var tk = (typeof window !== "undefined" && window.__PLAN_TOKEN__) || ctx.token || "";
+      var tk = resolveToken(ctx);
       return f("/api/notes" + (tk ? "?token=" + encodeURIComponent(tk) : ""), {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Plan-Token": tk },
@@ -203,12 +203,27 @@
 
   function cssEsc(s) { return String(s).replace(/["\\]/g, "\\$&"); }
 
+  // Token resolver shared by notes fetch + SSE subscribe (CSP-safe, no inline globals needed).
+  // Order: injected global → URL ?token= → ctx/opts.token → "".
+  function resolveToken(ctx) {
+    if (typeof window !== "undefined") {
+      if (window.__PLAN_TOKEN__) return window.__PLAN_TOKEN__;
+      try {
+        if (window.location && window.location.search) {
+          var qt = new URLSearchParams(window.location.search).get("token");
+          if (qt) return qt;
+        }
+      } catch (_) {}
+    }
+    return (ctx && ctx.token) || "";
+  }
+
   // P2-3: SSE live subscription
   function subscribeLive(slug, onPatch, opts) {
     opts = opts || {};
     var ES = opts.EventSource || (typeof EventSource !== "undefined" ? EventSource : null);
     if (!ES) return { close: function () {} };
-    var tk = (typeof window !== "undefined" && window.__PLAN_TOKEN__) || opts.token || "";
+    var tk = resolveToken(opts);
     var es = new ES("/api/stream?plan=" + encodeURIComponent(slug) + (tk ? "&token=" + encodeURIComponent(tk) : ""));
     es.onmessage = function (e) {
       var data; try { data = JSON.parse(e.data); } catch (_) { return; }
@@ -273,6 +288,7 @@
     renderSection: renderSection,
     applySectionPatch: applySectionPatch,
     subscribeLive: subscribeLive,
+    resolveToken: resolveToken,
     submitEvent: submitEvent,
     parseLegacyMarkdown: parseLegacyMarkdown,
     boot: boot,
