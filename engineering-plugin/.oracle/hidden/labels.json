@@ -1,0 +1,15 @@
+{
+  "note": "Category labels of hidden scenarios the Builder MAY see (spec §3 Builder row, Ambiguity B). Labels only — never inputs, expected values, or asserts.",
+  "labels": [
+    { "id": "malformed-engplan-safety", "label": "malformed engplan/1 yields a safe categorized error, never a crash", "category": "validation-error" },
+    { "id": "append-only-events", "label": "events are append-only; never removed or reordered", "category": "append-only-violation" },
+    { "id": "lifecycle-legality", "label": "only legal event-status transitions are accepted", "category": "illegal-transition" },
+    { "id": "write-confinement", "label": "every write stays inside .plans/", "category": "write-confinement-violation" },
+    { "id": "path-confinement", "label": "path traversal / symlink escape on asset + write paths is rejected", "category": "path-escape" },
+    { "id": "loopback-only", "label": "server binds 127.0.0.1 only", "category": "loopback-violation" },
+    { "id": "sse-cap", "label": "SSE connection cap returns 503 beyond the limit", "category": "too-many-streams" },
+    { "id": "endpoint-status-codes", "label": "endpoints return the contract-declared status codes", "category": "bad-request" },
+    { "id": "cap-enforcement", "label": "event/body caps are enforced", "category": "cap-exceeded" },
+    { "id": "no-stack-leak", "label": "internal errors return a generic error, no stack/source leak", "category": "internal-error" }
+  ]
+}

@@ -18,3 +18,16 @@ Audit of open-decision resolutions confirmed at each checkpoint (spec §9).
   dispatch missing both `agent` and `system_prompt`, resolves an absent `model` to the
   session model (`claude-opus-4-8`), and rejects any configuration where Designer is an
   ancestor/descendant of Builder.
+
+## C-O1
+- **#1 Sandbox substrate:** default = **zero-dep separate-process + isolated sandbox
+  root** (`tools/oracle/sandbox/run_hidden.js`). The hidden suite is copied into a temp
+  sandbox dir OUTSIDE the Builder worktree; a fresh child `node` runs it with stdio
+  discarded; the ONLY egress is a single schema-validated `oracle/1` verdict file; a
+  wall-clock timeout kills runaway suites. Docker substrate (`ORACLE_SANDBOX=container`)
+  presents the identical verdict-only interface and is available (docker present) but not
+  required by the threat model (agent optimizing for "tests pass", not root).
+- **Verdict-only egress (`oracle/1` verdict):** `tools/oracle/verdict.js` rejects any
+  verdict carrying test source, asserted values, raw inputs, hidden file paths, forbidden
+  keys, or out-of-taxonomy categories. Builder sees `.oracle/hidden/labels.json` (labels
+  only). Overfitting to public does not pass hidden (proven O1-5).
