@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="engplan-schema" content="engplan/1">
+<title>Plans .gitignore Auto-Scaffold — Hardening &amp; Follow-ups</title>
+<link rel="stylesheet" href="/_assets/plan.css">
+<script defer src="/_assets/engplan.js"></script>
+<script defer src="/_assets/md.js"></script>
+<script defer src="/_assets/sanitize.js"></script>
+<script defer src="/_assets/plan.js"></script>
+<script>window.addEventListener("error",function(){},true);</script>
+</head>
+<body>
+<script id="plan" type="application/json">
+{
+  "schema": "engplan/1",
+  "kind": "plan",
+  "slug": "plans-gitignore-hardening",
+  "title": "Plans .gitignore Auto-Scaffold \u2014 Hardening & Follow-ups",
+  "status": "in_progress",
+  "convergence": "none",
+  "created_at": "2026-06-26T00:00:00.000Z",
+  "updated_at": "2026-06-26T00:00:00.000Z",
+  "sections": [
+    {
+      "id": "objective",
+      "heading": "Objective",
+      "type": "prose",
+      "md": "Harden the `.plans/.gitignore` **auto-scaffold** shipped in `d2cc9af` so it is robust across all project states, fully tested, and self-documenting.\n\n**What already shipped (d2cc9af):** `store.ensurePlansGitignore()` writes a self-confined `.plans/.gitignore` (idempotent, never clobbers user content) covering `*.events.json`, `*.notes.json`, `agents.json`, `*.oracle.jsonl`, `*.tmp-*`, `*.lock`; called from `allowedWriteTarget` and `bin/plan.js` `planNew`. 419/419 tests green.\n\n**Coder:** tmux agent in pane `27:0.1` (model: session `claude-opus-4-8`). **Orchestrator:** plans, reviews, steers, verifies \u2014 never writes product code.\n\nThis plan closes the four follow-ups raised in the five-axis code review of that change."
+    },
+    {
+      "id": "review-findings",
+      "heading": "Code-review follow-ups being addressed",
+      "type": "prose",
+      "md": "From the post-merge review of `d2cc9af`:\n\n- \ud83d\udfe1 **No direct `planNew()` test** \u2014 line `bin/plan.js:56` (`ensurePlansGitignore`) is only covered transitively via `appendEvent`. Needs a dedicated assertion.\n- \ud83d\udfe1 **Existing projects are not migrated** \u2014 `ensurePlansGitignore` returns early when `.plans/.gitignore` already exists, so a project that already had a hand-written file never gains the runtime-artifact rules. \"Correct by default\" holds for *new* projects only.\n- \ud83d\udfe2 **Root `.gitignore` redundancy** \u2014 `engineering-plugin/.gitignore` still lists `.plans/*.events.json` / `.plans/*.oracle.jsonl`, now duplicated by the in-dir file.\n- \ud83d\udfe2 **Silent-failure path untested** \u2014 the `catch (_) {}` in `ensurePlansGitignore` is intentional (never block a write on ignore scaffolding) but has no regression proof."
+    },
+    {
+      "id": "decision-merge",
+      "heading": "OPEN QUESTION \u2014 migration semantics for existing .gitignore",
+      "type": "prose",
+      "md": "**This is the one decision I want your call on before the coder starts G1.**\n\nWhen a project **already has** a `.plans/.gitignore` (hand-written or from an older toolkit version), should the plugin *update* it to add the runtime-artifact rules, or leave it untouched?\n\n**Option A \u2014 Managed block (recommended).** Wrap the plugin's rules in delimited markers and merge idempotently:\n\n```\n# >>> engineering plans (managed \u2014 do not edit inside) >>>\nagents.json\n*.events.json\n*.notes.json\n*.oracle.jsonl\n*.tmp-*\n*.lock\n# <<< engineering plans (managed) <<<\n```\nOn each call: if no file \u2192 write file with the block; if file exists **without** the block \u2192 **append** the block (preserve all user lines); if the block exists but differs \u2192 replace only the block's interior. User content outside the markers is never touched.\n*Pro:* every project becomes correct, including upgrades. *Con:* the plugin now edits a file it didn't fully author (mitigated by strict marker confinement).\n\n**Option B \u2014 Leave existing files untouched (current behavior).** Only new projects get the rules; existing custom files are never modified.\n*Pro:* zero surprise. *Con:* upgrades silently miss the fix; the \ud83d\udfe1 finding stands.\n\n**My recommendation: Option A** \u2014 it actually delivers \"fix every project by default,\" and the managed-block markers make the edit auditable and reversible. **G1 is written for Option A**; if you pick B, G1 collapses to a no-op and we keep current behavior. Answer via the Plan Inbox (an open question event is posted) or just tell me."
+    },
+    {
+      "id": "convergence",
+      "heading": "Convergence mode",
+      "type": "prose",
+      "md": "`convergence: none`. Small, low-stakes, well-specified change to one boundary helper (`store.ensurePlansGitignore`) plus tests and a doc cleanup. No author/tester-bias risk that warrants the loop. Harness task (G5) still mandatory."
+    },
+    {
+      "id": "task-G1",
+      "heading": "G1 \u2014 Managed-block merge semantics (pending decision)",
+      "type": "task",
+      "state": "blocked",
+      "md": "**Blocked on the OPEN QUESTION above.** If **Option A**: rework `ensurePlansGitignore(repoRoot)` in `engineering-plugin/lib/store.js` to merge a delimited *managed block* rather than bail when the file exists:\n\n- Define `BEGIN`/`END` markers and build the block from the existing `PLANS_GITIGNORE` patterns.\n- No file \u2192 create with block. File without block \u2192 append block, preserving every existing line verbatim (including trailing newline behavior). File with block whose interior differs \u2192 replace only the interior between the markers. File with up-to-date block \u2192 no write (idempotent).\n- Keep the `try/catch` best-effort guard; never throw into a notes/events write.\n- Keep `*.plan.html` and `_assets/` tracked (never add them as rules).\n\nIf **Option B**: mark this task `done` with a one-line note that current behavior is retained, and proceed to G2.",
+      "acceptance": [
+        "Option A: existing .plans/.gitignore WITHOUT the block gains the managed block; all prior user lines preserved byte-for-byte",
+        "Option A: second call is a no-op (no rewrite, byte-identical file)",
+        "Option A: changing PLANS_GITIGNORE patterns updates only the block interior on next call",
+        "Never adds *.plan.html or _assets to the rules",
+        "ensurePlansGitignore still cannot throw (best-effort guard intact)"
+      ]
+    },
+    {
+      "id": "task-G2",
+      "heading": "G2 \u2014 Direct planNew() scaffold test",
+      "type": "task",
+      "state": "todo",
+      "md": "Add a test (suggest `test/server/plans_gitignore.test.js` or `test/server/commands.test.js`) that calls `planNew(repo, \"plan\", \"<slug>\", {title, sections})` and asserts `.plans/.gitignore` exists and ignores the runtime artifacts, while NOT ignoring `<slug>.plan.html`. Provide a captured RED run (temporarily stash the `planNew` call) then GREEN.",
+      "acceptance": [
+        "RED proof captured: test fails with the planNew ensure-call removed",
+        "GREEN: planNew scaffolds .plans/.gitignore with runtime patterns",
+        "Asserts <slug>.plan.html is NOT matched by any rule"
+      ],
+      "deps": []
+    },
+    {
+      "id": "task-G3",
+      "heading": "G3 \u2014 Silent-failure resilience test",
+      "type": "task",
+      "state": "todo",
+      "md": "Prove the best-effort guard: make `.plans/.gitignore` unwritable (e.g. create `.plans` then `chmod 0500` it, or point `repoRoot` at a path where the write fails) and assert that `ensurePlansGitignore` does **not** throw and that a subsequent `appendEvent` still succeeds. Skip cleanly if running as root (chmod no-op) \u2014 guard with an `fs.access` probe.",
+      "acceptance": [
+        "ensurePlansGitignore returns without throwing when the write fails",
+        "appendEvent still persists the event when gitignore scaffolding fails",
+        "Test self-skips when chmod cannot restrict (root) rather than false-failing"
+      ],
+      "deps": []
+    },
+    {
+      "id": "task-G4",
+      "heading": "G4 \u2014 Remove redundant root .gitignore rules",
+      "type": "task",
+      "state": "todo",
+      "md": "In `engineering-plugin/.gitignore`, drop the now-duplicated `.plans/*.events.json`, `.plans/*.oracle.jsonl`, and `.plans/*.events.json`-style runtime entries that the in-dir `.plans/.gitignore` now owns. **Keep** `node_modules/`, `*.lock`, `.plans/*.tmp-*`, and the `.oracle/**` runtime entries (those are NOT covered by `.plans/.gitignore`). Verify `git status` stays clean after a plans-server run.",
+      "acceptance": [
+        "Redundant .plans/*.events.json / *.oracle.jsonl rules removed from root .gitignore",
+        ".oracle/** and non-.plans rules retained",
+        "git status clean after appendEvent + an oracle run (no newly-tracked runtime artifacts)"
+      ],
+      "deps": []
+    },
+    {
+      "id": "cp-1",
+      "heading": "Checkpoint \u2014 after G1..G4",
+      "type": "criteria",
+      "md": "Durable artifact: a commit on `feat/plans-gitignore-hardening` with G1 (per decision), G2, G3, G4 and a green suite. Reconcile the Plan Inbox before proceeding.",
+      "criteria": [
+        "Decision recorded (Option A or B) and G1 reflects it",
+        "G2+G3 tests present with captured red\u2192green",
+        "Root .gitignore cleaned (G4)",
+        "Full suite green: node --test \"test/**/*.test.js\""
+      ]
+    },
+    {
+      "id": "task-G5",
+      "heading": "G5 \u2014 Unattended harness proof",
+      "type": "task",
+      "state": "todo",
+      "md": "Mandatory harness task: a single script/test path that rebuilds and re-verifies the whole behavior **with no human in the loop** \u2014 covers new-project scaffold, existing-project migration (Option A) or no-op (Option B), silent-failure resilience, and the full suite. No human-in-the-loop steps exist in this feature, so nothing to simulate beyond filesystem fixtures. Emit a clear red\u2192green summary.",
+      "acceptance": [
+        "One command runs the full verification headlessly and exits 0",
+        "Output shows the red\u2192green deltas for G2 and G3",
+        "Full project suite green (count reported)"
+      ],
+      "deps": [
+        "task-G1",
+        "task-G2",
+        "task-G3",
+        "task-G4"
+      ]
+    },
+    {
+      "id": "gate-land",
+      "heading": "Gate \u2014 review & land to main",
+      "type": "gate",
+      "approval": "none",
+      "md": "G1..G5 green, suite green, tree clean, root .gitignore reconciled. Orchestrator reviews the diff (five-axis), then lands `feat/plans-gitignore-hardening` to `main` and pushes to `origin` + `gitlab` in parity. Installed plugin (`~/.synaps-cli/plugins/engineering`) re-synced (`lib/store.js`, `bin/plan.js`)."
+    }
+  ]
+}
+</script>
+<div id="app">Loading… open via the Plans server for live mode.</div>
+<script>if(!window.PlanRenderer){var b=document.createElement("script");b.src="./_assets/plan.js";document.head.appendChild(b);}</script>
+</body>
+</html>

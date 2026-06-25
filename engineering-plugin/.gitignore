@@ -11,5 +11,6 @@ node_modules/
 .oracle/verdicts/selfplay.verdict.json
 .oracle/reveal/commit_reveal.log
 .oracle/reveal/lineage.log
-.plans/*.oracle.jsonl
-.plans/*.events.json
+# NOTE: .plans/*.events.json and .plans/*.oracle.jsonl are intentionally NOT
+# listed here — they are owned by the auto-scaffolded .plans/.gitignore
+# (store.ensurePlansGitignore), so every project ignores them by default.

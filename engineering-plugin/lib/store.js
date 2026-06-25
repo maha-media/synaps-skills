@@ -34,26 +34,70 @@ function notesFile(slug) { return slug + ".notes.json"; }
 // Runtime artifacts the plans server rewrites continuously. Self-confined to
 // .plans/ so every project that uses the engineering toolkit is correct by
 // default — no root .gitignore edits required. Plan documents (*.plan.html)
-// and _assets/ stay tracked intentionally.
-const PLANS_GITIGNORE = [
-  "# Engineering plugin runtime artifacts — auto-generated. Do not commit.",
-  "# Plan documents (*.plan.html) and _assets/ stay tracked.",
+// and _assets/ stay tracked intentionally (never listed as rules).
+const PLANS_GITIGNORE_PATTERNS = [
   "agents.json",
   "*.events.json",
   "*.notes.json",
   "*.oracle.jsonl",
   "*.tmp-*",
   "*.lock",
-  "",
+];
+
+// Delimited managed block. The plugin owns ONLY the bytes between these markers
+// (interior + the marker lines themselves); everything outside is user content
+// and is preserved byte-for-byte. This lets existing projects gain the rules on
+// upgrade without the plugin clobbering a file it did not fully author.
+const MANAGED_BEGIN = "# >>> engineering plans (managed — do not edit inside) >>>";
+const MANAGED_END = "# <<< engineering plans (managed) <<<";
+const MANAGED_BLOCK = [MANAGED_BEGIN, ...PLANS_GITIGNORE_PATTERNS, MANAGED_END].join("\n");
+
+// Header preamble written above the block only when creating a brand-new file.
+const PLANS_GITIGNORE_HEADER = [
+  "# Engineering plugin runtime artifacts — auto-generated.",
+  "# Plan documents (*.plan.html) and _assets/ stay tracked.",
 ].join("\n");
 
-/** Idempotently ensure .plans/.gitignore exists. Cheap stat on the happy path. */
+/**
+ * Idempotently ensure .plans/.gitignore carries the managed runtime-artifact
+ * block (Option A — managed-block merge). Best-effort: never throws into a
+ * notes/events write.
+ *
+ *  - No file            → create with header preamble + managed block.
+ *  - File without block  → append the block, preserving every existing user
+ *                          line byte-for-byte.
+ *  - File with stale block → replace only the bytes between the markers.
+ *  - File with up-to-date block → no write (idempotent).
+ */
 function ensurePlansGitignore(repoRoot) {
   const gi = path.join(plansDirOf(repoRoot), ".gitignore");
   try {
-    if (fs.existsSync(gi)) return;
-    fs.mkdirSync(path.dirname(gi), { recursive: true });
-    fs.writeFileSync(gi, PLANS_GITIGNORE);
+    let content = null;
+    try { content = fs.readFileSync(gi, "utf8"); } catch (_) { content = null; }
+
+    if (content === null) {
+      // Brand-new file.
+      fs.mkdirSync(path.dirname(gi), { recursive: true });
+      fs.writeFileSync(gi, PLANS_GITIGNORE_HEADER + "\n" + MANAGED_BLOCK + "\n");
+      return;
+    }
+
+    const begIdx = content.indexOf(MANAGED_BEGIN);
+    const endMarkerIdx = content.indexOf(MANAGED_END);
+    if (begIdx !== -1 && endMarkerIdx !== -1 && endMarkerIdx > begIdx) {
+      // A complete managed block exists — operate only on its bytes.
+      const blockEnd = endMarkerIdx + MANAGED_END.length;
+      const current = content.slice(begIdx, blockEnd);
+      if (current === MANAGED_BLOCK) return; // up-to-date → no-op
+      const updated = content.slice(0, begIdx) + MANAGED_BLOCK + content.slice(blockEnd);
+      fs.writeFileSync(gi, updated);
+      return;
+    }
+
+    // No managed block — append it, preserving all existing bytes. Insert a
+    // single separating newline only when the file does not already end in one.
+    const sep = content.length && !content.endsWith("\n") ? "\n" : "";
+    fs.writeFileSync(gi, content + sep + MANAGED_BLOCK + "\n");
   } catch (_) { /* best-effort; never block a write on ignore scaffolding */ }
 }
 
