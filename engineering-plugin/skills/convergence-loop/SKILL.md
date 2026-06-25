@@ -385,3 +385,12 @@ Hardened rules layered on top of the base loop:
 
 Fix-loop feedback to the Builder describes **behavior gaps** (failure categories +
 which contract element), **never** hidden test source (leaking it defeats the holdout).
+
+## Checkpoint-and-yield (CAC)
+
+When context is tight, do **not** push through a checkpoint. Per
+checkpoint-aware-compaction §8 — *Checkpoint-and-yield*: land the commit, write
+the verdict, emit `checkpoint.reached`, write the resume token, then suspend.
+Compaction happens *between* checkpoints, never inside one. After compaction,
+continue from the resume token **without waiting for a human** unless
+`next_action` is explicitly human-gated.

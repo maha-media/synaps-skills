@@ -172,3 +172,15 @@ When the HTML Plan Ecosystem is in use (schema `engplan/1`):
 Run the command. Read the output. THEN claim the result.
 
 This is non-negotiable.
+
+## Checkpoint-and-yield (CAC)
+
+A checkpoint is **not "reached"** until all three of these hold (the safe-point
+precondition, per checkpoint-aware-compaction §8):
+
+1. its gate is asserted **green**, AND
+2. the working **tree is clean**, AND
+3. the **resume token is written** to disk.
+
+Until that triad is true, do not emit `checkpoint.reached` and do not permit
+compaction — the boundary is not durable yet.

@@ -253,3 +253,11 @@ Before starting implementation:
 - [ ] Automated build+test harness task set present (headless, simulates any human-in-the-loop steps)
 - [ ] Every planned coder dispatch resolves to `(agent | system_prompt)` and sets `model = explicit ?? session`
 - [ ] Dedicated worktree created and active (`git worktree list` shows it; `pwd` is inside it)
+
+## Checkpoint-and-yield (CAC)
+
+Every plan **MUST** declare a `checkpoints[]` array. Per checkpoint-aware-
+compaction §8, the checkpoints **are** the compaction schedule, so phases must
+be sized to land a **durable artifact at each checkpoint** — a commit, a verdict,
+a recorded decision. A phase that cannot land a durable artifact at its
+checkpoint is too large; split it.

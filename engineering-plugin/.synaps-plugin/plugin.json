@@ -39,6 +39,15 @@
       },
       {
         "hook": "on_session_end"
+      },
+      {
+        "hook": "checkpoint.reached"
+      },
+      {
+        "hook": "pre-compact"
+      },
+      {
+        "hook": "post-compact"
       }
     ],
     "config": [

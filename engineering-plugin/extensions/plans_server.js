@@ -25,6 +25,7 @@ const discovery = require("../lib/discovery.js");
 const inbox = require("../lib/inbox.js");
 const { watchPlans } = require("../lib/watch.js");
 const { Registry } = require("../lib/registry/index.js");
+const cacHooks = require("../lib/cac/hooks.js");
 
 const ASSET_TYPES = {
   ".js": "text/javascript; charset=utf-8",
@@ -208,6 +209,31 @@ function createServer(opts) {
           } catch (e) {
             const code = /cap exceeded|too large/.test(e.message) ? 413 : 400;
             return sendJson(res, code, { error: String(e.message) });
+          }
+        });
+      }
+      // --- CAC §7 checkpoint.reached producer (additive) ---
+      // Emits the §4 safe-point boundary event onto the existing SSE bus via the
+      // shared broadcastPlan producer. Reuses readBody/sendJson exactly like the
+      // other /api POST routes; does not touch openSse, the SSE cap, token, or
+      // write-confinement.
+      if (pathname === "/api/checkpoint" && req.method === "POST") {
+        return readBody(req, (err, body) => {
+          if (err) return sendJson(res, 413, { error: String(err.message) });
+          let raw; try { raw = JSON.parse(body); } catch (_) { return sendJson(res, 400, { error: "bad json" }); }
+          const slug = raw.slug || q.plan;
+          if (!EngPlan.validId(slug)) return sendJson(res, 400, { error: "bad plan" });
+          try {
+            const event = cacHooks.checkpointReachedEvent({
+              slug,
+              phase: raw.phase,
+              checkpoint: raw.checkpoint,
+              head_commit: raw.head_commit,
+            });
+            broadcastPlan(slug, event);
+            return sendJson(res, 200, event);
+          } catch (e) {
+            return sendJson(res, 400, { error: String(e.message) });
           }
         });
       }

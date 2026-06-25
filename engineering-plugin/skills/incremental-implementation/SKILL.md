@@ -200,3 +200,12 @@ After completing all increments for a task:
 - [ ] Feature works end-to-end as specified
 - [ ] No uncommitted changes remain
 - [ ] All commits live on the worktree branch, not on the integration branch directly
+
+## Checkpoint-and-yield (CAC)
+
+When context is tight, do **not** push through a checkpoint. Per
+checkpoint-aware-compaction §8 — *Checkpoint-and-yield*: land the commit, write
+the verdict, emit `checkpoint.reached`, write the resume token, then suspend.
+Compaction happens *between* checkpoints, never inside one. After compaction,
+continue from the resume token **without waiting for a human** unless
+`next_action` is explicitly human-gated.
