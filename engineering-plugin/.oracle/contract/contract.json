@@ -77,8 +77,8 @@
     { "method": "POST",   "path": "/api/agents",      "ok": 200, "json": true, "errors": [400] },
     { "method": "DELETE", "path": "/api/agents/<id>", "ok": 200, "json": true },
     { "method": "GET",    "path": "/api/agents/stream","ok": 200, "content_type": "text/event-stream", "errors": [503] },
-    { "method": "GET",    "path": "/api/stream",      "ok": 200, "content_type": "text/event-stream", "errors": [400, 503], "desc": "per-plan SSE; ?slug=" },
-    { "method": "GET",    "path": "/api/notes",       "ok": 200, "json": true, "errors": [400], "desc": "?slug=; returns {events,notes}" },
+    { "method": "GET",    "path": "/api/stream",      "ok": 200, "content_type": "text/event-stream", "errors": [400, 503], "desc": "per-plan SSE; ?plan=" },
+    { "method": "GET",    "path": "/api/notes",       "ok": 200, "json": true, "errors": [400], "desc": "?plan=; returns {events,notes}" },
     { "method": "POST",   "path": "/api/notes",       "ok": 200, "json": true, "errors": [400, 413], "desc": "append note; 413 on cap/too-large" },
     { "method": "POST",   "path": "/api/respond",     "ok": 200, "json": true, "errors": [400], "desc": "agent respond → incorporated/rejected/deferred + changed_sections + responded_at" },
     { "method": "POST",   "path": "/api/reconcile",   "ok": 200, "json": true, "errors": [400] }

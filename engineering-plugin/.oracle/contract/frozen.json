@@ -288,7 +288,7 @@
         400,
         503
       ],
-      "desc": "per-plan SSE; ?slug="
+      "desc": "per-plan SSE; ?plan="
     },
     {
       "method": "GET",
@@ -298,7 +298,7 @@
       "errors": [
         400
       ],
-      "desc": "?slug=; returns {events,notes}"
+      "desc": "?plan=; returns {events,notes}"
     },
     {
       "method": "POST",
@@ -379,6 +379,6 @@
     "internal-error",
     "crash"
   ],
-  "_hash": "sha256:4a3947e19da55019b8a79f26e6f61487068d6ea7b9028aceb14f45c15cfb3cc1",
-  "_frozen_at": "2026-06-25T14:23:36.919Z"
+  "_hash": "sha256:d07f2accd27bc527e8f7674afb7437ed464d7b87f4481be178ccc4cb1f9f3a80",
+  "_frozen_at": "2026-06-25T14:40:00.806Z"
 }

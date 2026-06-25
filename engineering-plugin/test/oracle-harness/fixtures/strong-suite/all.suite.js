@@ -30,10 +30,12 @@ module.exports = {
     t.check(r400.status === 400 || r400.status === 404, "bad-request");
     // SSE cap → 503 on the 2nd concurrent stream
     const port = srv.port;
-    const s1 = http.get({ host: "127.0.0.1", port, path: "/api/stream?slug=capx" });
+    const tok = srv.token;
+    const hdr = tok ? { "x-plan-token": tok } : {};
+    const s1 = http.get({ host: "127.0.0.1", port, path: "/api/stream?plan=capx", headers: hdr });
     await new Promise((res) => setTimeout(res, 100));
     const capCode = await new Promise((resolve) => {
-      const req = http.get({ host: "127.0.0.1", port, path: "/api/stream?slug=capy" }, (resp) => { resolve(resp.statusCode); resp.destroy(); });
+      const req = http.get({ host: "127.0.0.1", port, path: "/api/stream?plan=capy", headers: hdr }, (resp) => { resolve(resp.statusCode); resp.destroy(); });
       req.on("error", () => resolve(0));
     });
     t.check(capCode === 503, "too-many-streams");

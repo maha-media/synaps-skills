@@ -43,3 +43,15 @@ Audit of open-decision resolutions confirmed at each checkpoint (spec §9).
   against each mutant; kill-rate ≥ 0.8 required. A strong suite is ACCEPTED (10/10
   killed); a deliberately weak suite is REJECTED (0/10) — the oracle self-validates.
   Fuzz harness `tools/oracle/fuzz.js` is bounded and finds planted crashes.
+
+## C-O4
+- **#4 Differential twins policy:** ON-DEMAND by default; `alwaysOn` flag forces
+  always-on for designated risk areas (`tools/oracle/twins.js`). Twins are two
+  zero-contact Builder siblings (separate lineages under a neutral orchestrator,
+  asserted not-nested). Comparator `tools/oracle/twins_diff.js` runs contract-derived
+  probes over bounded generated inputs; a perturbed twin surfaces ≥1 divergence;
+  identical twins yield zero false positives. Divergence records carry probe+category+
+  audit_id only (no raw oracle values).
+- Note: during O4 the contract was re-frozen (controlled) to correct an observable
+  param (`/api/stream` + `/api/notes` use `?plan=`, not `?slug=`) — proves contract is
+  ground-truth and re-freeze is a controlled event, not an ad-hoc edit.

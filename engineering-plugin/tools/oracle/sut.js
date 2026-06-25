@@ -86,7 +86,10 @@ function createSut(opts) {
       const srv = mod.createServer(Object.assign({ repoRoot: repo, pluginDir: mod.root }, serverOpts || {}));
       await new Promise((res) => srv.listen(() => res()));
       servers.push(srv);
-      return { srv, repo, port: srv.port, request: (m, p, b, h) => httpReq(srv.port, m, p, b, h) };
+      // auto-attach the per-session token so grading suites exercise real routes
+      const tok = srv.token;
+      const request = (m, p, b, h) => httpReq(srv.port, m, p, b, Object.assign(tok ? { "x-plan-token": tok } : {}, h || {}));
+      return { srv, repo, port: srv.port, token: tok, request };
     },
 
     cleanup() {
