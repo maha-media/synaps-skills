@@ -1,0 +1,4 @@
+node_modules/
+.plans/agents.json
+.plans/*.tmp-*
+*.lock

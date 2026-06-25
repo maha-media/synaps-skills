@@ -1,0 +1,15 @@
+{
+  "name": "engineering-plans-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HTML Plan Ecosystem — plans-server extension, renderer, and headless harness (Node stdlib only, no network install).",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test test/",
+    "harness": "node test/harness/cli.js",
+    "e2e": "node test/harness/e2e.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
