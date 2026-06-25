@@ -1,6 +1,6 @@
 ---
 name: security-review
-description: Use before merging code that handles user input, secrets, auth, plugins, sidecars, shell commands, filesystem paths, network calls, or other external I/O.
+description: Use before merging code that handles user input, secrets, auth, plugins, sidecars, shell commands, filesystem paths, network calls, or other external I/O. Covers engineering-ecosystem controls — oracle write-segregation, verdict-only egress, commit-reveal ordering, and plans-server token/CSP/path confinement.
 ---
 
 # Security Review
@@ -79,6 +79,35 @@ If there is no meaningful trust boundary, say so and keep the review short.
 - Do not invent crypto.
 - Use constant-time comparison for secrets/tokens when equality leaks matter.
 - Use well-maintained libraries and safe defaults.
+
+### Engineering-ecosystem controls (oracle + plans-server)
+
+These are the adversarial-evaluation and live-viewer patterns proven in this
+plugin. Treat each as a fail-closed invariant:
+
+- **Write-segregation.** The builder cannot author its own oracle. Oracle tests
+  and verdicts under `.oracle/**` are write-segregated from the builder's
+  workspace — the entity under test has no write path to the tests that judge
+  it. (See the henhouse rule in **code-review**.)
+- **Verdict-only egress sandbox.** The oracle runner executes untrusted code in
+  a sandbox whose only output channel is the structured `oracle/1` verdict — no
+  arbitrary file, network, or stdout egress that could exfiltrate or smuggle a
+  pass.
+- **Commit-reveal ordering.** Enforce `commit < freeze < reveal`: the builder
+  commits its solution, the oracle freezes its independently-authored tests,
+  and only then are tests revealed/run. Reordering (revealing before freeze)
+  lets the builder overfit — reject any path that allows it.
+- **Plans-server controls.** Loopback-only bind (127.0.0.1), per-session token
+  on all data routes, strict CSP (`script-src 'self'`, no `unsafe-inline`), and
+  path confinement via `safeRealpath`/`isInside` for every served file.
+
+> **Worked example — token-gate / asset-401 bug.** The plans-server token gate
+> originally ran before the `/_assets/*` branch, so the browser's no-token
+> asset fetches returned 401 and the viewer hung on "Loading…". The fix served
+> static assets *before* the token gate while keeping `/api/*` and `/plan/*`
+> gated, and kept `safeRealpath`/`isInside` so traversal still 403s. Lesson:
+> **auth must not block non-sensitive static assets, but must gate all data
+> routes** — and relaxing the gate must not relax path confinement.
 
 ## Synaps-Specific Hot Spots
 
