@@ -377,8 +377,14 @@ function runStdioExtension() {
     const { id, method, params } = msg;
     switch (method) {
       case "initialize":
+        return reply(id, { protocol_version: 1, extension: "engineering", capabilities: [], name: "plans-server" });
       case "ping":
         return reply(id, { ok: true, name: "plans-server", protocol: 1 });
+      case "hook.handle":
+        // Lifecycle hooks (on_session_start / on_session_end) — no gating.
+        return reply(id, { action: "continue" });
+      case "shutdown":
+        return reply(id, { ok: true });
       case "plan/serve":
         return ensure((s) => reply(id, { url: s.url, port: s.port }));
       case "plan/list":
