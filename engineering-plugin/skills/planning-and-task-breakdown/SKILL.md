@@ -128,6 +128,63 @@ cd ../.worktrees/<repo>-<slug>
 
 The primary checkout stays clean on the integration branch. All implementation happens in the worktree. This is non-negotiable — see **worktrees-by-default** for the full discipline.
 
+### Step 7: Mandatory Harness Task Set
+
+**Every plan must include an automated build+test harness task set — a plan
+without it is incomplete.** This is not optional padding; it is the artifact
+that lets a machine rebuild and re-verify the feature unattended.
+
+The harness task set must:
+
+- Build and run the feature end-to-end with **no human in the loop**.
+- **Headlessly simulate any human-in-the-loop interactions** (approvals,
+  inbox steering, browser clicks) so the whole flow runs unattended.
+- Prove red→green for the feature's acceptance criteria.
+
+If the feature has any human-in-the-loop step, the plan names a task that
+simulates it programmatically. A plan that relies on a human to exercise the
+feature does not satisfy this rule.
+
+## HTML Plan Ecosystem integration
+
+When the HTML Plan Ecosystem is in use (schema `engplan/1`), planning emits a
+durable plan artifact:
+
+- The plan is published as `<slug>.plan.html` — a self-contained `engplan/1`
+  document. The `<slug>` is the one identity shared with the spec
+  (`<slug>.spec.html`), the branch, and the worktree (see
+  **worktrees-by-default**).
+- **Each task is a `type:"task"` section** carrying a `state`
+  (`todo | doing | done`) and an `acceptance[]` array of testable criteria. The
+  task structure in Step 4 maps directly onto these section fields.
+- The **convergence mode** chosen in Step 1.5 (`none | informed | holdout`),
+  plus its fixed `threshold`, `axis_weights`, and loop bounds, are recorded on
+  the plan document itself — not just in prose.
+- The harness task set from Step 7 appears as `type:"task"` sections too, so
+  the unattended rebuild+re-verify path is part of the plan, not an afterthought.
+- Steering flows through the **Plan Inbox** as explicit events; reconcile the
+  inbox at the defined checkpoints. Do not bind any server to `0.0.0.0` and do
+  not load assets from a CDN — artifacts are self-contained and served on
+  loopback only.
+
+## Subagent dispatch + coder/model doctrine
+
+Planning decides *who* will write the code. Encode these invariants so the
+orchestrator dispatches correctly:
+
+- **Subagents are the coders.** The orchestrator delegates coding to subagents
+  working in their own worktrees rather than editing ship code itself. Plan the
+  work as tasks a coder subagent can pick up.
+- **Dispatch rule (hard).** Every subagent dispatch must include either an
+  `agent` name or an inline `system_prompt` — **never neither**. Dispatching
+  with neither raises:
+  `Must provide either 'agent' (name) or 'system_prompt' (inline). Got neither.`
+- **Model inheritance.** When dispatching a coder, `model = explicit ?? session`
+  — i.e. `model = explicit_model ?? session_model`. Inherit the **session model**
+  rather than a silent weaker default; overrides require recorded justification.
+- **Poll-and-steer over sleep.** The orchestrator polls subagent status and
+  steers via the Plan Inbox; it does not insert long blocking sleeps.
+
 ## Task Sizing
 
 | Size | Files | Example |

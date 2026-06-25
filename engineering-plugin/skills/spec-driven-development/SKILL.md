@@ -51,7 +51,7 @@ Don't silently fill in ambiguous requirements. Assumptions are the most dangerou
 4. **Code Style** — One real code snippet showing your style beats three paragraphs describing it.
 5. **Testing Strategy** — What framework, where tests live, coverage expectations.
 6. **Boundaries** — Three-tier system:
-   - **Always do:** Run tests before commits, validate inputs, follow naming conventions
+   - **Always do:** Run tests before commits, validate inputs, follow naming conventions, and ship an automated harness that exercises the feature end-to-end without a human (including headless simulation of any human-in-the-loop steps)
    - **Ask first:** Adding dependencies, schema changes, changing CI config
    - **Never do:** Commit secrets, remove failing tests, skip the spec
 
@@ -92,6 +92,25 @@ Break the plan into discrete tasks. See the **planning-and-task-breakdown** skil
 ## Phase 4: Implement
 
 Execute tasks using the **incremental-implementation** and **test-driven-development** skills.
+
+## HTML Plan Ecosystem integration
+
+When the HTML Plan Ecosystem is in use (schema `engplan/1`), the SPECIFY phase
+emits a durable plan artifact alongside the prose spec:
+
+- The spec is published as `<slug>.spec.html` — a self-contained `engplan/1`
+  document whose `status` advances `drafting → approved` as the spec is
+  validated. Implementation should not begin until `status: approved`.
+- The **assumptions** you surfaced (Phase 1) and the **success criteria** you
+  reframed each become explicit `engplan/1` sections in `<slug>.spec.html`, so
+  they are auditable and machine-readable, not buried in prose.
+- The `<slug>` is the single identity carried forward: it becomes the branch,
+  the worktree, and the `<slug>.plan.html` artifact (see **worktrees-by-default**
+  and **planning-and-task-breakdown**).
+- Steering on the spec flows through the **Plan Inbox** as explicit events;
+  reconcile the inbox before advancing `status`. Do not bind any server to
+  `0.0.0.0` and do not load assets from a CDN — the ecosystem serves
+  self-contained artifacts on loopback only.
 
 ## Keeping the Spec Alive
 
