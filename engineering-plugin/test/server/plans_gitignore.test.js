@@ -70,3 +70,54 @@ test("plan documents are NOT ignored by the scaffolded patterns", () => {
   assert.ok(!rules.some((r) => /^_assets\b/.test(r.trim())), "_assets must stay tracked");
 });
 
+// G3 — silent-failure resilience. The try/catch in ensurePlansGitignore is
+// intentional: a failed ignore-scaffold must never block a notes/events write.
+
+test("ensurePlansGitignore does not throw when the .plans dir is unwritable", () => {
+  const repo = tmpRepo();
+  const plansDir = path.join(repo, ".plans");
+  fs.mkdirSync(plansDir, { recursive: true });
+  fs.chmodSync(plansDir, 0o500); // read+execute, no write
+  // Self-skip when chmod can't actually restrict us (running as root) — else
+  // we'd false-pass without exercising the failure path.
+  let restricted = true;
+  try {
+    const probe = path.join(plansDir, ".probe-write");
+    fs.writeFileSync(probe, "x");
+    fs.unlinkSync(probe);
+    restricted = false; // write succeeded → not restricted (root)
+  } catch (_) { /* expected: write blocked */ }
+  try {
+    if (!restricted) {
+      // restore perms before skipping so tmp cleanup works
+      fs.chmodSync(plansDir, 0o700);
+      return; // node:test treats a clean return as pass; we note the skip below
+    }
+    // The core assertion: must not throw even though the write fails.
+    assert.doesNotThrow(() => store.ensurePlansGitignore(repo));
+    // And the file must NOT have been created (write genuinely failed).
+    assert.ok(!fs.existsSync(path.join(plansDir, ".gitignore")), "gitignore write should have failed silently");
+  } finally {
+    fs.chmodSync(plansDir, 0o700); // make dir removable for tmp cleanup
+  }
+});
+
+test("appendEvent still persists the event when gitignore scaffolding fails", () => {
+  const repo = tmpRepo();
+  const plansDir = path.join(repo, ".plans");
+  fs.mkdirSync(plansDir, { recursive: true });
+  // Make ONLY the .gitignore write fail while keeping the dir writable for the
+  // events file: a dangling symlink whose parent dir does not exist. Writing
+  // through it raises ENOENT (structural, so this holds even under root), while
+  // the events file write into the writable .plans dir succeeds.
+  const gi = path.join(plansDir, ".gitignore");
+  fs.symlinkSync(path.join(os.tmpdir(), "g3-nonexistent-" + process.pid, ".gitignore"), gi);
+  // Sanity: ensurePlansGitignore would throw if unguarded; it must not here.
+  assert.doesNotThrow(() => store.ensurePlansGitignore(repo));
+  // appendEvent calls ensurePlansGitignore internally and must still succeed.
+  const ev = store.appendEvent(repo, "g3-resilience", { section_id: "s1", type: "comment", actor: "human", text: "still works" });
+  assert.ok(ev, "appendEvent should return the persisted event");
+  const events = JSON.parse(fs.readFileSync(path.join(plansDir, "g3-resilience.events.json"), "utf8"));
+  assert.strictEqual(events.length, 1, "event should be persisted despite gitignore failure");
+  assert.strictEqual(events[0].text, "still works");
+});
