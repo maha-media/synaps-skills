@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="engplan-schema" content="engplan/1">
+<title>HTML Plan Ecosystem</title>
+<link rel="stylesheet" href="/_assets/plan.css">
+<script defer src="/_assets/engplan.js"></script>
+<script defer src="/_assets/md.js"></script>
+<script defer src="/_assets/sanitize.js"></script>
+<script defer src="/_assets/plan.js"></script>
+<script>window.addEventListener("error",function(){},true);</script>
+</head>
+<body>
+<script id="plan" type="application/json">
+{
+  "schema": "engplan/1",
+  "kind": "plan",
+  "slug": "html-plan-ecosystem",
+  "title": "HTML Plan Ecosystem",
+  "status": "in_progress",
+  "convergence": "informed",
+  "created_at": "2026-06-25T14:08:37.845Z",
+  "updated_at": "2026-06-25T14:08:37.845Z",
+  "sections": [
+    {
+      "id": "objective",
+      "heading": "Objective",
+      "type": "prose",
+      "md": "Replace static Markdown plans with a live **HTML Plan Ecosystem**: engplan/1 artifacts served by a local plans-server, rendered by a local JS renderer, with a bidirectional human/agent **Plan Inbox**. Built Node-stdlib-only, vanilla JS, no network install."
+    },
+    {
+      "id": "decision-A-runtime",
+      "heading": "Decision A — Runtime/language (P1-0 gate)",
+      "type": "prose",
+      "md": "**Resolved: Node.js stdlib only** (http, fs, path, crypto, WHATWG URL). No third-party packages, no build step, no CDN. Verified runnable offline."
+    },
+    {
+      "id": "decision-B-location",
+      "heading": "Decision B — Server location (P1-0 gate)",
+      "type": "prose",
+      "md": "**Resolved: inside the engineering plugin** for tight slug/worktree integration. Extension wired in .synaps-plugin/plugin.json (runtime=process, command=node)."
+    },
+    {
+      "id": "decision-C-split",
+      "heading": "Decision C — notes vs events split",
+      "type": "prose",
+      "md": "**Adopted the split**: <slug>.notes.json + <slug>.events.json. Reconcile reads the events file. Both committed; agents.json gitignored."
+    },
+    {
+      "id": "decision-D-token",
+      "heading": "Decision D — token enforcement",
+      "type": "prose",
+      "md": "**Token on-by-default.** Per-session random token required on every request via ?token= or X-Plan-Token. Injected into served HTML, never written into .plans/ artifacts."
+    },
+    {
+      "id": "decision-F-markdown",
+      "heading": "Decision F — Markdown lib",
+      "type": "prose",
+      "md": "**Resolved: hand-rolled tiny local renderer (assets/md.js)** — smallest viable, zero deps, no CDN. Always passed through a mandatory allowlist sanitizer (assets/sanitize.js) regardless of source."
+    },
+    {
+      "id": "decision-G-counters",
+      "heading": "Decision G — attention counter mapping",
+      "type": "prose",
+      "md": "blocking = active (non-terminal) block events. unresolved = open/acknowledged comment|request_change|clarify. needs_review = sections with approval==needs-human-review plus open approve requests. new_criteria = open add_acceptance_criterion."
+    },
+    {
+      "id": "decision-H-dnt",
+      "heading": "Decision H — do_not_touch enforcement",
+      "type": "prose",
+      "md": "**Durable data the agent must honor**, not a server-enforced FS lock in v1. Stored as an event; never executed."
+    },
+    {
+      "id": "task-P0",
+      "heading": "P0 — Schema + renderer (file://)",
+      "type": "task",
+      "state": "done",
+      "acceptance": [
+        "engplan/1 parse/validate",
+        "markdown sanitized (XSS corpus)",
+        "render sections + badges + patches",
+        "localStorage fallback"
+      ],
+      "verification": [
+        "node --test test/schema/ test/render/"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "task-P1",
+      "heading": "P1 — Plans-server (assets, discovery, sidebar)",
+      "type": "task",
+      "state": "done",
+      "acceptance": [
+        "loopback-only random port",
+        "serve /_assets from PLUGIN_DIR",
+        "/api/plans discovery bounded",
+        "/plan/<id> + sidebar shell"
+      ],
+      "verification": [
+        "node --test test/server/"
+      ],
+      "depends_on": [
+        "task-P0"
+      ]
+    },
+    {
+      "id": "task-P2",
+      "heading": "P2 — SSE live-watch",
+      "type": "task",
+      "state": "done",
+      "acceptance": [
+        "debounced watcher + section delta",
+        "SSE endpoint + conn cap",
+        "renderer live subscribe",
+        "section-append streaming"
+      ],
+      "verification": [
+        "node test/harness/cli.js S1"
+      ],
+      "depends_on": [
+        "task-P1"
+      ]
+    },
+    {
+      "id": "task-P3",
+      "heading": "P3 — Plan Inbox (killer feature)",
+      "type": "task",
+      "state": "done",
+      "acceptance": [
+        "event model + lifecycle SM",
+        "notes/respond endpoints (write-confined)",
+        "reconcile loop",
+        "blocking halts dependents",
+        "attention counters"
+      ],
+      "verification": [
+        "node --test test/inbox/ test/integration/"
+      ],
+      "depends_on": [
+        "task-P2"
+      ]
+    },
+    {
+      "id": "task-P4",
+      "heading": "P4 — Legacy md, /plan commands, skills, security",
+      "type": "task",
+      "state": "done",
+      "acceptance": [
+        "legacy .md degraded render",
+        "/plan new|open|list|serve|reconcile",
+        "plugin.json wiring",
+        "skill updates",
+        "security controls tested"
+      ],
+      "verification": [
+        "node --test test/security/ test/server/commands.test.js"
+      ],
+      "depends_on": [
+        "task-P3"
+      ]
+    },
+    {
+      "id": "task-P5",
+      "heading": "P5 — tmux multi-agent mode (additive)",
+      "type": "task",
+      "state": "done",
+      "acceptance": [
+        "tmux detect + fallback",
+        "agent registry + reaper",
+        "own-pane-only controller + caps",
+        "portal fleet view",
+        "grandchild recursion bounded"
+      ],
+      "verification": [
+        "node --test test/server/agents.test.js test/server/pane_ctl.test.js test/harness/fleetsim.test.js"
+      ],
+      "depends_on": [
+        "task-P4"
+      ]
+    },
+    {
+      "id": "task-harness",
+      "heading": "Headless harness (Addendum A/E)",
+      "type": "task",
+      "state": "done",
+      "acceptance": [
+        "ActorSim/AgentSim/DomProbe/FaultInj/OrchestratorSim/FleetSim",
+        "S1-S21 headless",
+        "red-green proofs",
+        "npm run e2e merge gate"
+      ],
+      "verification": [
+        "npm run e2e"
+      ],
+      "depends_on": [
+        "task-P4"
+      ]
+    },
+    {
+      "id": "security-model",
+      "heading": "Security model (spec §7)",
+      "type": "risk",
+      "risk": "security-sensitive",
+      "md": "127.0.0.1-only bind; per-session token; path canonicalization + traversal/symlink confinement; write allowlist; body/event/SSE/discovery bounds; CSP script-src self; sanitize all markdown+note text; tmux own-pane-only + caps + by-reference handoff. Fault-tested in test/security/ and test/harness/faultinj.test.js."
+    },
+    {
+      "id": "gate-C4",
+      "heading": "Gate C4 — release",
+      "type": "gate",
+      "approval": "approved",
+      "md": "Full suite green (zero network installs); npm run e2e green; security controls tested."
+    }
+  ]
+}
+</script>
+<div id="app">Loading… open via the Plans server for live mode.</div>
+<script>if(!window.PlanRenderer){var b=document.createElement("script");b.src="./_assets/plan.js";document.head.appendChild(b);}</script>
+</body>
+</html>

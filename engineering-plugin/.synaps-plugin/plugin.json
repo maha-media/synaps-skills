@@ -1,12 +1,77 @@
 {
   "name": "engineering",
-  "version": "0.4.0-beta",
-  "description": "Engineering discipline skills — code review, security review, TDD, debugging, spec-driven development, incremental implementation, planning, verification, worktree-based isolation, and multi-agent convergence loops. Battle-tested patterns for shipping reliable software.",
+  "version": "0.5.0-beta",
+  "description": "Engineering discipline skills — code review, security review, TDD, debugging, spec-driven development, incremental implementation, planning, verification, worktree-based isolation, multi-agent convergence loops, and the HTML Plan Ecosystem (live plans-server + Plan Inbox). Battle-tested patterns for shipping reliable software.",
   "author": {
     "name": "Haseeb Khalid",
     "url": "https://github.com/HaseebKhalid1507"
   },
   "repository": "maha-media/synaps-skills",
   "license": "MIT",
-  "category": "development"
+  "category": "development",
+  "compatibility": {
+    "synaps": ">=0.1.0",
+    "extension_protocol": "1"
+  },
+  "commands": [
+    {
+      "name": "plan",
+      "description": "HTML Plan Ecosystem: new | open | list | serve | reconcile.",
+      "command": "node",
+      "args": [
+        "bin/plan.js"
+      ]
+    }
+  ],
+  "extension": {
+    "protocol_version": 1,
+    "runtime": "process",
+    "command": "node",
+    "args": [
+      "extensions/plans_server.js"
+    ],
+    "permissions": [
+      "session.lifecycle"
+    ],
+    "hooks": [
+      {
+        "hook": "on_session_start"
+      },
+      {
+        "hook": "on_session_end"
+      },
+      {
+        "hook": "checkpoint.reached"
+      },
+      {
+        "hook": "pre-compact"
+      },
+      {
+        "hook": "post-compact"
+      }
+    ],
+    "config": [
+      {
+        "key": "plans_dir",
+        "description": "Repo-relative directory holding plan artifacts and the Plan Inbox.",
+        "required": false,
+        "default": ".plans"
+      },
+      {
+        "key": "token_required",
+        "description": "Require a per-session token on every plans-server request (recommended).",
+        "required": false,
+        "default": "true"
+      }
+    ],
+    "assets": [
+      "assets/plan.js",
+      "assets/plan.css",
+      "assets/engplan.js",
+      "assets/md.js",
+      "assets/sanitize.js",
+      "assets/shell.html",
+      "assets/shell.js"
+    ]
+  }
 }

@@ -1,0 +1,29 @@
+{
+  "schema": "engplan/1",
+  "kind": "plan",
+  "slug": "sample-plan",
+  "title": "Sample Plan",
+  "status": "in_progress",
+  "convergence": "informed",
+  "created_at": "2024-01-01T00:00:00Z",
+  "updated_at": "2024-01-02T00:00:00Z",
+  "sections": [
+    {
+      "id": "intro",
+      "heading": "Introduction",
+      "type": "prose",
+      "md": "# Hello\n\nThis is **bold** and `code`."
+    },
+    {
+      "id": "build-it",
+      "heading": "Build it",
+      "type": "task",
+      "state": "doing",
+      "approval": "needs-human-review",
+      "risk": "risky",
+      "md": "Do the work.",
+      "acceptance": ["builds clean", "tests pass"],
+      "verification": ["run node --test"]
+    }
+  ]
+}

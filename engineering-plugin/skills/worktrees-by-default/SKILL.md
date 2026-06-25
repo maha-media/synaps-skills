@@ -174,6 +174,36 @@ When multiple agents (or processes) operate on the same repo:
 - If you find your worktree has been mutated by another process, treat it like a merge conflict: stash, sync, replay.
 - **After your PR merges, clean up your worktree even if other agents are still running.** Their worktrees are independent.
 
+## HTML Plan Ecosystem integration
+
+When the HTML Plan Ecosystem is in use (schema `engplan/1`), identity is
+**coherent across the whole pipeline — one identity, one `<slug>`:**
+
+```
+plan slug  ==  branch  ==  worktree  ==  plan artifacts
+   <slug>      feat/<slug>  <repo>-<slug>   <slug>.plan.html / <slug>.spec.html
+```
+
+There is no translation step. The `<slug>` chosen in
+**planning-and-task-breakdown** *is* the branch name, *is* the worktree
+directory suffix, and *is* the stem of the `.plan.html` / `.spec.html`
+artifacts. If any of these diverge, the identity is broken — fix it before
+proceeding. This is what makes the Plan Inbox, the worktree, and the artifacts
+addressable as one unit.
+
+### Agent ↔ worktree mapping and fleet cleanup
+
+- **One worktree per coding agent.** Each coding agent (subagent) owns exactly
+  one worktree, identified by its `<slug>`. The mapping agent↔worktree is
+  one-to-one; never run two coders in the same tree.
+- **Reap dead agents' worktrees.** When an agent terminates (crash, cancel,
+  completion) its worktree must be reaped, not left orphaned. Across a fleet of
+  agents, periodically sweep for worktrees whose owning agent is no longer
+  alive and run the cleanup sequence on them — orphaned trees cause
+  branch-name collisions, disk bloat, and confusion about which tree is "real".
+- Do not bind any plan server to `0.0.0.0` and do not load assets from a CDN —
+  artifacts are self-contained and served on loopback only.
+
 ## Rationalizations
 
 | Excuse | Reality |
@@ -199,6 +229,8 @@ When multiple agents (or processes) operate on the same repo:
 - **PR merged but the local feature branch still exists**
 - Multiple `feat/*` or `fix/*` branches lingering after their PRs merged
 - Disk usage in `.worktrees/` growing across sessions
+- Plan `slug`, branch, worktree, and `.plan.html`/`.spec.html` artifact names disagree (identity broken)
+- A dead agent's worktree left unreaped; two coding agents sharing one worktree
 
 ## Verification
 

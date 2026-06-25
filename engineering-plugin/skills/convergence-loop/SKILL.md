@@ -123,11 +123,80 @@ For each role call:
    - allowed role inputs under the information-wall mode
    - current worktree path and branch, if the role may touch files
    - prior role artifacts that are allowed for this role
-3. Dispatch exactly one fresh blocking subagent.
+3. Dispatch exactly one fresh blocking subagent **with an explicit `agent` or inline `system_prompt`** (never neither — see the dispatch rule below).
 4. Wait for it to finish.
 5. Save its output as an artifact in the worktree or session log.
 6. Verify the worktree state before dispatching the next role.
 7. If the result is invalid or incomplete, do **not** steer/resume it; dispatch a new fresh subagent with corrected explicit context.
+
+## Subagent dispatch rule (hard)
+
+**Every subagent dispatch must include either an `agent` name or an inline
+`system_prompt` — never neither.** Dispatching with neither raises:
+
+```
+Must provide either 'agent' (name) or 'system_prompt' (inline). Got neither.
+```
+
+- **Orchestrator Protocol:** "Dispatch exactly one fresh blocking subagent with
+  an explicit `agent` or inline `system_prompt`."
+- **Red Flag:** "Subagent dispatched with neither `agent` nor `system_prompt`."
+- **Verification:** "Every role dispatch carried a non-empty `agent` or
+  `system_prompt`."
+- **Pre-dispatch invariant:** the role packet must resolve to
+  `(agent | system_prompt)` **before** the call. Do not dispatch until it does.
+
+## Coder-subagent + model-inheritance doctrine
+
+The convergence loop is the strict exception to the plugin's default
+poll-and-steer operating model, but the coder and model rules still apply to
+the Builder role:
+
+- **Subagents are the coders.** The orchestrator delegates coding to subagents
+  in their own worktrees rather than editing ship code itself. The Builder
+  (and fix-loop Builder) is always a dispatched subagent, never the
+  orchestrator typing code.
+- **Model inheritance.** `model = explicit ?? session` (i.e.
+  `model = explicit_model ?? session_model`) — when dispatching the Builder,
+  inherit the **session model** rather than a silent weaker default. Overrides
+  require recorded justification. This rule applies to convergence's Builder
+  role exactly as it does everywhere else.
+- **Poll-and-steer over sleep (the default elsewhere).** In general work the
+  orchestrator polls subagent status and steers via the Plan Inbox; it does not
+  insert long blocking sleeps.
+- **Convergence carve-out.** The poll-and-steer mode is the default for general
+  work. `convergence-loop` keeps **fresh blocking one-shot roles** (no async
+  start / steer / resume of a role) as the exception — but the model-inheritance
+  and "subagents are the coders" rules above still apply to the Builder role.
+
+### Doctrine red flags
+
+- Coder dispatched with a silent default model instead of the session model.
+- Orchestrator wrote ship code directly instead of delegating to a coder subagent.
+- Orchestrator idle-sleeping instead of polling + steering (in the
+  poll-and-steer default; convergence roles are still fresh blocking one-shots).
+
+## Plan Inbox: the sanctioned steering channel
+
+When the HTML Plan Ecosystem is in use (schema `engplan/1`):
+
+- **Scores and verdicts render as `engplan/1` sections.** The Judge's numeric
+  overall score, per-axis breakdown, and verdict band are recorded as sections
+  on the `<slug>.plan.html` artifact — auditable, not a transient message.
+- **`escalate_convergence` events can request the loop.** An explicit
+  `escalate_convergence` event in the Plan Inbox is the sanctioned way to
+  *request* a convergence run (subject to the authorization rules above — the
+  plan must declare `informed` or `holdout`).
+- **The Plan Inbox is the SANCTIONED steering channel.** It is the opposite of
+  `subagent_steer`/`subagent_resume`: a durable, explicit, auditable artifact
+  channel. It carries corrected context **between** fresh dispatches — handing a
+  *new* Builder its corrected packet — and is **never** used to mutate a
+  *running* role. Explicit artifacts in, explicit responses out, **no hidden
+  context**. Routing structured feedback to a fresh Builder through the inbox
+  preserves the information-wall contract; resuming or steering a live role
+  breaks it.
+- Do not bind any server to `0.0.0.0` and do not load assets from a CDN —
+  artifacts are self-contained and served on loopback only.
 
 ## Roles → Engineering Skills
 
@@ -240,6 +309,10 @@ When any limit trips: produce an escalation report (current score, structured fe
 - Threshold or axis weights changed after the first score (goalpost
   moving)
 - Any convergence role launched with `subagent_start`
+- Subagent dispatched with neither `agent` nor `system_prompt`
+- Coder dispatched with a silent default model instead of the session model
+- Orchestrator wrote ship code directly instead of delegating to a coder subagent
+- Steering a *running* role instead of dispatching a fresh one with corrected inbox context
 - Any convergence role running while another convergence role is active
 - Use of `subagent_resume` or `subagent_steer` in the convergence run
 - Roles bleeding into each other (Builder reading test specs in holdout mode; Judge sees the code that implemented its own scenarios)
@@ -259,6 +332,9 @@ Before declaring a convergence run complete:
 - [ ] Plan declared `convergence: informed` or `convergence: holdout` *before* the loop ran (not amended after a bad single-agent result)
 - [ ] Threshold was fixed before the loop started (not adjusted to match the score it produced)
 - [ ] Every role dispatch was a fresh blocking one-shot subagent
+- [ ] Every role dispatch carried a non-empty `agent` or `system_prompt`
+- [ ] Every coder dispatch set `model` (explicit or session-inherited: `model = explicit ?? session`)
+- [ ] Steering went through the Plan Inbox (context carried between fresh dispatches, never to mutate a running role)
 - [ ] No convergence role used async start, resume, or steering
 - [ ] No two convergence roles overlapped in time
 - [ ] Final verdict is PROCEED *or* the loop stopped explicitly at a documented bound
@@ -267,3 +343,54 @@ Before declaring a convergence run complete:
 - [ ] Spec_compliance ≥ 0.7 before any other axis was used to lift the overall score
 - [ ] Builder's commits live on a worktree branch, not the integration branch
 - [ ] The loop was not silently extended past `max_fix_iterations` or `max_total_calls`
+
+## Adversarial Test Oracle (hardened holdout)
+
+The convergence loop is only as trustworthy as its **oracle** — the thing that
+decides "done." When the agent that writes product code can also reach the grading
+tests, green-by-construction beats green-by-correctness (the wolf guards the
+henhouse). The **Adversarial Test Oracle** layer hardens this loop so the final
+green means correctness, not collusion. See
+`engineering-plugin/specs/adversarial-test-oracle.md` and its impl-plan; the live
+implementation is `tools/oracle/**` (gate: `npm run oracle:e2e`).
+
+Hardened rules layered on top of the base loop:
+
+- **Contract-first.** An Architect freezes a machine-readable **contract**
+  (schemas, endpoint signatures, exit codes, event shapes) before Designer/Builder
+  run. Behavioral/contract tests predate code; tests of internals do not.
+- **Write-segregation (central control).** The **Builder lineage may never author or
+  edit `.oracle/**`** (or `tools/oracle/**`, `test/oracle-harness/**`). This
+  `write-segregation` rule is enforced at
+  the merge boundary by a path-canonicalizing **diff gate** (`tools/oracle/diff_gate.js`,
+  defeats rename/symlink/traversal smuggling) + a git pre-commit guard
+  (`tools/oracle/git_guard.sh`). Designer and Builder are **siblings, never nested**
+  (`tools/oracle/lineage.js`).
+- **Hidden suite, verdict-only.** The Builder is graded on a **hidden suite it can
+  never read**, run in a sandbox that emits **verdict-only** egress (counts +
+  failure *categories*, never source/inputs/asserted values).
+- **Property + mutation gates.** Generative properties resist overfitting; a
+  **mutation gate** rejects a deliberately weak suite (who tests the tester).
+- **Commit-reveal.** The hidden suite is hashed before the Builder freezes and
+  verified on reveal — no post-hoc adaptation by either side.
+- **Differential twins.** Two zero-contact Builders from one contract; disagreement
+  surfaces a bug for free.
+- **Survived-budget done-condition.** "Done" is **not** "a fixed list passed."
+  Done = **the adversary cannot find a contract violation within its budget AND the
+  Judge score ≥ threshold (0.8)**, with a full, replayable audit trail. This is the
+  `survived-budget` ship gate (`survived_cleanly: true`, `reveal_verified: true`).
+  The Designer/adversary is rewarded only for **bugs caught** — collusion is irrational.
+  The skill's bounds (threshold, `max_fix_iterations`, `max_total_calls`, stagnation)
+  still govern.
+
+Fix-loop feedback to the Builder describes **behavior gaps** (failure categories +
+which contract element), **never** hidden test source (leaking it defeats the holdout).
+
+## Checkpoint-and-yield (CAC)
+
+When context is tight, do **not** push through a checkpoint. Per
+checkpoint-aware-compaction §8 — *Checkpoint-and-yield*: land the commit, write
+the verdict, emit `checkpoint.reached`, write the resume token, then suspend.
+Compaction happens *between* checkpoints, never inside one. After compaction,
+continue from the resume token **without waiting for a human** unless
+`next_action` is explicitly human-gated.
