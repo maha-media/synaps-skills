@@ -343,3 +343,45 @@ Before declaring a convergence run complete:
 - [ ] Spec_compliance ≥ 0.7 before any other axis was used to lift the overall score
 - [ ] Builder's commits live on a worktree branch, not the integration branch
 - [ ] The loop was not silently extended past `max_fix_iterations` or `max_total_calls`
+
+## Adversarial Test Oracle (hardened holdout)
+
+The convergence loop is only as trustworthy as its **oracle** — the thing that
+decides "done." When the agent that writes product code can also reach the grading
+tests, green-by-construction beats green-by-correctness (the wolf guards the
+henhouse). The **Adversarial Test Oracle** layer hardens this loop so the final
+green means correctness, not collusion. See
+`engineering-plugin/specs/adversarial-test-oracle.md` and its impl-plan; the live
+implementation is `tools/oracle/**` (gate: `npm run oracle:e2e`).
+
+Hardened rules layered on top of the base loop:
+
+- **Contract-first.** An Architect freezes a machine-readable **contract**
+  (schemas, endpoint signatures, exit codes, event shapes) before Designer/Builder
+  run. Behavioral/contract tests predate code; tests of internals do not.
+- **Write-segregation (central control).** The **Builder lineage may never author or
+  edit `.oracle/**`** (or `tools/oracle/**`, `test/oracle-harness/**`). This
+  `write-segregation` rule is enforced at
+  the merge boundary by a path-canonicalizing **diff gate** (`tools/oracle/diff_gate.js`,
+  defeats rename/symlink/traversal smuggling) + a git pre-commit guard
+  (`tools/oracle/git_guard.sh`). Designer and Builder are **siblings, never nested**
+  (`tools/oracle/lineage.js`).
+- **Hidden suite, verdict-only.** The Builder is graded on a **hidden suite it can
+  never read**, run in a sandbox that emits **verdict-only** egress (counts +
+  failure *categories*, never source/inputs/asserted values).
+- **Property + mutation gates.** Generative properties resist overfitting; a
+  **mutation gate** rejects a deliberately weak suite (who tests the tester).
+- **Commit-reveal.** The hidden suite is hashed before the Builder freezes and
+  verified on reveal — no post-hoc adaptation by either side.
+- **Differential twins.** Two zero-contact Builders from one contract; disagreement
+  surfaces a bug for free.
+- **Survived-budget done-condition.** "Done" is **not** "a fixed list passed."
+  Done = **the adversary cannot find a contract violation within its budget AND the
+  Judge score ≥ threshold (0.8)**, with a full, replayable audit trail. This is the
+  `survived-budget` ship gate (`survived_cleanly: true`, `reveal_verified: true`).
+  The Designer/adversary is rewarded only for **bugs caught** — collusion is irrational.
+  The skill's bounds (threshold, `max_fix_iterations`, `max_total_calls`, stagnation)
+  still govern.
+
+Fix-loop feedback to the Builder describes **behavior gaps** (failure categories +
+which contract element), **never** hidden test source (leaking it defeats the holdout).

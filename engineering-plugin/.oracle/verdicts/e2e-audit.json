@@ -1,13 +1,72 @@
 {
   "schema": "oracle/1",
   "kind": "e2e-audit",
-  "started": "2026-06-25T14:40:18.261Z",
-  "finished": "2026-06-25T14:40:20.414Z",
+  "started": "2026-06-25T16:07:16.202Z",
+  "finished": "2026-06-25T16:07:23.816Z",
   "suite": {
-    "pass": 82,
+    "pass": 112,
     "fail": 0,
     "status": 0
   },
-  "selfplay": "not-yet-implemented",
+  "selfplay": {
+    "status": 0,
+    "verdict": {
+      "schema": "oracle/1",
+      "kind": "selfplay-verdict",
+      "state": "ship",
+      "reason": "adversary exhausted within budget AND score 1.000 >= 0.8",
+      "score": 1,
+      "adversary_exhausted": true,
+      "survived_cleanly": true,
+      "outstanding_finds": 0,
+      "rounds": 2,
+      "contract_hash": "sha256:d07f2accd27bc527e8f7674afb7437ed464d7b87f4481be178ccc4cb1f9f3a80",
+      "reveal_verified": true,
+      "lineage": {
+        "designer": "designer_70bfe038a8",
+        "builderA": "builder_4e045038e8",
+        "builderB": "builder_47efb6ad3f",
+        "siblings": true
+      },
+      "budget": {
+        "limits": {
+          "max_fuzz_inputs": 5000,
+          "max_mutants": 50,
+          "max_property_cases": 20000,
+          "max_wall_seconds": 600,
+          "stagnation_rounds": 2,
+          "max_total_rounds": 6
+        },
+        "spent": {
+          "fuzz_inputs": 1200,
+          "mutants": 18,
+          "property_cases": 2400,
+          "rounds": 2
+        },
+        "noFindStreak": 2,
+        "wallSeconds": 5.391,
+        "exhausted": true,
+        "survivedCleanly": true
+      },
+      "findings": [
+        {
+          "round": 1,
+          "hiddenFails": 0,
+          "propFails": 0,
+          "mutantSurvivors": 0,
+          "fuzzCrash": 0,
+          "twinDiv": 0
+        },
+        {
+          "round": 2,
+          "hiddenFails": 0,
+          "propFails": 0,
+          "mutantSurvivors": 0,
+          "fuzzCrash": 0,
+          "twinDiv": 0
+        }
+      ]
+    }
+  },
   "result": "green"
 }

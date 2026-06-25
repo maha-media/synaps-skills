@@ -42,8 +42,12 @@ async function runMutationGate(opts) {
   const buildRoot = opts.buildRoot;
   const ops = (opts.operators || viableOperators(buildRoot));
   const survived = [];
+  const excluded = [];
   let killed = 0, total = 0;
   for (const op of ops) {
+    // Proven-equivalent mutants are unkillable by construction and indict nothing
+    // about the suite; exclude from the kill-rate denominator (record for audit).
+    if (op.equivalent) { excluded.push({ id: op.id, category: op.category, reason: op.equivalent_reason || "equivalent mutant" }); continue; }
     const m = makeMutant(op, { buildRoot });
     if (!m.applied) { try { fs.rmSync(m.dir, { recursive: true, force: true }); } catch (_) {} continue; }
     total++;
@@ -55,7 +59,7 @@ async function runMutationGate(opts) {
     else survived.push({ id: op.id, category: op.category });
   }
   const killRate = total === 0 ? 0 : killed / total;
-  return { total, killed, survived, killRate, accepted: total > 0 && killRate >= threshold, threshold };
+  return { total, killed, survived, excluded, killRate, accepted: total > 0 && killRate >= threshold, threshold };
 }
 
 module.exports = { runMutationGate, suiteDetectsFault };

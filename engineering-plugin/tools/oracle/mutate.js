@@ -28,7 +28,17 @@ const OPERATORS = [
   { id: "event-cap-off", category: "cap-exceeded", file: "lib/store.js", find: "if (arr.length >= limits.maxEventsPerPlan) throw new Error(\"event cap exceeded\")", replace: "if (false) throw new Error(\"event cap exceeded\")", label: "event cap guard dropped" },
   { id: "schema-check-drop", category: "schema-mismatch", file: "assets/engplan.js", find: 'if (raw.schema !== SCHEMA) throw ValidationError("unsupported schema: " + JSON.stringify(raw.schema) + " (want " + SCHEMA + ")");', replace: "if (false) throw ValidationError(\"x\");", label: "engplan schema validation dropped" },
   { id: "bind-any-interface", category: "loopback-violation", file: "extensions/plans_server.js", find: 'server.listen(opts.port || 0, "127.0.0.1"', replace: 'server.listen(opts.port || 0, "0.0.0.0"', label: "server binds 0.0.0.0 instead of loopback" },
-  { id: "write-confine-drop", category: "write-confinement-violation", file: "lib/store.js", find: 'if (!isInside(plansDir, target)) throw new Error("write escapes .plans/");', replace: "if (false) throw new Error(\"x\");", label: "write-confinement guard dropped" },
+  // EQUIVALENT MUTANT (proven): `target` = safeRealpath(plansDir, filename), and
+  // safeRealpath (lib/paths.js) returns ONLY a safeResolve'd path that is provably
+  // inside the root, else it THROWS ("symlink escapes root" / "path escapes root")
+  // before returning. Therefore `isInside(plansDir, target)` at this line is a
+  // tautology (always true) and the guard is unreachable-false — dropping it has
+  // NO observable behavior. A symlink/traversal escape is rejected upstream inside
+  // safeRealpath, and every escaping slug is rejected earlier still by slugOk
+  // (validId rejects '/'/'\\') + the writable-filename regex. No behavioral grading
+  // suite can kill this mutant; excluding it from the kill-rate denominator is the
+  // correct mutation-testing treatment (it indicts nothing about the suite).
+  { id: "write-confine-drop", category: "write-confinement-violation", file: "lib/store.js", find: 'if (!isInside(plansDir, target)) throw new Error("write escapes .plans/");', replace: "if (false) throw new Error(\"x\");", label: "write-confinement guard dropped", equivalent: true, equivalent_reason: "isInside(plansDir, safeRealpath(...)) is a tautology; safeRealpath returns inside-root or throws, so the guard is unreachable-false — unkillable, not a suite weakness" },
   { id: "actor-validation-drop", category: "validation-error", file: "assets/engplan.js", find: 'if (!actor) throw ValidationError("event.actor invalid: " + raw.actor);', replace: "if (false) throw ValidationError(\"x\");", label: "event.actor validation dropped" },
 ];
 

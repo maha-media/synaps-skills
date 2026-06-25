@@ -16,6 +16,26 @@ const http = require("node:http");
 
 const BUILD_ROOT = path.join(__dirname, "..", "..");
 
+/*
+ * No-op browser-launcher shim. The product CLI (`plan new` / `plan open`) shells
+ * out to xdg-open/open/start to pop a real browser tab. During grading that
+ * would hijack the human's actual browser on every round. We prepend a temp dir
+ * of no-op stubs to PATH so the launch is captured harmlessly. Oracle infra only;
+ * product code is untouched.
+ */
+let _shimDir = null;
+function browserShimDir() {
+  if (_shimDir && fs.existsSync(_shimDir)) return _shimDir;
+  _shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "oracle-noopen-"));
+  const isWin = process.platform === "win32";
+  for (const name of ["xdg-open", "open", "start"]) {
+    const file = path.join(_shimDir, isWin ? name + ".cmd" : name);
+    fs.writeFileSync(file, isWin ? "@exit /b 0\r\n" : "#!/bin/sh\nexit 0\n");
+    if (!isWin) fs.chmodSync(file, 0o755);
+  }
+  return _shimDir;
+}
+
 function load(targetDir) {
   const root = targetDir || BUILD_ROOT;
   // fresh module instances per target (avoid require cache cross-talk for mutants)
@@ -101,10 +121,20 @@ function createSut(opts) {
     runCli(args, env) {
       const cp = require("node:child_process");
       const repo = makeRepo(); repos.push(repo);
+      const shim = browserShimDir();
+      const basePath = process.env.PATH || "";
       return cp.spawnSync(process.execPath, ["bin/plan.js", ...args], {
         cwd: mod.root, encoding: "utf8",
-        env: Object.assign({}, process.env, { REPO_ROOT: repo }, env || {}),
-        timeout: 10000,
+        env: Object.assign({}, process.env, {
+          REPO_ROOT: repo,
+          // route browser-launch through the no-op shim (never the human's browser)
+          PATH: shim + path.delimiter + basePath,
+        }, env || {}),
+        // Serving commands (new/open/serve) never self-exit; bound them tightly
+        // and SIGKILL so grading can't hang or leak server processes. Terminating
+        // commands (list/reconcile, artifact creation) complete well under this.
+        timeout: (env && env.__cliTimeout) || 5000,
+        killSignal: "SIGKILL",
       });
     },
   };

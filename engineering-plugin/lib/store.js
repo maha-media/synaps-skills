@@ -75,6 +75,13 @@ function appendEvent(repoRoot, slug, rawEvent, opts) {
   if (!ev.id) ev.id = genId("evt", clock);
   if (!ev.created_at) ev.created_at = clock && clock.now ? clock.now() : new Date().toISOString();
 
+  // Enforce the store's declared body cap (defense in depth; reconcile and
+  // direct store callers bypass the HTTP transport guard). Check before
+  // acquiring the lock to avoid holding it on a guaranteed-fail. The message
+  // uses the literal phrase "too large" so the HTTP layer maps it to 413.
+  const bodyBytes = Buffer.byteLength(JSON.stringify(ev), "utf8");
+  if (bodyBytes > limits.maxBodyBytes) throw new Error("event body too large");
+
   const target = allowedWriteTarget(repoRoot, eventsFile(slug));
   // simple lock via O_EXCL lockfile with retry
   const lock = target + ".lock";

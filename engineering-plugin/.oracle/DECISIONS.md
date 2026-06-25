@@ -55,3 +55,38 @@ Audit of open-decision resolutions confirmed at each checkpoint (spec §9).
 - Note: during O4 the contract was re-frozen (controlled) to correct an observable
   param (`/api/stream` + `/api/notes` use `?plan=`, not `?slug=`) — proves contract is
   ground-truth and re-freeze is a controlled event, not an ad-hoc edit.
+
+## C-O5
+- **#5 Self-play to a trustworthy verdict.** O5 runs the full flywheel
+  (`tools/oracle/selfplay_run.js`): frozen contract → commit-reveal → Designer
+  (adversary, sibling) + Builder twins → Tester (public in worktree + hidden in
+  sandbox, verdict-only) + properties + mutation + differential → Judge → done.
+  Ship gate = `survived_cleanly && reveal_verified && score ≥ 0.8` within budget.
+  Final verdict: **ship** (score 1.0, 0 outstanding finds, reveal verified).
+- **PRE-WORK triage (3 adversary findings, graded vs the FROZEN contract):**
+  1. `store-caps` (cap-exceeded ×2) — **REAL BUILD BUG** → Builder fixed `lib/store.js`
+     to enforce the declared `store_limits.maxBodyBytes` (defense in depth; reconcile
+     and direct store callers bypass the HTTP transport guard). Message "too large"
+     maps to HTTP 413.
+  2. `validId-traversal` (path-escape) — **OVER-STRICT ORACLE** → Designer realigned
+     `.oracle/properties/validid-traversal.prop.js`: the frozen `id_pattern`
+     (`^[A-Za-z0-9][A-Za-z0-9_.-]*$`) PERMITS `..`; traversal is defended at the write
+     boundary (write-confinement), not by validId. Forbidden set narrowed to `/`,`\`,NUL.
+  3. `cli-exit-codes` (missing-behavior) — **OVER-STRICT + HARNESS-HOSTILE** → Designer
+     dropped the serving-`new` success probe: `new`/`open`/`serve` call
+     startServer()->listen() and never exit, so a captured exit code is meaningless and
+     leaked orphaned servers. Success exit-0 is validated on TERMINATING commands
+     (`list`); usage-error→2 retained (preserves the exit-code-2-to-0 catch).
+- **#6 Equivalent-mutant exclusion (proven).** `write-confine-drop` is a TRUE
+  equivalent mutant: `isInside(plansDir, safeRealpath(...))` is a tautology —
+  `safeRealpath` (lib/paths.js) returns an inside-root path or THROWS, so the guard at
+  `lib/store.js` is unreachable-false; a symlink/traversal escape is rejected upstream
+  inside safeRealpath. No behavioral suite can kill it. Marked `equivalent:true` in
+  `tools/oracle/mutate.js` and excluded from the kill-rate denominator (recorded in the
+  gate report's `excluded[]`). Net gate: 9/9 killed, 1 excluded with justification.
+  (Independently verified: 0/5 valid filenames trigger the guard.)
+- **Harness hardening (orchestrator infra, `tools/oracle/sut.js`):** `runCli` now (a)
+  prepends a no-op `xdg-open`/`open`/`start` shim to PATH so the product CLI's
+  openBrowser() can never hijack the human's real browser during grading, and (b)
+  bounds serving commands with a 5s timeout + SIGKILL so grading can never hang or leak
+  server processes. Net: self-play rounds dropped from ~90s to sub-second.
