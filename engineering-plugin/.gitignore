@@ -2,3 +2,13 @@ node_modules/
 .plans/agents.json
 .plans/*.tmp-*
 *.lock
+
+# Oracle/plan runtime artifacts — rewritten on every oracle run (dirty the tree
+# after verification). Static records (freeze.log, o5-triage.md, .gitkeep,
+# suites, properties) stay tracked intentionally.
+.oracle/verdicts/audit-trail.jsonl
+.oracle/verdicts/e2e-audit.json
+.oracle/verdicts/selfplay.verdict.json
+.oracle/reveal/commit_reveal.log
+.oracle/reveal/lineage.log
+.plans/*.oracle.jsonl
