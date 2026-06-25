@@ -1,6 +1,6 @@
 ---
 name: type-driven-design
-description: Use when designing typed APIs, protocol/config boundaries, domain models, or refactors where invariants should be encoded in types instead of comments or runtime conventions.
+description: Use when designing typed APIs, protocol/config boundaries, domain models, or refactors where invariants should be encoded in types instead of comments or runtime conventions. Includes a worked engplan/1 parse-at-the-boundary example.
 ---
 
 # Type-Driven Design
@@ -210,6 +210,33 @@ function parsePort(value: unknown): Port {
 ### Avoid unsafe `as` assertions
 
 `as SomeType` is not validation. Treat assertions like a cast at a trust boundary: acceptable only immediately after a check/schema parse, or inside a narrow constructor that enforces the invariant.
+
+## Worked Example: engplan/1 boundary parser
+
+`assets/engplan.js` shows parse-at-the-boundary in plain JS. `parseEngPlan` /
+`parseEvent` take raw JSON (string or `Value`) from disk or an HTTP body and
+return a validated domain object, or throw `ValidationError` — core code never
+sees the raw shape:
+
+```js
+function parseEvent(raw) {
+  if (typeof raw === "string") {
+    try { raw = JSON.parse(raw); } catch (e) { throw ValidationError("event is not valid JSON: " + e.message); }
+  }
+  if (!isObj(raw)) throw ValidationError("event must be an object");
+  if (!isNonEmptyStr(raw.plan_id)) throw ValidationError("event.plan_id required");
+  if (!inEnum(raw.type, EVENT_TYPES)) throw ValidationError("event.type invalid: " + raw.type);
+  // ...actor/status enum checks...
+  return validatedEvent;
+}
+```
+
+The closed sets (`EVENT_TYPES`, `SECTION_TYPES`, `PLAN_STATUS`, `APPROVAL`,
+`RISK`) act as enums via `inEnum`, and `schema !== SCHEMA` rejects unknown
+versions up front. Even without a static type system, validation happens once at
+the boundary and the rest of the renderer/server trusts the result. See
+**security-review** (untrusted input must be validated before use) and
+**spec-driven-development** (the enums and schema come straight from the spec).
 
 ## Abstraction Test
 
