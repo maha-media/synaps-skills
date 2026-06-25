@@ -21,7 +21,7 @@
   "status": "in_progress",
   "convergence": "none",
   "created_at": "2026-06-25T19:30:28.675Z",
-  "updated_at": "2026-06-25T19:55:00.000Z",
+  "updated_at": "2026-06-25T20:10:00.000Z",
   "sections": [
     {
       "id": "objective",
@@ -91,8 +91,105 @@
       "id": "task-PS1",
       "heading": "P-S1 \u2014 Skill upgrade scope (after viewer works)",
       "type": "task",
+      "state": "done",
+      "md": "**Scope finalized: BROAD.** Three skill integrations + a toolkit-wide consistency sweep + two new skills. Driven via the `27:0.1` coder agent, watched live here."
+    },
+    {
+      "id": "task-PS2",
+      "heading": "P-S2 \u2014 Integrate code-review into the ecosystem",
+      "type": "task",
       "state": "todo",
-      "md": "Once the live view works, finalize the skill-improvement scope with the human and break it into checkpointed tasks: wire the 3 un-integrated skills (`code-review`, `security-review`, `type-driven-design`) into the new ecosystem (oracle verdict, Plan Inbox findings, harness mandate), plus a toolkit-wide consistency sweep. Drive each via the `27:0.1` coder agent, watched live in this plan."
+      "md": "Update `skills/code-review/SKILL.md`: add an **Oracle-verdict gate** (reviewer consumes the adversarial oracle verdict instead of re-deriving correctness from the coder's own tests \u2014 the henhouse rule); a **Plan Inbox findings** convention (post review findings as `request_change` / `block` events on the relevant section); and a cross-link to the harness mandate. Keep the existing five-axis review; add, don't rewrite.",
+      "acceptance": [
+        "New 'Oracle verdict' subsection referencing the adversarial oracle",
+        "Plan Inbox findings convention documented (event types + section_id)",
+        "Cross-links to verification-before-completion and the harness",
+        "Front-matter description updated to mention ecosystem"
+      ]
+    },
+    {
+      "id": "task-PS3",
+      "heading": "P-S3 \u2014 Integrate security-review with the patterns we built",
+      "type": "task",
+      "state": "todo",
+      "md": "Update `skills/security-review/SKILL.md` with concrete patterns proven in the oracle/plan work: **write-segregation** (builder cannot author its own oracle), **verdict-only egress** sandbox, **commit-reveal** ordering, and the plans-server controls (**loopback-only + per-session token + strict CSP + path confinement**). Add them as checklist items with the file:pattern references.",
+      "acceptance": [
+        "Checklist items for write-segregation, verdict-egress, commit-reveal",
+        "Plans-server control pattern (loopback+token+CSP+confinement) documented",
+        "Ties back to the token-gate/asset bug as a worked example",
+        "Front-matter description updated"
+      ]
+    },
+    {
+      "id": "task-PS4",
+      "heading": "P-S4 \u2014 Cross-link type-driven-design to engplan/1",
+      "type": "task",
+      "state": "todo",
+      "md": "Update `skills/type-driven-design/SKILL.md` with a worked example: the `engplan/1` boundary parser (`assets/engplan.js` parseEngPlan/parseEvent) as a real instance of parse-at-the-boundary + validated-domain-type. Light touch \u2014 one example + cross-links; do not bloat.",
+      "acceptance": [
+        "engplan/1 parse-at-boundary worked example added",
+        "Cross-links to security-review and spec-driven-development",
+        "No net increase beyond ~30 lines"
+      ]
+    },
+    {
+      "id": "task-PS5",
+      "heading": "P-S5 \u2014 Toolkit-wide consistency sweep (all 11 skills)",
+      "type": "task",
+      "state": "todo",
+      "md": "Normalize vocabulary across every `skills/*/SKILL.md`: **safe-point, checkpoint, verdict, harness, coder-subagent doctrine, plan ecosystem**. Give each skill a short **'Where this fits'** line and a **'Related skills'** footer (cross-references). Dedup overlapping guidance (point to the canonical skill instead of repeating). Do NOT change each skill's core method.",
+      "acceptance": [
+        "Consistent terminology across all 11 skills",
+        "Every skill has 'Where this fits' + 'Related skills'",
+        "No duplicated guidance blocks (canonical owner per concept)",
+        "Diff is additive/edits only \u2014 no skill's method removed"
+      ]
+    },
+    {
+      "id": "task-PS6",
+      "heading": "P-S6 \u2014 NEW skill: automated-test-harness",
+      "type": "task",
+      "state": "todo",
+      "md": "Create `skills/automated-test-harness/SKILL.md`: the **harness mandate** (behavior is proven by an external harness, not by the coder asserting success), and the four patterns from this work \u2014 **ActorSim, AgentSim, DomProbe, FaultInj** \u2014 with when-to-use, a minimal Node-stdlib skeleton, and the adversarial-separation rule (harness/oracle authored outside the builder lineage). Register it.",
+      "acceptance": [
+        "SKILL.md with front-matter (name/description) + the 4 patterns",
+        "Harness mandate + adversarial separation stated",
+        "Minimal zero-dep skeleton example",
+        "Registered so `load_skill` can resolve it"
+      ]
+    },
+    {
+      "id": "task-PS7",
+      "heading": "P-S7 \u2014 NEW skill: tmux-fleet-orchestration",
+      "type": "task",
+      "state": "todo",
+      "md": "Create `skills/tmux-fleet-orchestration/SKILL.md`: the **orchestrator/coder split** (orchestrator plans/reviews/steers, never writes product code; tmux pane agents are the coders), **pane addressing** (e.g. `27:0.1`), **Plan Inbox polling** instead of idle sleeps, the **precise-prompt doctrine** (pre-provide file paths + line numbers; never let the coder rediscover by unbounded find/grep), and send-keys gotchas (single-line input). Register it.",
+      "acceptance": [
+        "SKILL.md with front-matter + orchestrator/coder doctrine",
+        "Pane addressing + Plan Inbox polling + precise-prompt rules",
+        "send-keys / no-unbounded-search guidance",
+        "Registered so `load_skill` can resolve it"
+      ]
+    },
+    {
+      "id": "task-PS8",
+      "heading": "P-S8 \u2014 Wiring, release metadata, verification",
+      "type": "task",
+      "state": "todo",
+      "md": "Update `.synaps-plugin/plugin.json` (skills count/desc), the marketplace index `../.synaps-plugin/marketplace.json`, and `README.md` skill list to include the 2 new skills. Bump version **0.5.0-beta \u2192 0.6.0-beta**. Confirm every SKILL.md has valid front-matter and the full test suite stays green.",
+      "acceptance": [
+        "13 skills registered & listed (was 11)",
+        "version bumped to 0.6.0-beta in manifest + marketplace index",
+        "All SKILL.md front-matter valid",
+        "node --test full suite green"
+      ]
+    },
+    {
+      "id": "gate-phase2",
+      "heading": "Gate \u2014 Phase 2 complete",
+      "type": "gate",
+      "approval": "needs-human-review",
+      "md": "P-S2..P-S8 green, all skills consistent, 2 new skills registered, version 0.6.0-beta, suite green. Human reviews, then we land Phase 2 to main."
     },
     {
       "id": "gate-viewer",
