@@ -79,7 +79,7 @@
       "id": "task-PS2",
       "heading": "PS-2 — App shell + persistent sidebar",
       "type": "task",
-      "state": "todo",
+      "state": "done",
       "md": "Rewrite `assets/shell.html` as the **SPA shell**: brand header (logo + wordmark), sidebar container, main mount point; load `site.css` + `site.js` (+ existing renderer deps as needed).\n\nBuild the **sidebar** in `site.js` from `GET /api/plans`: brand header, **filter/search** (client-side by title/slug/kind/status), plan rows with kind glyph + **status pill** + attention chips (blocking/unresolved/needs-review), and **active-route highlight**. Responsive: collapsible on narrow viewports.\n\nThe sidebar must persist across all routes (it lives in the shell, not per-view).",
       "acceptance": [
         "/ serves the SPA shell with brand header + sidebar + empty/main mount",
