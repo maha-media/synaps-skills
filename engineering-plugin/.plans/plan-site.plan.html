@@ -17,10 +17,10 @@
   "kind": "plan",
   "slug": "plan-site",
   "title": "The Plan Site — unified SPA shell + Maha Media brand (v1)",
-  "status": "in_progress",
+  "status": "complete",
   "convergence": "none",
   "created_at": "2026-06-26T02:17:49.910Z",
-  "updated_at": "2026-06-26T02:17:49.910Z",
+  "updated_at": "2026-06-26T02:58:42.061Z",
   "sections": [
     {
       "id": "objective",
@@ -161,8 +161,10 @@
       "id": "gate-land",
       "heading": "Gate — human review & land",
       "type": "gate",
-      "approval": "none",
-      "md": "**Lighter gate (agreed):** automated suite green + new tests, then the **human operator** eyeballs the live served site (the meaningful review for frontend work) and approves.\n\n**Operator confirms:** sidebar persists; clicking plans swaps main pane with **no full reload**; active highlight + search work; plan detail shows progress bar / status pills / section icons / section-jump nav; **live SSE** updates land without reload; **Maha Media brand** looks good (fonts, gold, logo, texture); back/forward + deep-linking with `?token=` work.\n\nThen orchestrator does a focused diff review (asset confinement for new types + content-negotiation + no-CDN), lands `feat/plan-site` -> `main`, pushes `origin`+`gitlab` in parity, re-syncs the installed plugin (`assets/`, `extensions/`, `bin/`), and restarts the served site."
+      "approval": "approved",
+      "md": "**Lighter gate (agreed):** automated suite green + new tests, then the **human operator** eyeballs the live served site (the meaningful review for frontend work) and approves.\n\n**Operator confirms:** sidebar persists; clicking plans swaps main pane with **no full reload**; active highlight + search work; plan detail shows progress bar / status pills / section icons / section-jump nav; **live SSE** updates land without reload; **Maha Media brand** looks good (fonts, gold, logo, texture); back/forward + deep-linking with `?token=` work.\n\nThen orchestrator does a focused diff review (asset confinement for new types + content-negotiation + no-CDN), lands `feat/plan-site` -> `main`, pushes `origin`+`gitlab` in parity, re-syncs the installed plugin (`assets/`, `extensions/`, `bin/`), and restarts the served site.",
+      "updated_at": "2026-06-26T02:58:42.061Z",
+      "note": "Human operator approved via Plan Inbox (gate-land, 2026-06-26T02:57). Automated: 493/493 tests (447 baseline + 46 new); no-CDN proven; asset confinement + content-negotiation (Decision B) reviewed. Landed."
     }
   ]
 }</script>
