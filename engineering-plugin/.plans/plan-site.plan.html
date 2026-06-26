@@ -107,7 +107,7 @@
       "id": "task-PS3",
       "heading": "PS-3 — Router + cooler plan-detail view",
       "type": "task",
-      "state": "todo",
+      "state": "done",
       "md": "Add a tiny **History-API router** in `site.js`: intercept in-app links, `pushState` + render (no reload), handle `popstate`, resolve view from `location.pathname` (`/` -> home/empty, `/plan/:slug` -> detail), and **always carry `?token=`** (reuse `resolveToken`). Implement **/plan/:id content negotiation = decision B** server-side (shell for HTML nav, standalone file otherwise).\n\n**Plan-detail view** (reuse `PlanRenderer` for sections + the existing Plan Inbox UI; restyle, don't rewrite the inbox logic): plan header with title (display serif) + status pill + kind + convergence + last-updated + **progress bar** (done/total tasks, computed client-side from `sections[type==task].state`); **sticky section-jump nav** (type icon + state dot; click scrolls); **section cards** with type icons + state pills; collapsible sections; inline inbox threads + composer.\n\n**Red->green tests:** router resolves routes + preserves token; content-negotiation (shell vs standalone).",
       "acceptance": [
         "clicking a sidebar plan swaps the main pane with NO full reload; URL updates to /plan/:slug?token=",

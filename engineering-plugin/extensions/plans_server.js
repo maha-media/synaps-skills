@@ -242,11 +242,20 @@ function createServer(opts) {
         return sendJson(res, 200, plan);
       }
       // --- render a single plan ---
+      // Decision B (spec §3.4): content-negotiate. A browser *navigation*
+      // (Accept: text/html) gets the SPA shell — the SPA reads the slug and
+      // fetches /api/plan/:id. Any non-navigation request (curl, fetch without
+      // an html Accept) gets the standalone self-contained file, preserving
+      // existing behavior + file:// degraded-mode reachability.
       if (pathname.startsWith("/plan/") && req.method === "GET") {
         const id = pathname.slice("/plan/".length);
         if (!EngPlan.validId(id)) return send(res, 400, "bad id");
         const p = findPlanPath(id);
         if (!p) return send(res, 404, "plan not found");
+        const accept = String(req.headers["accept"] || "");
+        if (/\btext\/html\b/.test(accept)) {
+          return send(res, 200, renderShell(), { "Content-Type": "text/html; charset=utf-8" });
+        }
         let txt; try { txt = fs.readFileSync(p, "utf8"); } catch (_) { return send(res, 404, "plan not found"); }
         return send(res, 200, injectToken(txt), { "Content-Type": "text/html; charset=utf-8" });
       }
