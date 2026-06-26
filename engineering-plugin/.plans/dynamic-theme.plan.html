@@ -78,7 +78,7 @@
       "id": "task-DT3",
       "heading": "DT-3 — CLI `plan theme` + LLM generation workflow",
       "type": "task",
-      "state": "todo",
+      "state": "done",
       "md": "In `bin/plan.js` add `plan theme`:\n- `plan theme` (no args) -> print current resolved theme + `_source`.\n- `plan theme --infer` -> write deterministic `inferTheme` result to `.plans/theme.json` (`generated_by:'inferred'`).\n- `plan theme --digest` -> print a compact, prompt-ready **repo digest** (title candidates, detected languages, colors found, README excerpt, current theme) + the `engtheme/1` schema + the font registry, for an LLM to consume.\n- `plan theme --write <file|->` -> read JSON (file or stdin), `parseThemeStrict`, on errors print them and EXIT NONZERO without writing; on success write `.plans/theme.json` (`generated_by:'llm'`). Live site reloads via the DT-1 watch.\n- `plan new` seeds a deterministic theme if none exists (call infer+write, best-effort, never block scaffold).\n\nDocument the LLM loop in a skill: `skills/dynamic-theme/SKILL.md` (front-matter name+description) — read digest -> choose fitting title/tagline/monogram + palette + font pairing (stress contrast/legibility + taste) -> return schema-valid JSON -> `plan theme --write`.\n\n**RED->GREEN tests:** `--infer` writes a valid file; `--write` rejects an invalid theme (nonzero, no write) and accepts a valid one; `--digest` includes title candidates + schema.\n\nCommit: `feat(theme): DT-3 — plan theme CLI + generation skill`."
     },
     {

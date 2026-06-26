@@ -21,6 +21,7 @@ const discovery = require("../lib/discovery.js");
 const inbox = require("../lib/inbox.js");
 const store = require("../lib/store.js");
 const life = require("../lib/server_lifecycle.js");
+const themeLib = require("../lib/theme.js");
 
 const PLUGIN_DIR = path.join(__dirname, "..");
 const FALLBACK_ASSETS = ["plan.js", "plan.css", "engplan.js", "md.js", "sanitize.js"];
@@ -70,7 +71,147 @@ function planNew(repoRoot, kind, slug, opts) {
   };
   const file = path.join(plansDir, slug + "." + kind + ".html");
   fs.writeFileSync(file, planArtifact(plan));
+  // Best-effort: seed a deterministic per-repo theme so the served site has a
+  // fitting identity from the first scaffold. Never blocks the scaffold, never
+  // overwrites an operator/LLM-authored theme.
+  try { seedThemeIfMissing(repoRoot); } catch (_) {}
   return { file, plansDir, assetsOut, plan };
+}
+
+// ---- theme (engtheme/1) CLI surface (DT-3) ----
+function themeFilePath(repoRoot) { return path.join(repoRoot, ".plans", "theme.json"); }
+
+// Write a theme object to .plans/theme.json (pretty). Ensures .plans exists.
+function writeThemeFile(repoRoot, theme) {
+  const dir = path.join(repoRoot, ".plans");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = themeFilePath(repoRoot);
+  fs.writeFileSync(file, JSON.stringify(theme, null, 2) + "\n");
+  return file;
+}
+
+// `plan theme` — current resolved theme + source.
+function planThemeShow(repoRoot) {
+  const t = themeLib.resolveTheme(repoRoot);
+  const source = t._source || "default";
+  return { theme: t, source };
+}
+
+// `plan theme --infer` — write the deterministic inferred theme.
+function planThemeInfer(repoRoot) {
+  const t = themeLib.inferTheme(repoRoot);
+  t.generated_by = "inferred";
+  t.generated_at = new Date().toISOString();
+  delete t._source;
+  const file = writeThemeFile(repoRoot, t);
+  return { file, theme: t };
+}
+
+// Seed a theme only when none exists (best-effort, used by `plan new`).
+function seedThemeIfMissing(repoRoot) {
+  if (fs.existsSync(themeFilePath(repoRoot))) return null;
+  return planThemeInfer(repoRoot);
+}
+
+// `plan theme --write <file|->` — validate (strict) then write. Returns
+// { ok, errors[], file?, theme? } and NEVER throws; the CLI maps ok→exit code.
+function planThemeWrite(repoRoot, jsonText) {
+  let obj;
+  try { obj = JSON.parse(jsonText); }
+  catch (e) { return { ok: false, errors: ["invalid JSON: " + String(e.message)] }; }
+  const { theme, errors } = themeLib.parseThemeStrict(obj);
+  if (errors && errors.length) return { ok: false, errors, theme };
+  theme.generated_by = "llm";
+  theme.generated_at = new Date().toISOString();
+  delete theme._source;
+  const file = writeThemeFile(repoRoot, theme);
+  return { ok: true, errors: [], file, theme };
+}
+
+// `plan theme --digest` — a compact, prompt-ready blob for an LLM to consume:
+// title candidates, detected languages, brand colors found, README excerpt,
+// the current resolved theme, the engtheme/1 schema, and the font registry.
+function planThemeDigest(repoRoot) {
+  const read = (p, max) => { try { const s = fs.statSync(path.join(repoRoot, p)); if (!s.isFile() || s.size > (max || 200000)) return null; return fs.readFileSync(path.join(repoRoot, p), "utf8"); } catch (_) { return null; } };
+  const exists = (p) => { try { return fs.existsSync(path.join(repoRoot, p)); } catch (_) { return false; } };
+
+  // title candidates
+  const candidates = [];
+  const pkg = read("package.json"); let pkgObj = null;
+  if (pkg) { try { pkgObj = JSON.parse(pkg); } catch (_) {} }
+  if (pkgObj && pkgObj.name) candidates.push("package.json name: " + pkgObj.name + (pkgObj.description ? "  — " + pkgObj.description : ""));
+  const cargo = read("Cargo.toml");
+  if (cargo) { const m = cargo.match(/\[package\][\s\S]*?\bname\s*=\s*"([^"]+)"/); if (m) candidates.push("Cargo.toml name: " + m[1]); }
+  const py = read("pyproject.toml");
+  if (py) { const m = py.match(/\bname\s*=\s*"([^"]+)"/); if (m) candidates.push("pyproject name: " + m[1]); }
+  let readme = read("README.md") || read("README.MD") || read("Readme.md") || read("README");
+  if (readme) { const h1 = readme.match(/^#\s+(.+)$/m); if (h1) candidates.push("README H1: " + h1[1].trim()); }
+  candidates.push("directory name: " + path.basename(repoRoot));
+
+  // languages
+  const langs = [];
+  if (pkgObj) langs.push("JavaScript/Node");
+  if (exists("tsconfig.json")) langs.push("TypeScript");
+  if (cargo) langs.push("Rust");
+  if (py || exists("requirements.txt") || exists("setup.py")) langs.push("Python");
+  if (exists("go.mod")) langs.push("Go");
+
+  // brand colors (reuse the inference scan via a hex sample)
+  let accent = null; try { accent = themeLib.inferAccent(repoRoot); } catch (_) {}
+
+  // README excerpt
+  let excerpt = "";
+  if (readme) excerpt = readme.replace(/^#.*$/m, "").replace(/\s+/g, " ").trim().slice(0, 400);
+
+  // current theme
+  const cur = planThemeShow(repoRoot);
+
+  // font registry
+  const families = themeLib.FONT_FAMILIES.map((f) => "  - " + f.name + "  (" + f.stack + ")").join("\n");
+  const systems = themeLib.SYSTEM_STACKS.map((s) => "  - " + s.id + "  (" + s.stack + ")").join("\n");
+  const pairings = Object.keys(themeLib.FONT_PAIRINGS).map((k) => "  - " + k + ": " + themeLib.FONT_PAIRINGS[k].display + " + " + themeLib.FONT_PAIRINGS[k].ui).join("\n");
+  const paletteKeys = themeLib.PALETTE_KEYS.join(", ");
+
+  return [
+    "=== REPO DIGEST (for engtheme/1 generation) ===",
+    "",
+    "Title candidates (pick/refine the most human, fitting one):",
+    candidates.map((c) => "  - " + c).join("\n"),
+    "",
+    "Detected languages: " + (langs.length ? langs.join(", ") : "(none detected)"),
+    "Discovered brand color: " + (accent || "(none found — choose a fitting accent)"),
+    "",
+    "README excerpt:",
+    "  " + (excerpt || "(no README)"),
+    "",
+    "Current resolved theme: source=" + cur.source + ", title=" + JSON.stringify(cur.theme.title) +
+      ", accent=" + cur.theme.palette.accent + ", fonts=" + cur.theme.fonts.display + "/" + cur.theme.fonts.ui,
+    "",
+    "=== engtheme/1 SCHEMA ===",
+    'schema: "engtheme/1" (required)',
+    "title: string <=80 (sanitized to text)",
+    "tagline: string <=140 (optional)",
+    "monogram: string <=3 (optional; else derived from title initials)",
+    "palette: object — EVERY value must be a strict color (#rgb | #rrggbb | #rrggbbaa | rgb()/rgba() numeric).",
+    "  keys: " + paletteKeys,
+    "fonts: { display, ui } — family name from the registry below (case-insensitive) OR a system-stack id.",
+    'generated_by: "llm" (set automatically by `plan theme --write`)',
+    "rationale: short note on why these choices fit the project (optional)",
+    "",
+    "=== BUNDLED FONT REGISTRY (local, no CDN) ===",
+    "Display/UI families:",
+    families,
+    "System stacks (always available, no @font-face):",
+    systems,
+    "Suggested pairings (display + ui):",
+    pairings,
+    "",
+    "=== GUIDANCE ===",
+    "Choose a title/tagline/monogram + palette + font pairing that FIT the project's domain & vibe.",
+    "Ensure contrast/legibility (text on bg, accent on surface). Keep the palette cohesive.",
+    'Return ONLY schema-valid JSON, then run: plan theme --write <file.json>  (or pipe via stdin: plan theme --write -)',
+    "",
+  ].join("\n");
 }
 
 function planList(repoRoot) {
@@ -172,6 +313,42 @@ async function main(argv) {
       console.log("reconciled " + slug + ": " + out.events.length + " events; halted=" + JSON.stringify(out.halted) + "; attention=" + JSON.stringify(out.attention));
       return;
     }
+    case "theme": {
+      const flag = rest[0];
+      if (!flag) {
+        const r = planThemeShow(repoRoot);
+        console.log("theme source: " + r.source);
+        console.log(JSON.stringify(r.theme, null, 2));
+        return;
+      }
+      if (flag === "--infer") {
+        const r = planThemeInfer(repoRoot);
+        console.log("wrote " + path.relative(repoRoot, r.file) + " (inferred): " + r.theme.title);
+        return;
+      }
+      if (flag === "--digest") {
+        console.log(planThemeDigest(repoRoot));
+        return;
+      }
+      if (flag === "--write") {
+        const target = rest[1];
+        if (!target) { console.error("usage: plan theme --write <file.json|->"); process.exit(2); }
+        let jsonText;
+        try { jsonText = (target === "-") ? fs.readFileSync(0, "utf8") : fs.readFileSync(target, "utf8"); }
+        catch (e) { console.error("could not read theme: " + String(e.message)); process.exit(2); }
+        const r = planThemeWrite(repoRoot, jsonText);
+        if (!r.ok) {
+          console.error("theme rejected — NOT written:");
+          for (const e of r.errors) console.error("  - " + e);
+          process.exit(1);
+        }
+        console.log("wrote " + path.relative(repoRoot, r.file) + " (llm): " + r.theme.title);
+        return;
+      }
+      console.error("usage: plan theme [--infer | --digest | --write <file|->]");
+      process.exit(2);
+      return;
+    }
     case "serve": {
       // explicit foreground/dev mode — NOT the singleton record path.
       const srv = await planServeForeground(repoRoot);
@@ -205,12 +382,13 @@ async function main(argv) {
       return;                          // hosted in-process: keep process alive
     }
     default:
-      console.error("usage: plan <new|open|list|serve|status|down|reconcile> ...");
+      console.error("usage: plan <new|open|list|serve|status|down|reconcile|theme> ...");
       process.exit(2);
   }
 }
 
 module.exports = { planNew, planList, planReconcile, findPlan, planArtifact, startServer, openBrowser, main,
-  planStatus, planDown, ensurePlanServer, planOpen, planServeForeground, planUrl };
+  planStatus, planDown, ensurePlanServer, planOpen, planServeForeground, planUrl,
+  planThemeShow, planThemeInfer, planThemeWrite, planThemeDigest, seedThemeIfMissing, writeThemeFile };
 
 if (require.main === module) main(process.argv.slice(2)).catch((e) => { console.error(e && e.stack || e); process.exit(1); });
