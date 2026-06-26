@@ -44,7 +44,7 @@
       "id": "task-PS0",
       "heading": "PS-0 — Brand foundation (fonts, tokens, logo)",
       "type": "task",
-      "state": "todo",
+      "state": "done",
       "md": "Establish the Maha Media visual system as the single source of truth.\n\n- Add `@font-face` for the two **bundled** WOFF2 (variable; `font-display:swap`) with system fallbacks (`Georgia,serif` / `system-ui,sans-serif`).\n- Define brand CSS custom properties (spec §3.7) in one place; **migrate `plan.css` tokens** to the brand palette so **standalone plan files** (which load `/_assets/plan.css`) also get the new look.\n- Wire the logo SVG (`/_assets/mahamedia-logo.svg`), recolorable via `currentColor`/CSS.\n- **No CDN:** zero external URLs in any CSS/HTML/JS.",
       "acceptance": [
         "@font-face references only /_assets/fonts/*.woff2 (no fonts.googleapis / gstatic)",
