@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="engplan-schema" content="engplan/1">
+<title>Plans Server as On-Demand Repo-Singleton Sidecar</title>
+<link rel="stylesheet" href="/_assets/plan.css">
+<script defer src="/_assets/engplan.js"></script>
+<script defer src="/_assets/md.js"></script>
+<script defer src="/_assets/sanitize.js"></script>
+<script defer src="/_assets/plan.js"></script>
+<script>window.addEventListener("error",function(){},true);</script>
+</head>
+<body>
+<script id="plan" type="application/json">{
+  "schema": "engplan/1",
+  "kind": "plan",
+  "slug": "plans-server-sidecar",
+  "title": "Plans Server as On-Demand Repo-Singleton Sidecar (parent-bound)",
+  "status": "in_progress",
+  "convergence": "none",
+  "created_at": "2026-06-26T01:00:00.000Z",
+  "updated_at": "2026-06-26T01:56:52.712Z",
+  "sections": [
+    {
+      "id": "objective",
+      "heading": "Objective",
+      "type": "prose",
+      "md": "Turn the plans server from a **manually-run foreground process** (today: `plan serve` in a tmux window, never exits) into an **on-demand, host-supervised Synaps sidecar** an orchestrator spawns with one trigger — with **at most one HTTP server per repo**.\n\n**Decisions (human, recorded):** (1) **B — session/parent-bound lifetime**; (2) **include the formal `provides.sidecar` manifest entry** (protocol v2).\n\n**Hard constraint (human):** the sidecar process is **owned by and bound to its parent Synaps**. It is **never handed to another Synaps and never runs independently**. Its lifetime equals the parent session's. There is **no detached daemon.**\n\n**Coder:** tmux agent in pane `27:0.1` (model: session `claude-opus-4-8`). **Orchestrator:** plans, reviews, steers, verifies — never writes product code. Node stdlib only, loopback-only, token-gated."
+    },
+    {
+      "id": "current-state",
+      "heading": "Current state & gap",
+      "type": "prose",
+      "md": "`bin/plan.js serve` calls `startServer` → `createServer().listen(0,'127.0.0.1')` and blocks forever. `plan new`/`plan open` do the same inline, so every invocation spins up a **new** server on a **new** port — N invocations = N servers. The Synaps extension (`runStdioExtension`) lazily starts one HTTP server per *session* via `plan/serve`, but there is **no repo-scoped coordination**, no health endpoint, no server record, no stop command, no stale detection, and no first-class sidecar surface an orchestrator can trigger."
+    },
+    {
+      "id": "design",
+      "heading": "Design — parent-bound sidecar, record-based single-instance",
+      "type": "prose",
+      "md": "The **Synaps `provides.sidecar`** process (protocol v2) is the **primary, host-supervised** mechanism. It hosts the HTTP server **in-process**, for the **lifetime of its parent Synaps** — the host spawns it, supervises it, and tears it down on session end. No `detached`, no `.unref()`, no idle-timeout-for-sharing, no cross-session hand-off.\n\n**On-demand:** the sidecar does **not** open a listener at `init`. On `trigger{name:'plans'}` it calls `ensureServer` and emits the `{url, token}` back via a `status`/`insert_text` frame.\n\n**At-most-one-per-repo (the 'handling'):** a gitignored **server record** `.plans/.server.json` `{ pid, port, token, url, started_at, plans_dir }` coordinates across processes:\n- `ensureServer(repoRoot)`: read the record. If a server is **live** (`pid` alive) AND `GET /api/health` answers with the matching token → **reuse** it: return its `{url, token, reused:true}` and **host nothing locally** (this caller is a client of the existing server).\n- Else, acquire an `O_EXCL` lock `.plans/.server.lock`, **re-check** the record (double-checked), and if still none → **host** a server in *this* process, write the record after `listen`, release the lock. Return `{url, token, reused:false, hosted:true}`.\n- **Stale record** (`pid` dead, or health fails) → reap the record, then host. Never blind-kill an unverified pid.\n\n**Parent-bound teardown:** on `shutdown` (or parent exit / SIGTERM) the hosting sidecar closes the server and removes the record. When the owner dies, its server dies and the record goes stale; the next `trigger` from any live session re-hosts. This honors 'never independent / never handed off': a non-owner only ever *reads* an existing URL; it cannot keep a foreign server alive or adopt it.\n\n**Surfaces (all share `ensureServer`):** the sidecar (primary), the extension RPC (`plan/serve` becomes record-aware), and the CLI (`plan status`/`plan down`; `plan new`/`open` reuse a live server instead of duplicating; `plan serve` stays a foreground dev mode). Loopback-only, token-gated, no new network surface, no external deps."
+    },
+    {
+      "id": "convergence",
+      "heading": "Convergence mode",
+      "type": "prose",
+      "md": "`convergence: none`. Two correctness risks get dedicated coverage: **cross-process single-instance** (two triggers/sessions must converge on one listener — S5) and **parent-bound cleanup** (no orphaned server or stale record after the owner exits — S6 harness). If review finds the lock/reuse path shaky, escalate to `informed`."
+    },
+    {
+      "id": "task-S0",
+      "heading": "S0 — Lifecycle core: ensureServer / stopServer / status + health",
+      "type": "task",
+      "state": "done",
+      "md": "New `engineering-plugin/lib/server_lifecycle.js`:\n- `recordPath`, `readRecord`, `writeRecord` (atomic), `removeRecord`, `isAlive(pid)` (`process.kill(pid,0)`), `health(url, token, timeoutMs)`.\n- `ensureServer(repoRoot, { createServer })` — reuse-or-host per the Design: live+healthy record → reuse (host nothing); else O_EXCL `.plans/.server.lock` + double-checked re-read → host in-process, write record after `listen`, release lock. Returns `{ url, token, reused, hosted }`. **No detached spawn.**\n- `stopServer(repoRoot)` (close a server hosted in THIS process and/or remove the record), `serverStatus(repoRoot)` → `{ state:'running'|'stale'|'down', ...record }`, `reapStale`.\n- Add `GET /api/health` to `extensions/plans_server.js` (token-gated, no plan I/O): `{ ok:true, pid, started_at, plans_dir }`. Hosting code writes the record on `listen` and removes it on `close`/SIGTERM/exit.",
+      "acceptance": [
+        "ensureServer hosts one server and /api/health answers with the token",
+        "Second ensureServer (same process or another) returns the SAME url/token (reused:true) and hosts nothing",
+        "Stale record (dead pid) is reaped, then a fresh server hosted",
+        "stopServer removes the record; serverStatus then reports 'down'",
+        "GET /api/health is token-gated (401 without token) and does no plan I/O"
+      ],
+      "updated_at": "2026-06-26T01:56:52.712Z",
+      "evidence": "landed @8680474"
+    },
+    {
+      "id": "task-S1",
+      "heading": "S1 — provides.sidecar process + manifest entry (protocol v2)",
+      "type": "task",
+      "state": "done",
+      "md": "The primary deliverable. Add a `provides.sidecar` block (protocol_version 2) to `.synaps-plugin/plugin.json` with a `plans` lifecycle command, and `bin/plans-sidecar.js` speaking the v2 frames:\n- emit `hello { protocol_version:2, extension:'plans-server', capabilities:[...] }` on start; handle `init` (no listener yet — on demand);\n- on `trigger{name:'plans', payload?}` → `ensureServer(repoRoot, { createServer })` **in-process** → emit `status`/`insert_text` carrying the `{url}` (and a `status` label);\n- on `shutdown` (and process SIGTERM/exit) → if hosting, close the server and remove the record; exit cleanly. **Lifetime = parent Synaps** (host-supervised).\nUnit-test the stdio frame exchange (feed init+trigger+shutdown, assert hello + url-bearing status + clean teardown). Validate the manifest with `plugin-maker lint` if available.",
+      "acceptance": [
+        "provides.sidecar (protocol 2) present with a 'plans' lifecycle command; manifest valid",
+        "bin/plans-sidecar.js emits hello, then a url-bearing status/insert_text on trigger (frame-level unit test)",
+        "shutdown closes the hosted server and removes the record (no orphan, no stale record)"
+      ],
+      "deps": [
+        "task-S0"
+      ],
+      "updated_at": "2026-06-26T01:56:52.712Z",
+      "evidence": "landed @78d89fe"
+    },
+    {
+      "id": "cp-1",
+      "heading": "Checkpoint — sidecar hosts a single server on demand",
+      "type": "criteria",
+      "md": "Durable artifact: a commit with S0+S1 and a green suite — an orchestrator can trigger the sidecar and get back a live `{url, token}`, with teardown bound to the parent. Reconcile the Plan Inbox.",
+      "criteria": [
+        "Sidecar trigger yields a live server + url via a v2 status frame",
+        "Record written on host, removed on shutdown",
+        "Full suite green: node --test \"test/**/*.test.js\""
+      ]
+    },
+    {
+      "id": "task-S2",
+      "heading": "S2 — CLI: status / down; reuse in new/open; serve stays foreground",
+      "type": "task",
+      "state": "done",
+      "md": "In `bin/plan.js`: add `plan status` (`serverStatus`, human-readable) and `plan down` (`stopServer` / remove record). Rewire `plan new` and `plan open` to **reuse a live server** via `ensureServer` (no duplicate listener) and open the browser; if none is live they fall back to a foreground `serve` exactly as today. Keep `plan serve` as the explicit **foreground/dev** mode (documented as non-sidecar). **No detached `plan up`** — that would contradict the parent-bound constraint.",
+      "acceptance": [
+        "plan status reports running/stale/down accurately from the record + health",
+        "plan down stops/removes the recorded server; status then shows down",
+        "plan open <slug> reuses a live server (same port) instead of spawning a second",
+        "plan serve still runs a foreground dev server (documented as non-singleton)"
+      ],
+      "deps": [
+        "task-S0"
+      ],
+      "updated_at": "2026-06-26T01:56:52.712Z",
+      "evidence": "landed @edee9eb"
+    },
+    {
+      "id": "task-S3",
+      "heading": "S3 — extension RPC becomes record-aware",
+      "type": "task",
+      "state": "done",
+      "md": "Rewire `runStdioExtension`'s `plan/serve` to go through `ensureServer` (reuse a live repo server instead of always starting a new per-session one), and add `plan/down` + `plan/status` RPCs over `stopServer`/`serverStatus`. Preserve the existing initialize/hook.handle/shutdown handshake and the session-bound teardown.",
+      "acceptance": [
+        "plan/serve RPC reuses the live repo server (same url as the sidecar / CLI)",
+        "plan/down and plan/status RPCs added and exercised in a test",
+        "initialize/hook.handle/shutdown handshake unchanged (existing tests green)"
+      ],
+      "deps": [
+        "task-S0"
+      ],
+      "updated_at": "2026-06-26T01:56:52.712Z",
+      "evidence": "landed @bd2e254"
+    },
+    {
+      "id": "task-S4",
+      "heading": "S4 — gitignore the server record + lock",
+      "type": "task",
+      "state": "done",
+      "md": "Add `.server.json` and `.server.lock` to `PLANS_GITIGNORE_PATTERNS` in `lib/store.js` (runtime-only, live in `.plans/`, must never be committed). Update the dogfood `.plans/.gitignore` managed block. Verify `git status` stays clean after a sidecar trigger + shutdown.",
+      "acceptance": [
+        ".server.json and .server.lock added to the managed gitignore block",
+        "git status clean after host + teardown (no newly-tracked runtime files)",
+        "Existing gitignore managed-block tests still green"
+      ],
+      "deps": [
+        "task-S0"
+      ],
+      "updated_at": "2026-06-26T01:56:52.712Z",
+      "evidence": "landed @fe0bd88"
+    },
+    {
+      "id": "task-S5",
+      "heading": "S5 — Single-instance & stale tests (the 'one per repo' proof)",
+      "type": "task",
+      "state": "done",
+      "md": "`test/server/server_lifecycle.test.js` — the core guarantee under test:\n- **Cross-process convergence:** two separate processes (or two ensureServer calls behind the lock) race to host → exactly ONE listener; the other **reuses the url and hosts nothing**. Assert one record, one live port.\n- **Stale reap:** record with a dead/bogus pid → next ensure reaps and hosts exactly one fresh server.\n- **Healthy reuse:** ensure twice → identical url/token, no second listener.\n- **Lock contention:** a held `.server.lock` makes a concurrent ensure wait/retry then converge (no duplicate).\nCapture a RED run (e.g. against a non-locking stub) then GREEN. Reap every spawned server/process in afterEach.",
+      "acceptance": [
+        "Two racing hosts converge to exactly one pid/port (asserted); the loser reuses",
+        "Stale (dead-pid) record triggers exactly one fresh host",
+        "Healthy reuse path opens no second listener",
+        "No orphaned servers/processes after the suite (afterEach reaps)"
+      ],
+      "deps": [
+        "task-S0",
+        "task-S1"
+      ],
+      "updated_at": "2026-06-26T01:56:52.712Z",
+      "evidence": "landed @4f805c9"
+    },
+    {
+      "id": "task-S6",
+      "heading": "S6 — Unattended parent-bound harness",
+      "type": "task",
+      "state": "done",
+      "md": "Mandatory harness (`test/harness/plans_sidecar.js`, wired as an npm script): headlessly drive a real sidecar child over the v2 stdio frames with NO human in the loop — `init` → `trigger{plans}` → assert a url-bearing `status` + `/api/health` 200; a second client `ensureServer` reuses (one listener); **kill the parent** and assert the server dies and the record is reaped on the next ensure; a clean `shutdown` removes the record and leaves the tree clean. Emit a clear red→green summary; reap every child on exit.",
+      "acceptance": [
+        "One command drives the sidecar lifecycle headlessly and exits 0",
+        "Asserts single-instance under a second client + stale-after-parent-death reap + clean shutdown",
+        "No orphaned processes or dirty tree after the run; full suite green (count reported)"
+      ],
+      "deps": [
+        "task-S0",
+        "task-S1",
+        "task-S2",
+        "task-S3",
+        "task-S4"
+      ],
+      "updated_at": "2026-06-26T01:56:52.712Z",
+      "evidence": "landed @d90b960"
+    },
+    {
+      "id": "gate-land",
+      "heading": "Gate — review & land",
+      "type": "gate",
+      "approval": "approved",
+      "md": "S0–S6 green, suite green, no orphaned servers/processes, tree clean. Orchestrator reviews the five-axis diff (special attention to the O_EXCL lock + reuse/stale path and parent-bound teardown), lands `feat/plans-server-sidecar` to `main`, pushes `origin`+`gitlab` in parity, and re-syncs the installed plugin (`lib/`, `bin/`, `extensions/`, manifest).",
+      "updated_at": "2026-06-26T01:56:52.712Z",
+      "note": "All S0–S6 done; 447/447 tests (424 baseline + 23 new); harness:sidecar green; no orphans; parent-bound constraint honored."
+    }
+  ]
+}</script>
+<div id="app">Loading… open via the Plans server for live mode.</div>
+<script>if(!window.PlanRenderer){var b=document.createElement("script");b.src="./_assets/plan.js";document.head.appendChild(b);}</script>
+</body>
+</html>

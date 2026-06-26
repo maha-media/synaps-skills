@@ -7,4 +7,6 @@ agents.json
 *.oracle.jsonl
 *.tmp-*
 *.lock
+.server.json
+.server.lock
 # <<< engineering plans (managed) <<<

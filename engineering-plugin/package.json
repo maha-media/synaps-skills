@@ -9,6 +9,7 @@
     "harness": "node test/harness/cli.js",
     "e2e": "node test/harness/e2e.js",
     "harness:gitignore": "node test/harness/gitignore_hardening.js",
+    "harness:sidecar": "node test/harness/plans_sidecar.js",
     "oracle:test": "node --test \"test/oracle-harness/**/*.test.js\"",
     "oracle:e2e": "node tools/oracle/e2e.js"
   },

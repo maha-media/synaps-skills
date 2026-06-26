@@ -42,6 +42,8 @@ const PLANS_GITIGNORE_PATTERNS = [
   "*.oracle.jsonl",
   "*.tmp-*",
   "*.lock",
+  ".server.json",
+  ".server.lock",
 ];
 
 // Delimited managed block. The plugin owns ONLY the bytes between these markers
