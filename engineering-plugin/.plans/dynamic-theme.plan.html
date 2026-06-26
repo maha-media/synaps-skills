@@ -45,14 +45,14 @@
       "id": "task-DT0",
       "heading": "DT-0 — Theme core: schema, registry, resolve, infer, css emitter",
       "type": "task",
-      "state": "todo",
+      "state": "done",
       "md": "Create `lib/theme.js` (Node stdlib only):\n- `defaultTheme` — the current Maha look as an `engtheme/1` constant (single source of the default).\n- `FONT_REGISTRY` — family name -> { file:'/_assets/fonts/<x>.woff2', stack:'<fallback>' } for all 8 bundled families + system stacks (`system-serif`/`system-sans`/`system-mono`, no file).\n- `parseTheme(obj)` — never throws; per-key validation + fallback. Colors: strict allowlist regex (`#rgb`,`#rrggbb`,`#rrggbbaa`, `rgb()/rgba()` numeric only). title<=80 (sanitized text), tagline<=140, monogram<=3 (else initials from title). fonts.display/ui must resolve in registry (case-insensitive) else default pairing. Unknown keys ignored.\n- `parseThemeStrict(obj)` — same but returns `{theme, errors[]}` for `plan theme --write`.\n- `inferTheme(repoRoot)` — bounded, no network: title from package.json/Cargo.toml/pyproject/README H1/dir name; accent from a bounded scan (theme*.css, tailwind config, :root vars, svg fill) else deterministic accent from repo-name hash; fonts from a language heuristic. Always returns a complete valid theme (`generated_by:'inferred'`).\n- `resolveTheme(repoRoot)` — file(.plans/theme.json) -> inferTheme -> defaultTheme, with `_source` tag.\n- `themeCss(theme)` — emit `:root{--bg..--font-ui}` + `@font-face` for ONLY the used display+ui families. Every emitted value is from the validated theme (no raw input).\n\n**RED->GREEN tests** for parse (valid/repair/injection/over-long/bogus-font), infer (fixture repo), resolve order, themeCss (contains validated accent + correct @font-face, strips an injection fixture).\n\nCommit: `feat(theme): DT-0 — engtheme/1 core (schema, registry, resolve, infer, css)`."
     },
     {
       "id": "task-DT1",
       "heading": "DT-1 — Server: /api/theme, /_assets/theme.css, themed shell, theme SSE",
       "type": "task",
-      "state": "todo",
+      "state": "done",
       "md": "In `extensions/plans_server.js`:\n- `GET /api/theme` (token-gated) -> `resolveTheme(repoRoot)` + `_source`.\n- `GET /_assets/theme.css` (pre-gate, generated not a file) -> `themeCss(resolveTheme(...))`, `Content-Type: text/css; charset=utf-8`, short cache. MUST pass values through the validator (reuse themeCss). No token. Keep other `/_assets/*` confinement unchanged.\n- `renderShell()` -> inject theme **title** into `<title>` and the **identity block** (wordmark text + monogram) into the sidebar header, replacing the static Maha logo markup. Link `/_assets/theme.css` in `<head>` BEFORE site.css/plan.css so theme vars win (no FOUC; applied pre-paint).\n- File-watch `.plans/theme.json` -> broadcast a `theme` SSE event (extend existing watch/broadcast). The plan SSE stream (or a small global stream) carries it.\n\n**RED->GREEN tests:** /api/theme 200 (+401 without token); theme.css 200 text/css with resolved --accent + @font-face for used families only + injection fixture stripped; renderShell contains the title + identity block (no static logo) when theme set; theme SSE fires on theme.json change.\n\nCommit: `feat(theme): DT-1 — server theme api + generated theme.css + themed shell + SSE`."
     },
     {

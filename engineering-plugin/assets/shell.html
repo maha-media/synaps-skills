@@ -4,9 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="engplan-schema" content="engplan/1">
-  <title>The Plan Site — Maha Media</title>
+  <title>{{THEME_TITLE}}</title>
   <link rel="stylesheet" href="/_assets/plan.css">
   <link rel="stylesheet" href="/_assets/site.css">
+  <!-- theme.css is generated per-repo from .plans/theme.json (engtheme/1) and
+       linked LAST so its :root palette/fonts win over the plan.css fallbacks
+       (which remain for file:// degraded mode). Applied pre-paint: no FOUC. -->
+  <link rel="stylesheet" href="/_assets/theme.css">
   <script defer src="/_assets/engplan.js"></script>
   <script defer src="/_assets/md.js"></script>
   <script defer src="/_assets/sanitize.js"></script>
@@ -18,8 +22,11 @@
   <div id="site" class="site-shell">
     <aside id="sidebar" class="sidebar-rail">
       <header class="brand">
-        <span class="brand-logo" role="img" aria-label="Maha Media"></span>
-        <span class="brand-word">Plans</span>
+        <span class="brand-monogram" id="brand-monogram" aria-hidden="true">{{THEME_MONOGRAM}}</span>
+        <span class="brand-identity">
+          <span class="brand-title" id="brand-title">{{THEME_TITLE}}</span>
+          <span class="brand-tagline" id="brand-tagline">{{THEME_TAGLINE}}</span>
+        </span>
       </header>
       <div class="sidebar-search">
         <input id="plan-search" type="search" placeholder="Filter plans…" autocomplete="off" spellcheck="false" aria-label="Filter plans">
