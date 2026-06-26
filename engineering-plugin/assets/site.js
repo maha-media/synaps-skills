@@ -316,6 +316,17 @@
     if (window.addEventListener) window.addEventListener("popstate", renderRoute);
     if (search && search.addEventListener) search.addEventListener("input", paintSidebar);
 
+    // responsive: toggle the sidebar rail on narrow viewports; close it after
+    // a navigation so the chosen plan is visible.
+    var railToggle = d.getElementById("rail-toggle");
+    if (railToggle && railToggle.addEventListener) railToggle.addEventListener("click", function () {
+      var open = d.body.classList.toggle("rail-open");
+      railToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    function closeRail() { if (d.body && d.body.classList) { d.body.classList.remove("rail-open"); if (railToggle) railToggle.setAttribute("aria-expanded", "false"); } }
+    var _navigate = navigate;
+    navigate = function (href) { closeRail(); _navigate(href); };
+
     loadPlans().then(renderRoute);
     window.__planSite = { reloadPlans: loadPlans, navigate: navigate, renderRoute: renderRoute, getPlans: function () { return plans; } };
   }
