@@ -26,6 +26,7 @@ const inbox = require("../lib/inbox.js");
 const { watchPlans } = require("../lib/watch.js");
 const { Registry } = require("../lib/registry/index.js");
 const cacHooks = require("../lib/cac/hooks.js");
+const themeLib = require("../lib/theme.js");
 
 const ASSET_TYPES = {
   ".js": "text/javascript; charset=utf-8",
@@ -152,10 +153,30 @@ function createServer(opts) {
     return found;
   }
 
+  function escapeHtmlText(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
   function renderShell() {
     const shellPath = path.join(assetsDir, "shell.html");
-    try { return injectToken(fs.readFileSync(shellPath, "utf8")); }
+    let html;
+    try { html = fs.readFileSync(shellPath, "utf8"); }
     catch (_) { return "<!doctype html><meta charset=utf-8><title>Plans</title><div id=app>shell missing</div>"; }
+    // Resolve the per-repo theme and fill the identity placeholders. The theme
+    // values are already sanitized to plain text by parseTheme; we additionally
+    // HTML-escape here (defense in depth — never trust the render path).
+    let theme;
+    try { theme = themeLib.resolveTheme(repoRoot); } catch (_) { theme = themeLib.defaultTheme; }
+    const title = escapeHtmlText(theme.title || "Plans");
+    const monogram = escapeHtmlText(theme.monogram || "");
+    const tagline = escapeHtmlText(theme.tagline || "");
+    html = html
+      .replace(/\{\{THEME_TITLE\}\}/g, title)
+      .replace(/\{\{THEME_MONOGRAM\}\}/g, monogram)
+      .replace(/\{\{THEME_TAGLINE\}\}/g, tagline);
+    return injectToken(html);
   }
 
   // ---- request router ----
@@ -166,6 +187,19 @@ function createServer(opts) {
       pathname = decodeURIComponent(u.pathname || "/");
       q = {}; for (const [k, v] of u.searchParams) q[k] = v;
     } catch (_) { return send(res, 400, "bad url"); }
+
+    // --- generated theme stylesheet (pre-gate, like other assets, but NOT a
+    //     file read: emitted from the validated/resolved theme so no value can
+    //     inject CSS). Confinement of real /_assets/* files is unchanged. ---
+    if (pathname === "/_assets/theme.css") {
+      let css;
+      try { css = themeLib.themeCss(themeLib.resolveTheme(repoRoot)); }
+      catch (_) { css = themeLib.themeCss(themeLib.defaultTheme); }
+      return send(res, 200, css, {
+        "Content-Type": "text/css; charset=utf-8",
+        "Cache-Control": "no-cache",
+      });
+    }
 
     // --- assets (served before token gate; confined by safeRealpath + isInside) ---
     if (pathname.startsWith("/_assets/")) {
@@ -191,6 +225,13 @@ function createServer(opts) {
           started_at: startedAt,
           plans_dir: path.join(repoRoot, ".plans"),
         });
+      }
+      // --- resolved per-repo theme (engtheme/1 + _source) ---
+      if (pathname === "/api/theme" && req.method === "GET") {
+        let theme;
+        try { theme = themeLib.resolveTheme(repoRoot); }
+        catch (_) { theme = Object.assign({}, themeLib.defaultTheme, { _source: "default" }); }
+        return sendJson(res, 200, theme);
       }
       // --- discovery ---
       if (pathname === "/api/plans" && req.method === "GET") {
@@ -376,9 +417,17 @@ function createServer(opts) {
     const data = "event: roster\ndata: " + JSON.stringify(registry.list()) + "\n\n";
     for (const c of rosterClients) { try { c.res.write(data); } catch (_) {} }
   }
+  // A theme change is global (not plan-scoped): notify every open plan stream so
+  // the SPA re-fetches /api/theme + /_assets/theme.css and re-applies live.
+  function broadcastTheme() {
+    const data = "event: theme\ndata: " + JSON.stringify({ type: "theme" }) + "\n\n";
+    for (const c of sseClients) { try { c.res.write(data); } catch (_) {} }
+  }
 
   // ---- file watcher → SSE ----
   let watcher = null;
+  let themeWatcher = null;
+  let themeTimer = null;
   function startWatcher() {
     const plansDir = path.join(repoRoot, ".plans");
     try { fs.mkdirSync(plansDir, { recursive: true }); } catch (_) {}
@@ -386,6 +435,16 @@ function createServer(opts) {
       if (!chg.slug) return;
       broadcastPlan(chg.slug, { type: "filechange", changed: chg.changed, removed: chg.removed, full: chg.full });
     }, { debounceMs: opts.debounceMs != null ? opts.debounceMs : 50 });
+    // Separate watch for the per-repo theme.json → global `theme` SSE event.
+    const debounceMs = opts.debounceMs != null ? opts.debounceMs : 50;
+    try {
+      themeWatcher = fs.watch(plansDir, { persistent: false }, (evt, filename) => {
+        if (!filename) return;
+        if (String(filename) !== "theme.json") return;
+        if (themeTimer) clearTimeout(themeTimer);
+        themeTimer = setTimeout(() => { themeTimer = null; broadcastTheme(); }, debounceMs);
+      });
+    } catch (_) { themeWatcher = null; }
   }
 
   // ---- start/stop ----
@@ -399,6 +458,8 @@ function createServer(opts) {
   }
   function close(cb) {
     if (watcher) try { watcher.close(); } catch (_) {}
+    if (themeWatcher) try { themeWatcher.close(); } catch (_) {}
+    if (themeTimer) try { clearTimeout(themeTimer); } catch (_) {}
     for (const c of sseClients) try { c.res.end(); } catch (_) {}
     for (const c of rosterClients) try { c.res.end(); } catch (_) {}
     sseClients.clear(); rosterClients.clear();
@@ -410,6 +471,7 @@ function createServer(opts) {
     url: null,
     token, repoRoot, pluginDir, registry, startedAt,
     broadcastPlan, // exposed for tests
+    broadcastTheme, // exposed for tests
   };
   Object.defineProperty(api, "port", { get() { const a = server.address(); return a ? a.port : null; }, configurable: true });
   return api;

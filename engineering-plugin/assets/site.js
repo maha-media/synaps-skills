@@ -36,6 +36,27 @@
   }
   function withToken(p, tk) { return p + (tk ? (p.indexOf("?") === -1 ? "?" : "&") + "token=" + encodeURIComponent(tk) : ""); }
 
+  // ---- theme: live re-apply (DT-2) ----
+  // Update the identity block + tab title and cache-bust the generated
+  // theme.css link so a new palette/fonts swap in WITHOUT a full reload. The
+  // theme is already applied pre-paint via the <link> in <head>; this only
+  // refreshes it on a `theme` SSE event. CSP-safe (no inline styles/scripts).
+  function applyTheme(d, theme, opts) {
+    opts = opts || {};
+    theme = theme || {};
+    function setText(id, val) { var n = d.getElementById(id); if (n) n.textContent = (val == null ? "" : String(val)); }
+    setText("brand-title", theme.title != null ? theme.title : "Plans");
+    setText("brand-monogram", theme.monogram != null ? theme.monogram : "");
+    setText("brand-tagline", theme.tagline != null ? theme.tagline : "");
+    if (theme.title != null) { try { d.title = String(theme.title); } catch (_) {} }
+    var link = d.getElementById("theme-css");
+    if (link && link.setAttribute) {
+      var v = opts.version != null ? opts.version : (typeof Date !== "undefined" ? Date.now() : 0);
+      link.setAttribute("href", "/_assets/theme.css?v=" + v);
+    }
+    return theme;
+  }
+
   // ---- pure helpers (unit-tested headless) ----
   function filterPlans(plans, query) {
     var q = String(query || "").trim().toLowerCase();
@@ -328,7 +349,30 @@
     navigate = function (href) { closeRail(); _navigate(href); };
 
     loadPlans().then(renderRoute);
-    window.__planSite = { reloadPlans: loadPlans, navigate: navigate, renderRoute: renderRoute, getPlans: function () { return plans; } };
+
+    // ambient theme stream: a `theme` SSE event (theme.json changed) re-fetches
+    // /api/theme and re-applies the identity + palette live, on any route.
+    var themeLive = subscribeTheme(tk, function () {
+      fetch(api("/api/theme", tk))
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (t) { if (t) applyTheme(d, t); })
+        .catch(function () {});
+    });
+
+    window.__planSite = { reloadPlans: loadPlans, navigate: navigate, renderRoute: renderRoute, getPlans: function () { return plans; }, applyTheme: function (t) { return applyTheme(d, t); }, themeLive: themeLive };
+  }
+
+  // Open a dedicated EventSource that listens for the global `theme` event.
+  // Uses a benign valid sentinel slug — theme events are broadcast to every
+  // open stream, so this connection receives them regardless of route.
+  function subscribeTheme(tk, onTheme) {
+    var ES = (typeof EventSource !== "undefined") ? EventSource : null;
+    if (!ES) return { close: function () {} };
+    var es;
+    try { es = new ES(withToken("/api/stream?plan=zzz-theme-watch", tk)); }
+    catch (_) { return { close: function () {} }; }
+    if (es.addEventListener) es.addEventListener("theme", function () { onTheme(); });
+    return { close: function () { try { es.close(); } catch (_) {} }, es: es };
   }
 
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
@@ -351,6 +395,7 @@
     sectionIcon: sectionIcon,
     renderDetail: renderDetail,
     refreshProgress: refreshProgress,
+    applyTheme: applyTheme,
     boot: boot,
   };
 });

@@ -16,7 +16,7 @@
   "commands": [
     {
       "name": "plan",
-      "description": "HTML Plan Ecosystem: new | open | list | serve | status | down | reconcile.",
+      "description": "HTML Plan Ecosystem: new | open | list | serve | status | down | reconcile | theme.",
       "command": "node",
       "args": [
         "bin/plan.js"
@@ -85,7 +85,13 @@
       "assets/site.css",
       "assets/mahamedia-logo.svg",
       "assets/fonts/outfit-latin.woff2",
-      "assets/fonts/cormorant-garamond-latin.woff2"
+      "assets/fonts/cormorant-garamond-latin.woff2",
+      "assets/fonts/space-grotesk-latin.woff2",
+      "assets/fonts/inter-latin.woff2",
+      "assets/fonts/jetbrains-mono-latin.woff2",
+      "assets/fonts/fraunces-latin.woff2",
+      "assets/fonts/work-sans-latin.woff2",
+      "assets/fonts/archivo-latin.woff2"
     ]
   }
 }

@@ -52,7 +52,7 @@ body {
   /* subtle radial gold glow texture */
   background-image:
     radial-gradient(900px 500px at 12% -8%, var(--gold-soft), transparent 60%),
-    radial-gradient(700px 420px at 100% 0%, rgba(212,165,116,.06), transparent 55%);
+    radial-gradient(700px 420px at 100% 0%, var(--gold-soft), transparent 55%);
   background-attachment: fixed;
 }
 #app { max-width: 920px; margin: 0 auto; padding: 24px; }
