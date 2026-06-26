@@ -355,15 +355,28 @@ function createServer(opts) {
 }
 
 // ---- JSON-RPC over stdio (Synaps extension contract) ----
-function runStdioExtension() {
-  const pluginDir = process.env.PLUGIN_DIR || path.join(__dirname, "..");
-  const repoRoot = process.env.REPO_ROOT || process.cwd();
-  const srv = createServer({ repoRoot, pluginDir });
-  let started = false;
-  function ensure(cb) { if (started) return cb(srv); srv.listen(() => { started = true; cb(srv); }); }
+// Opts (all optional): { input, output, repoRoot, pluginDir, exit }.
+// Defaults to process.stdin/stdout for the real extension; tests inject streams.
+function runStdioExtension(opts) {
+  opts = opts || {};
+  const input = opts.input || process.stdin;
+  const output = opts.output || process.stdout;
+  const pluginDir = opts.pluginDir || process.env.PLUGIN_DIR || path.join(__dirname, "..");
+  const repoRoot = opts.repoRoot || process.env.REPO_ROOT || process.cwd();
+  const life = opts.lifecycle || require("../lib/server_lifecycle.js");
+  const doExit = opts.exit !== false;
+  let iHosted = false; // true only if THIS process hosts the repo server
+
+  // Record-aware: reuse a live repo server (host nothing) else host in-process.
+  // Parent/session-bound — a hosted server dies when this extension process exits.
+  async function ensureRepoServer() {
+    const r = await life.ensureServer(repoRoot, { pluginDir });
+    if (r.hosted) iHosted = true;
+    return r;
+  }
 
   let buf = Buffer.alloc(0);
-  process.stdin.on("data", (chunk) => {
+  input.on("data", (chunk) => {
     buf = Buffer.concat([buf, chunk]);
     for (;;) {
       const sep = buf.indexOf("\r\n\r\n");
@@ -384,11 +397,17 @@ function runStdioExtension() {
     const payload = { jsonrpc: "2.0", id };
     if (error) payload.error = error; else payload.result = result;
     const data = Buffer.from(JSON.stringify(payload), "utf8");
-    process.stdout.write("Content-Length: " + data.length + "\r\n\r\n");
-    process.stdout.write(data);
+    output.write("Content-Length: " + data.length + "\r\n\r\n");
+    output.write(data);
   }
 
-  function handleRpc(msg) {
+  // Session-bound teardown: stop ONLY a server we host (a reuser must never
+  // kill or adopt a foreign owner's server). Then exit if configured.
+  async function teardown() {
+    if (iHosted) { try { await life.stopServer(repoRoot); } catch (_) {} iHosted = false; }
+  }
+
+  async function handleRpc(msg) {
     const { id, method, params } = msg;
     switch (method) {
       case "initialize":
@@ -399,11 +418,24 @@ function runStdioExtension() {
         // Lifecycle hooks (on_session_start / on_session_end) — no gating.
         return reply(id, { action: "continue" });
       case "shutdown":
+        await teardown();
         return reply(id, { ok: true });
       case "plan/serve":
-        return ensure((s) => reply(id, { url: s.url, port: s.port }));
+        try {
+          const r = await ensureRepoServer();
+          return reply(id, { url: r.url, port: r.port, reused: !!r.reused, hosted: !!r.hosted });
+        } catch (e) { return reply(id, null, { code: -32000, message: String(e && e.message) }); }
+      case "plan/status":
+        try { return reply(id, await life.serverStatus(repoRoot)); }
+        catch (e) { return reply(id, null, { code: -32000, message: String(e && e.message) }); }
+      case "plan/down":
+        try {
+          const d = await life.stopServer(repoRoot);
+          if (d.hosted) iHosted = false;
+          return reply(id, d);
+        } catch (e) { return reply(id, null, { code: -32000, message: String(e && e.message) }); }
       case "plan/list":
-        return ensure(() => reply(id, discovery.discover(repoRoot, {}).plans));
+        return reply(id, discovery.discover(repoRoot, {}).plans);
       case "plan/reconcile": {
         const slug = params && params.slug;
         try {
@@ -420,6 +452,12 @@ function runStdioExtension() {
         if (id !== undefined) reply(id, null, { code: -32601, message: "method not found: " + method });
     }
   }
+
+  // Parent/session death closes our stdin → session-bound teardown.
+  input.on("end", () => { teardown().then(() => { if (doExit) process.exit(0); }); });
+  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) process.once(sig, () => { teardown().then(() => { if (doExit) process.exit(0); }); });
+
+  return { teardown, repoRoot, isHosting: () => iHosted };
 }
 
 function findPlanPathFor(repoRoot, id) {
@@ -428,7 +466,7 @@ function findPlanPathFor(repoRoot, id) {
   return e ? path.join(repoRoot, e.path) : null;
 }
 
-module.exports = { createServer, DEFAULT_LIMITS };
+module.exports = { createServer, runStdioExtension, DEFAULT_LIMITS };
 
 if (require.main === module) {
   runStdioExtension();
