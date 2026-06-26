@@ -62,7 +62,7 @@
       "id": "task-PS1",
       "heading": "PS-1 — JSON plan API + new asset types",
       "type": "task",
-      "state": "todo",
+      "state": "done",
       "md": "Add `GET /api/plan/:id` (token-gated) returning the parsed `engplan/1` JSON: locate file via existing `findPlanPath`, read, extract via `discovery.extractPlanJson`, validate via `EngPlan.parseEngPlan`. Status codes: 200 valid / 404 missing / 400 bad-id (`EngPlan.validId`) / unparseable → explicit error (code TBD, documented).\n\nServe new asset types under `/_assets/`: `.woff2` (`font/woff2`) and `.svg` (`image/svg+xml`) with correct MIME + caching headers, **still path-confined via `safeRealpath`** and served before the token gate.\n\n**Red->green tests required.**",
       "acceptance": [
         "GET /api/plan/:id -> 200 with valid engplan JSON; 404 missing; 400 bad id; unparseable handled",
