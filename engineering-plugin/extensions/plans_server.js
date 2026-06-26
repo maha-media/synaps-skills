@@ -50,6 +50,8 @@ function createServer(opts) {
   const clock = opts.clock || { now: () => new Date().toISOString() };
   // token: on by default. Pass token:false to disable (tests of legacy only).
   const token = opts.token === false ? null : (opts.token || crypto.randomBytes(16).toString("hex"));
+  // Process-stable start timestamp — surfaced by /api/health and the server record.
+  const startedAt = opts.startedAt || clock.now();
   const registry = new Registry(repoRoot, { clock, limits: opts.registryLimits });
 
   let sseClients = new Set();      // {res, slug}
@@ -144,6 +146,18 @@ function createServer(opts) {
       // --- sidebar shell ---
       if (pathname === "/" || pathname === "/index.html") {
         return send(res, 200, renderShell(), { "Content-Type": "text/html; charset=utf-8" });
+      }
+      // --- liveness/health probe (token-gated, NO plan I/O) ---
+      // Used by the lifecycle layer to confirm a recorded server is genuinely
+      // ours (matching token) and alive. Intentionally does zero discovery,
+      // file, or store work so it is cheap and side-effect free.
+      if (pathname === "/api/health" && req.method === "GET") {
+        return sendJson(res, 200, {
+          ok: true,
+          pid: process.pid,
+          started_at: startedAt,
+          plans_dir: path.join(repoRoot, ".plans"),
+        });
       }
       // --- discovery ---
       if (pathname === "/api/plans" && req.method === "GET") {
@@ -333,7 +347,7 @@ function createServer(opts) {
   const api = {
     httpServer: server, listen, close,
     url: null,
-    token, repoRoot, pluginDir, registry,
+    token, repoRoot, pluginDir, registry, startedAt,
     broadcastPlan, // exposed for tests
   };
   Object.defineProperty(api, "port", { get() { const a = server.address(); return a ? a.port : null; }, configurable: true });
