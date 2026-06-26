@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="engplan-schema" content="engplan/1">
+<title>Dynamic Per-Repo Plan Site Identity & Theme (engtheme/1)</title>
+<link rel="stylesheet" href="/_assets/plan.css">
+<script defer src="/_assets/engplan.js"></script>
+<script defer src="/_assets/md.js"></script>
+<script defer src="/_assets/sanitize.js"></script>
+<script defer src="/_assets/plan.js"></script>
+<script>window.addEventListener("error",function(){},true);</script>
+</head>
+<body>
+<script id="plan" type="application/json">{
+  "schema": "engplan/1",
+  "kind": "plan",
+  "slug": "dynamic-theme",
+  "title": "Dynamic Per-Repo Plan Site Identity & Theme (engtheme/1)",
+  "status": "in_progress",
+  "convergence": "none",
+  "created_at": "2026-06-26T13:04:29.268Z",
+  "updated_at": "2026-06-26T13:04:29.268Z",
+  "sections": [
+    {
+      "id": "objective",
+      "heading": "Objective",
+      "type": "prose",
+      "md": "Make the Plan Site's **identity + visual theme dynamic and per-repo**, generated **by the LLM** from the repo's own files. The Maha Media brand becomes the **default theme**; every repo gets a distinct, fitting title + palette + font pairing + monogram. Goal (operator): **engagement / dopamine** — the site should feel like *that* project.\n\nSpec: `specs/dynamic-theme.md`. Schema: `engtheme/1`. Decisions (human-approved): **(1)** fonts = curated **bundled local WOFF2 library + system stacks** (no CDN, no runtime network); **(2)** `theme.json` is **committed** (regenerable); **(3)** identity = **generated wordmark + monogram** (no external logo); **(4)** `plan new` seeds a deterministic theme, `plan theme` is the LLM-upgrade path.\n\n**Coder:** tmux agent in pane `27:0.1` (model: session `claude-opus-4-8`). **Orchestrator:** plans, reviews, steers, verifies — never writes product code. Node stdlib only, vanilla JS, loopback-only, token-gated."
+    },
+    {
+      "id": "constraints",
+      "heading": "Hard constraints",
+      "type": "risk",
+      "risk": "security-sensitive",
+      "md": "- **No CDN, no runtime network, Node stdlib only, vanilla JS, no framework/build step.** Fonts are the 8 bundled WOFF2 already in `assets/fonts/` (cormorant-garamond, outfit, space-grotesk, inter, jetbrains-mono, fraunces, work-sans, archivo). `@font-face` references ONLY `/_assets/fonts/*` — grep must find zero external font/asset URLs.\n- **Security:** `theme.css` is **generated** from a **validated** theme — every color passes a strict allowlist regex before emission (NO CSS injection); title/tagline/monogram sanitized to text. Token gate, `safeRealpath`/`isInside` confinement, CSP, resolveToken order all unchanged. `/_assets/theme.css` is pre-gate like other assets.\n- **Never blank, never 500:** `parseTheme`/`resolveTheme` must NEVER throw on the render path — bad fields fall back per-key; a wholly invalid file → inferred → Maha default.\n- **Preserve the 493/493 baseline** — no existing test may regress; every new behavior needs a RED->GREEN test. Preserve standalone `file://` degraded mode (explicit test)."
+    },
+    {
+      "id": "decisions",
+      "heading": "Recorded decisions",
+      "type": "prose",
+      "md": "Already decided (do not re-litigate):\n1. **Fonts:** curated bundled library (8 families) + system stacks (`system-serif`/`system-sans`/`system-mono`). LLM picks display+ui by family name.\n2. **Persistence:** `.plans/theme.json` committed.\n3. **Identity:** generated wordmark (title in display font) + optional monogram chip replaces the static Maha logo.\n4. **Seeding:** `plan new` seeds a deterministic theme; `plan theme` drives LLM upgrade; `plan theme --infer` writes the deterministic one."
+    },
+    {
+      "id": "task-DT0",
+      "heading": "DT-0 — Theme core: schema, registry, resolve, infer, css emitter",
+      "type": "task",
+      "state": "todo",
+      "md": "Create `lib/theme.js` (Node stdlib only):\n- `defaultTheme` — the current Maha look as an `engtheme/1` constant (single source of the default).\n- `FONT_REGISTRY` — family name -> { file:'/_assets/fonts/<x>.woff2', stack:'<fallback>' } for all 8 bundled families + system stacks (`system-serif`/`system-sans`/`system-mono`, no file).\n- `parseTheme(obj)` — never throws; per-key validation + fallback. Colors: strict allowlist regex (`#rgb`,`#rrggbb`,`#rrggbbaa`, `rgb()/rgba()` numeric only). title<=80 (sanitized text), tagline<=140, monogram<=3 (else initials from title). fonts.display/ui must resolve in registry (case-insensitive) else default pairing. Unknown keys ignored.\n- `parseThemeStrict(obj)` — same but returns `{theme, errors[]}` for `plan theme --write`.\n- `inferTheme(repoRoot)` — bounded, no network: title from package.json/Cargo.toml/pyproject/README H1/dir name; accent from a bounded scan (theme*.css, tailwind config, :root vars, svg fill) else deterministic accent from repo-name hash; fonts from a language heuristic. Always returns a complete valid theme (`generated_by:'inferred'`).\n- `resolveTheme(repoRoot)` — file(.plans/theme.json) -> inferTheme -> defaultTheme, with `_source` tag.\n- `themeCss(theme)` — emit `:root{--bg..--font-ui}` + `@font-face` for ONLY the used display+ui families. Every emitted value is from the validated theme (no raw input).\n\n**RED->GREEN tests** for parse (valid/repair/injection/over-long/bogus-font), infer (fixture repo), resolve order, themeCss (contains validated accent + correct @font-face, strips an injection fixture).\n\nCommit: `feat(theme): DT-0 — engtheme/1 core (schema, registry, resolve, infer, css)`."
+    },
+    {
+      "id": "task-DT1",
+      "heading": "DT-1 — Server: /api/theme, /_assets/theme.css, themed shell, theme SSE",
+      "type": "task",
+      "state": "todo",
+      "md": "In `extensions/plans_server.js`:\n- `GET /api/theme` (token-gated) -> `resolveTheme(repoRoot)` + `_source`.\n- `GET /_assets/theme.css` (pre-gate, generated not a file) -> `themeCss(resolveTheme(...))`, `Content-Type: text/css; charset=utf-8`, short cache. MUST pass values through the validator (reuse themeCss). No token. Keep other `/_assets/*` confinement unchanged.\n- `renderShell()` -> inject theme **title** into `<title>` and the **identity block** (wordmark text + monogram) into the sidebar header, replacing the static Maha logo markup. Link `/_assets/theme.css` in `<head>` BEFORE site.css/plan.css so theme vars win (no FOUC; applied pre-paint).\n- File-watch `.plans/theme.json` -> broadcast a `theme` SSE event (extend existing watch/broadcast). The plan SSE stream (or a small global stream) carries it.\n\n**RED->GREEN tests:** /api/theme 200 (+401 without token); theme.css 200 text/css with resolved --accent + @font-face for used families only + injection fixture stripped; renderShell contains the title + identity block (no static logo) when theme set; theme SSE fires on theme.json change.\n\nCommit: `feat(theme): DT-1 — server theme api + generated theme.css + themed shell + SSE`."
+    },
+    {
+      "id": "task-DT2",
+      "heading": "DT-2 — Client: theme-driven shell + live re-theme; CSS vars everywhere",
+      "type": "task",
+      "state": "todo",
+      "md": "- `assets/shell.html`: identity block (`#brand-title`, `#brand-monogram`) instead of fixed logo; link `theme.css`.\n- `assets/site.js`: theme already applied via linked `theme.css` (no flash). On a `theme` SSE event: re-fetch `/api/theme`, update the title + identity text, and refresh the `theme.css` link (cache-bust) so palette/fonts swap live WITHOUT a full reload. CSP-safe (swap linked stylesheet; `documentElement.style.setProperty` only if needed).\n- `assets/site.css` + `assets/plan.css`: replace remaining hardcoded brand values with the CSS variables so sidebar + plan-detail track the theme. Maha values remain as CSS fallbacks for `file://`.\n\n**Verify live** against the running server. RED->GREEN where unit-testable (e.g. a site.js helper that builds the identity block / applies a theme object).\n\nCommit: `feat(theme): DT-2 — themed shell + live re-theme + var-driven css`."
+    },
+    {
+      "id": "cp-live",
+      "heading": "Checkpoint — live themed site renders, suite green",
+      "type": "criteria",
+      "md": "Before the CLI/workflow + polish: against the live server, the shell renders a themed identity (title/monogram, palette, fonts) from a `.plans/theme.json`, editing that file re-themes live via SSE, and the full suite is green. Orchestrator restarts the sidecar (stale in-memory code) and eyeballs the live site.",
+      "acceptance": [
+        "live site shows themed identity (not Maha logo) from theme.json",
+        "editing theme.json re-themes live (SSE) without full reload",
+        ">=493/493 tests pass",
+        "no external network requests (all /_assets local); no console errors"
+      ]
+    },
+    {
+      "id": "task-DT3",
+      "heading": "DT-3 — CLI `plan theme` + LLM generation workflow",
+      "type": "task",
+      "state": "todo",
+      "md": "In `bin/plan.js` add `plan theme`:\n- `plan theme` (no args) -> print current resolved theme + `_source`.\n- `plan theme --infer` -> write deterministic `inferTheme` result to `.plans/theme.json` (`generated_by:'inferred'`).\n- `plan theme --digest` -> print a compact, prompt-ready **repo digest** (title candidates, detected languages, colors found, README excerpt, current theme) + the `engtheme/1` schema + the font registry, for an LLM to consume.\n- `plan theme --write <file|->` -> read JSON (file or stdin), `parseThemeStrict`, on errors print them and EXIT NONZERO without writing; on success write `.plans/theme.json` (`generated_by:'llm'`). Live site reloads via the DT-1 watch.\n- `plan new` seeds a deterministic theme if none exists (call infer+write, best-effort, never block scaffold).\n\nDocument the LLM loop in a skill: `skills/dynamic-theme/SKILL.md` (front-matter name+description) — read digest -> choose fitting title/tagline/monogram + palette + font pairing (stress contrast/legibility + taste) -> return schema-valid JSON -> `plan theme --write`.\n\n**RED->GREEN tests:** `--infer` writes a valid file; `--write` rejects an invalid theme (nonzero, no write) and accepts a valid one; `--digest` includes title candidates + schema.\n\nCommit: `feat(theme): DT-3 — plan theme CLI + generation skill`."
+    },
+    {
+      "id": "task-DT4",
+      "heading": "DT-4 — Polish, no-CDN proof, final verification",
+      "type": "task",
+      "state": "todo",
+      "md": "Polish: monogram chip styling, wordmark scaling, identity block responsive; empty/invalid-theme states; ensure plan-detail + inbox fully track theme vars; tidy dead code; confirm `plan new` still scaffolds a self-rendering standalone file and seeds a theme.\n\nFinal: full suite + capture the **no-CDN proof** (grep served HTML/CSS for external URLs -> none; @font-face only `/_assets/fonts/*`) + degraded `file://` test green + confirm no orphaned servers/processes + clean tree. Prepare the diff for orchestrator review.\n\n**Note:** the orchestrator (LLM) will generate the REAL theme for THIS repo at landing — DT-4 just ensures the machinery + a committed seed theme are correct.\n\nCommit: `feat(theme): DT-4 — polish + no-CDN proof + final verification`.",
+      "acceptance": [
+        ">=493/493 tests pass (baseline + all new)",
+        "no external URLs anywhere in served assets; @font-face only /_assets/fonts/*; CSP unchanged",
+        "plan new seeds a theme + still scaffolds a standalone self-rendering file",
+        "theme.json malformed -> site degrades (inferred/default), never 500",
+        "working tree clean; no orphaned processes"
+      ],
+      "verification": [
+        "node --test \"test/**/*.test.js\" -> final count reported",
+        "grep -rEn 'https?://' assets/ + served css -> no font/CDN URLs",
+        "git status -> clean; pgrep -af plans -> none after teardown"
+      ]
+    },
+    {
+      "id": "gate-land",
+      "heading": "Gate — human review & land",
+      "type": "gate",
+      "approval": "none",
+      "md": "**Lighter gate (agreed for frontend work):** automated suite green + new tests, then the **human operator** eyeballs the live themed site and approves.\n\n**Operator confirms:** sidebar shows the **generated project title/wordmark + monogram** (NOT the Maha logo); browser tab title matches; palette + fonts are distinct, fitting, legible; editing `.plans/theme.json` (or `plan theme`) **re-themes live without full reload**; plans list/detail/live updates still work; it **feels like a distinct product** (engagement goal).\n\nThen orchestrator: focused diff review (CSS-injection allowlist on theme.css, asset confinement, no-CDN, never-throw render path), **generates a real `engtheme/1` theme for THIS repo (by the LLM) and commits it**, lands `feat/dynamic-theme` -> `main`, pushes `origin`+`gitlab` in parity, re-syncs the installed plugin (`lib/`, `assets/`, `extensions/`, `bin/`, manifest), restarts the served site."
+    }
+  ]
+}</script>
+<div id="app">Loading… open via the Plans server for live mode.</div>
+<script>if(!window.PlanRenderer){var b=document.createElement("script");b.src="./_assets/plan.js";document.head.appendChild(b);}</script>
+</body>
+</html>
