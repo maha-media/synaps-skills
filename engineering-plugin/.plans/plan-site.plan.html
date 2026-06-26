@@ -126,7 +126,7 @@
       "id": "task-PS4",
       "heading": "PS-4 — Live wiring + degraded mode",
       "type": "task",
-      "state": "todo",
+      "state": "done",
       "md": "Wire **live** into the SPA: subscribe to `/api/stream?plan=:slug` for the open plan; apply section patches via existing `applySectionPatch`; recompute the **progress bar** + refresh **sidebar attention counters** (debounced re-fetch of `/api/plans`) on change. Tear down the SSE subscription on route change.\n\n**Preserve degraded mode:** a `*.plan.html` opened from `file://` (no server) still renders its embedded `engplan/1` via `plan.js` boot. Add an explicit degraded-mode test. **No-CDN proof:** grep served HTML/CSS/JS for external URLs -> none.",
       "acceptance": [
         "editing a plan file -> open detail view updates section + progress bar without reload",

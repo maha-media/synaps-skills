@@ -122,6 +122,19 @@
   var SECTION_ICON = { prose: "¶", task: "☑", risk: "⚠", gate: "⛬", criteria: "✓", evidence: "❖", decision: "⚖" };
   function sectionIcon(type) { return SECTION_ICON[type] || "§"; }
 
+  // Recompute + repaint the done/total progress bar from appEl._plan in place.
+  // Module-scoped so the live (SSE) path and tests can both drive it.
+  function refreshProgress(d, appEl) {
+    var plan = appEl && appEl._plan;
+    if (!plan) return null;
+    var prog = planProgress(plan);
+    var label = appEl.querySelector ? appEl.querySelector(".plan-progress .label") : null;
+    var fill = appEl.querySelector ? appEl.querySelector(".plan-progress .bar i") : null;
+    if (label) label.textContent = prog.done + " / " + prog.total + " tasks (" + prog.pct + "%)";
+    if (fill) fill.setAttribute("style", "width:" + prog.pct + "%");
+    return prog;
+  }
+
   function stateDotClass(section) {
     if (section.halted) return "s-blocked";
     if (section.type === "task" && section.state) return "s-" + statusToState(section.state);
@@ -268,19 +281,11 @@
         } else if (patch.id && appEl._plan) {
           // direct section patch
           PlanRenderer.applySectionPatch(appEl._plan, patch, appEl, { document: d });
-          updateProgress(appEl._plan);
+          refreshProgress(d, appEl);
         } else if (patch.type === "note" || patch.type === "respond" || patch.type === "reconcile") {
           debouncedReloadPlans();
         }
       }, { token: tk });
-    }
-
-    function updateProgress(plan) {
-      var label = appEl.querySelector ? appEl.querySelector(".plan-progress .label") : null;
-      var fill = appEl.querySelector ? appEl.querySelector(".plan-progress .bar > i") : null;
-      var prog = planProgress(plan);
-      if (label) label.textContent = prog.done + " / " + prog.total + " tasks (" + prog.pct + "%)";
-      if (fill) fill.setAttribute("style", "width:" + prog.pct + "%");
     }
 
     var reloadTimer = null;
@@ -334,6 +339,7 @@
     resolveRoute: resolveRoute,
     sectionIcon: sectionIcon,
     renderDetail: renderDetail,
+    refreshProgress: refreshProgress,
     boot: boot,
   };
 });
