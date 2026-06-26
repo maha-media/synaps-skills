@@ -16,13 +16,32 @@
   "commands": [
     {
       "name": "plan",
-      "description": "HTML Plan Ecosystem: new | open | list | serve | reconcile.",
+      "description": "HTML Plan Ecosystem: new | open | list | serve | status | down | reconcile.",
+      "command": "node",
+      "args": [
+        "bin/plan.js"
+      ]
+    },
+    {
+      "name": "plans",
+      "description": "Plans-server sidecar control: status | down (host-supervised, at most one server per repo).",
       "command": "node",
       "args": [
         "bin/plan.js"
       ]
     }
   ],
+  "provides": {
+    "sidecar": {
+      "command": "bin/plans-sidecar.js",
+      "protocol_version": 2,
+      "lifecycle": {
+        "command": "plans",
+        "display_name": "Plans",
+        "importance": 30
+      }
+    }
+  },
   "extension": {
     "protocol_version": 1,
     "runtime": "process",
