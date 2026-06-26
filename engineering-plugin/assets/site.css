@@ -24,6 +24,32 @@ html, body { height: 100%; }
   padding: 18px 18px 14px;
   border-bottom: 1px solid var(--border);
 }
+/* generated identity (DT-2): monogram chip + wordmark, theme-driven. The old
+ * static-logo rule is kept below (legacy/file:// + tests) but unused by the
+ * themed shell. */
+.brand-monogram {
+  flex: 0 0 auto;
+  width: 38px; height: 38px; border-radius: 10px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--gold-soft); color: var(--gold);
+  border: 1px solid var(--gold-line);
+  font-family: var(--font-display); font-weight: 600; font-size: 18px; line-height: 1;
+}
+.brand-monogram:empty { display: none; }
+.brand-identity { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.brand-title {
+  font-family: var(--font-display);
+  font-size: 20px; font-weight: 500; letter-spacing: .01em;
+  color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.brand-tagline {
+  font-size: 10.5px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .07em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.brand-tagline:empty { display: none; }
+/* legacy static logo (unused by the themed shell; retained for file:// + tests) */
 .brand-logo {
   display: inline-block;
   width: 132px; height: 22px;
@@ -76,7 +102,7 @@ a.plan-row .row-pills { display: flex; align-items: center; gap: 6px; flex-wrap:
 /* ---- cooler plan-detail (PS-3) ---- */
 .plan-progress { display: flex; align-items: center; gap: 12px; margin: 14px 0 4px; }
 .plan-progress .bar { flex: 1 1 auto; height: 7px; border-radius: 999px; background: var(--surface); overflow: hidden; border: 1px solid var(--border); }
-.plan-progress .bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--gold), #e6c79a); }
+.plan-progress .bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--gold-soft), var(--gold)); }
 .plan-progress .label { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .plan-meta { display: flex; gap: 8px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin-top: 4px; }
 

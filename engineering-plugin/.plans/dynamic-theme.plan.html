@@ -59,7 +59,7 @@
       "id": "task-DT2",
       "heading": "DT-2 — Client: theme-driven shell + live re-theme; CSS vars everywhere",
       "type": "task",
-      "state": "todo",
+      "state": "done",
       "md": "- `assets/shell.html`: identity block (`#brand-title`, `#brand-monogram`) instead of fixed logo; link `theme.css`.\n- `assets/site.js`: theme already applied via linked `theme.css` (no flash). On a `theme` SSE event: re-fetch `/api/theme`, update the title + identity text, and refresh the `theme.css` link (cache-bust) so palette/fonts swap live WITHOUT a full reload. CSP-safe (swap linked stylesheet; `documentElement.style.setProperty` only if needed).\n- `assets/site.css` + `assets/plan.css`: replace remaining hardcoded brand values with the CSS variables so sidebar + plan-detail track the theme. Maha values remain as CSS fallbacks for `file://`.\n\n**Verify live** against the running server. RED->GREEN where unit-testable (e.g. a site.js helper that builds the identity block / applies a theme object).\n\nCommit: `feat(theme): DT-2 — themed shell + live re-theme + var-driven css`."
     },
     {
