@@ -12,41 +12,40 @@
 <script>window.addEventListener("error",function(){},true);</script>
 </head>
 <body>
-<script id="plan" type="application/json">
-{
+<script id="plan" type="application/json">{
   "schema": "engplan/1",
   "kind": "plan",
   "slug": "engineering-toolkit-upgrade",
-  "title": "Engineering Toolkit Upgrade \u2014 Live Viewer Fix + Skill Improvements",
-  "status": "in_progress",
+  "title": "Engineering Toolkit Upgrade — Live Viewer Fix + Skill Improvements",
+  "status": "done",
   "convergence": "none",
   "created_at": "2026-06-25T19:30:28.675Z",
-  "updated_at": "2026-06-25T20:10:00.000Z",
+  "updated_at": "2026-06-26T12:45:21.827Z",
   "sections": [
     {
       "id": "objective",
       "heading": "Objective",
       "type": "prose",
-      "md": "Make the HTML Plan Ecosystem **actually viewable in a browser**, then use that working live view to drive a quality upgrade of the engineering toolkit skills.\n\n**Coder:** tmux agent in pane `27:0.1`. **Orchestrator:** plans, reviews, steers, verifies \u2014 never writes product code.\n\nPhase 1 (P-V*) unblocks the viewer (the page currently sits forever on _\"Loading\u2026 open via the Plans server for live mode.\"_). Phase 2 (P-S*) improves the remaining skills."
+      "md": "Make the HTML Plan Ecosystem **actually viewable in a browser**, then use that working live view to drive a quality upgrade of the engineering toolkit skills.\n\n**Coder:** tmux agent in pane `27:0.1`. **Orchestrator:** plans, reviews, steers, verifies — never writes product code.\n\nPhase 1 (P-V*) unblocks the viewer (the page currently sits forever on _\"Loading… open via the Plans server for live mode.\"_). Phase 2 (P-S*) improves the remaining skills."
     },
     {
       "id": "decision-rootcause",
-      "heading": "Root cause of the \"Loading\u2026\" stall",
+      "heading": "Root cause of the \"Loading…\" stall",
       "type": "prose",
-      "md": "The renderer never runs because of a **self-inconsistent security design** in `extensions/plans_server.js`:\n\n1. **Assets are token-gated (primary bug).** The token gate at **line 136** runs for *all* routes, including `/_assets/*` (served at line 140). The page's asset script tags carry **no token**, so every renderer script returns **HTTP 401**. Verified: `GET /_assets/plan.js` \u2192 401; with `?token=` \u2192 200.\n2. **Token delivered via a CSP-blocked inline script (secondary bug).** The token is injected as an inline script setting `window.__PLAN_TOKEN__` (**line 109**), but the CSP at **line 71** is `script-src 'self'` with **no `'unsafe-inline'`**, so the browser blocks it \u2192 the global is never set \u2192 API/SSE calls (`assets/plan.js` ~120, ~211) would 401 even if assets loaded.\n\nBoth must be fixed for live mode to work."
+      "md": "The renderer never runs because of a **self-inconsistent security design** in `extensions/plans_server.js`:\n\n1. **Assets are token-gated (primary bug).** The token gate at **line 136** runs for *all* routes, including `/_assets/*` (served at line 140). The page's asset script tags carry **no token**, so every renderer script returns **HTTP 401**. Verified: `GET /_assets/plan.js` → 401; with `?token=` → 200.\n2. **Token delivered via a CSP-blocked inline script (secondary bug).** The token is injected as an inline script setting `window.__PLAN_TOKEN__` (**line 109**), but the CSP at **line 71** is `script-src 'self'` with **no `'unsafe-inline'`**, so the browser blocks it → the global is never set → API/SSE calls (`assets/plan.js` ~120, ~211) would 401 even if assets loaded.\n\nBoth must be fixed for live mode to work."
     },
     {
       "id": "decision-fix",
       "heading": "Fix approach",
       "type": "prose",
-      "md": "**Exempt static assets from auth; deliver the token without inline JS.**\n\n- **Fix A:** Serve `/_assets/*` **before** the token gate (static renderer code is non-sensitive: JS/CSS, identical for every viewer, no plan data). Keep path-confinement (`safeRealpath`/`isInside`) intact.\n- **Fix B:** Make `assets/plan.js` derive the token from `window.location.search` (`?token=`) as a fallback when the injected global is unset \u2014 the page URL already carries it, so no inline script is needed and CSP stays strict. Keep the existing global path as primary.\n\n**Rejected:** adding `'unsafe-inline'` to CSP (weakens the XSS posture we deliberately built); per-response CSP nonce (more moving parts than needed)."
+      "md": "**Exempt static assets from auth; deliver the token without inline JS.**\n\n- **Fix A:** Serve `/_assets/*` **before** the token gate (static renderer code is non-sensitive: JS/CSS, identical for every viewer, no plan data). Keep path-confinement (`safeRealpath`/`isInside`) intact.\n- **Fix B:** Make `assets/plan.js` derive the token from `window.location.search` (`?token=`) as a fallback when the injected global is unset — the page URL already carries it, so no inline script is needed and CSP stays strict. Keep the existing global path as primary.\n\n**Rejected:** adding `'unsafe-inline'` to CSP (weakens the XSS posture we deliberately built); per-response CSP nonce (more moving parts than needed)."
     },
     {
       "id": "task-PV1",
-      "heading": "P-V1 \u2014 Exempt /_assets/* from the token gate",
+      "heading": "P-V1 — Exempt /_assets/* from the token gate",
       "type": "task",
       "state": "done",
-      "md": "In `engineering-plugin/extensions/plans_server.js`, move the `/_assets/` branch (currently lines 140\u2013142) to run **before** the token gate (line 136), or short-circuit `checkToken` for `pathname.startsWith(\"/_assets/\")`. Preserve `safeRealpath` + `isInside` confinement. Do **not** exempt any `/api/*` or `/plan/*` route.",
+      "md": "In `engineering-plugin/extensions/plans_server.js`, move the `/_assets/` branch (currently lines 140–142) to run **before** the token gate (line 136), or short-circuit `checkToken` for `pathname.startsWith(\"/_assets/\")`. Preserve `safeRealpath` + `isInside` confinement. Do **not** exempt any `/api/*` or `/plan/*` route.",
       "acceptance": [
         "GET /_assets/plan.js returns 200 WITHOUT a token",
         "GET /api/plans WITHOUT token still returns 401",
@@ -55,19 +54,19 @@
     },
     {
       "id": "task-PV2",
-      "heading": "P-V2 \u2014 Token from URL in renderer (CSP-safe)",
+      "heading": "P-V2 — Token from URL in renderer (CSP-safe)",
       "type": "task",
       "state": "done",
       "md": "In `engineering-plugin/assets/plan.js`, add a token resolver used by both the notes fetch (~line 120) and the SSE subscribe (~line 211): use the injected global if present, else `new URLSearchParams(window.location.search).get('token')`, else `ctx.token`, else empty. Must remain Node-test-safe (guard `typeof window`).",
       "acceptance": [
         "Opening /plan/<slug>?token=T hydrates #app",
-        "SSE connects: network shows /api/stream?...&token=T \u2192 200",
+        "SSE connects: network shows /api/stream?...&token=T → 200",
         "Node tests still pass (no window dependency at require time)"
       ]
     },
     {
       "id": "task-PV3",
-      "heading": "P-V3 \u2014 Red\u2192green regression tests",
+      "heading": "P-V3 — Red→green regression tests",
       "type": "task",
       "state": "done",
       "md": "Add tests proving both fixes, with a captured RED run first:\n- server test: `/_assets/plan.js` returns 200 without token; `/api/plans` still 401 without token.\n- renderer test: token resolver returns the `?token=` value when the global is unset (inject a fake `window.location`).",
@@ -79,27 +78,27 @@
     },
     {
       "id": "task-PV4",
-      "heading": "P-V4 \u2014 Live-render verification + browser open",
+      "heading": "P-V4 — Live-render verification + browser open",
       "type": "task",
       "state": "done",
-      "md": "Orchestrator restarts the server, confirms all four `/_assets/*.js` return 200 unauthenticated, confirms the rendered `/plan/<slug>` hydrates (no lingering \"Loading\u2026\"), then `plan serve` + opens the browser so the human sees the live plan.",
+      "md": "Orchestrator restarts the server, confirms all four `/_assets/*.js` return 200 unauthenticated, confirms the rendered `/plan/<slug>` hydrates (no lingering \"Loading…\"), then `plan serve` + opens the browser so the human sees the live plan.",
       "acceptance": [
         "Human confirms the plan renders live in a browser"
       ]
     },
     {
       "id": "task-PS1",
-      "heading": "P-S1 \u2014 Skill upgrade scope (after viewer works)",
+      "heading": "P-S1 — Skill upgrade scope (after viewer works)",
       "type": "task",
       "state": "done",
       "md": "**Scope finalized: BROAD.** Three skill integrations + a toolkit-wide consistency sweep + two new skills. Driven via the `27:0.1` coder agent, watched live here."
     },
     {
       "id": "task-PS2",
-      "heading": "P-S2 \u2014 Integrate code-review into the ecosystem",
+      "heading": "P-S2 — Integrate code-review into the ecosystem",
       "type": "task",
       "state": "done",
-      "md": "Update `skills/code-review/SKILL.md`: add an **Oracle-verdict gate** (reviewer consumes the adversarial oracle verdict instead of re-deriving correctness from the coder's own tests \u2014 the henhouse rule); a **Plan Inbox findings** convention (post review findings as `request_change` / `block` events on the relevant section); and a cross-link to the harness mandate. Keep the existing five-axis review; add, don't rewrite.",
+      "md": "Update `skills/code-review/SKILL.md`: add an **Oracle-verdict gate** (reviewer consumes the adversarial oracle verdict instead of re-deriving correctness from the coder's own tests — the henhouse rule); a **Plan Inbox findings** convention (post review findings as `request_change` / `block` events on the relevant section); and a cross-link to the harness mandate. Keep the existing five-axis review; add, don't rewrite.",
       "acceptance": [
         "New 'Oracle verdict' subsection referencing the adversarial oracle",
         "Plan Inbox findings convention documented (event types + section_id)",
@@ -109,7 +108,7 @@
     },
     {
       "id": "task-PS3",
-      "heading": "P-S3 \u2014 Integrate security-review with the patterns we built",
+      "heading": "P-S3 — Integrate security-review with the patterns we built",
       "type": "task",
       "state": "done",
       "md": "Update `skills/security-review/SKILL.md` with concrete patterns proven in the oracle/plan work: **write-segregation** (builder cannot author its own oracle), **verdict-only egress** sandbox, **commit-reveal** ordering, and the plans-server controls (**loopback-only + per-session token + strict CSP + path confinement**). Add them as checklist items with the file:pattern references.",
@@ -122,10 +121,10 @@
     },
     {
       "id": "task-PS4",
-      "heading": "P-S4 \u2014 Cross-link type-driven-design to engplan/1",
+      "heading": "P-S4 — Cross-link type-driven-design to engplan/1",
       "type": "task",
       "state": "done",
-      "md": "Update `skills/type-driven-design/SKILL.md` with a worked example: the `engplan/1` boundary parser (`assets/engplan.js` parseEngPlan/parseEvent) as a real instance of parse-at-the-boundary + validated-domain-type. Light touch \u2014 one example + cross-links; do not bloat.",
+      "md": "Update `skills/type-driven-design/SKILL.md` with a worked example: the `engplan/1` boundary parser (`assets/engplan.js` parseEngPlan/parseEvent) as a real instance of parse-at-the-boundary + validated-domain-type. Light touch — one example + cross-links; do not bloat.",
       "acceptance": [
         "engplan/1 parse-at-boundary worked example added",
         "Cross-links to security-review and spec-driven-development",
@@ -134,7 +133,7 @@
     },
     {
       "id": "task-PS5",
-      "heading": "P-S5 \u2014 Toolkit-wide consistency sweep (all 11 skills)",
+      "heading": "P-S5 — Toolkit-wide consistency sweep (all 11 skills)",
       "type": "task",
       "state": "done",
       "md": "Normalize vocabulary across every `skills/*/SKILL.md`: **safe-point, checkpoint, verdict, harness, coder-subagent doctrine, plan ecosystem**. Give each skill a short **'Where this fits'** line and a **'Related skills'** footer (cross-references). Dedup overlapping guidance (point to the canonical skill instead of repeating). Do NOT change each skill's core method.",
@@ -142,15 +141,15 @@
         "Consistent terminology across all 11 skills",
         "Every skill has 'Where this fits' + 'Related skills'",
         "No duplicated guidance blocks (canonical owner per concept)",
-        "Diff is additive/edits only \u2014 no skill's method removed"
+        "Diff is additive/edits only — no skill's method removed"
       ]
     },
     {
       "id": "task-PS6",
-      "heading": "P-S6 \u2014 NEW skill: automated-test-harness",
+      "heading": "P-S6 — NEW skill: automated-test-harness",
       "type": "task",
       "state": "done",
-      "md": "Create `skills/automated-test-harness/SKILL.md`: the **harness mandate** (behavior is proven by an external harness, not by the coder asserting success), and the four patterns from this work \u2014 **ActorSim, AgentSim, DomProbe, FaultInj** \u2014 with when-to-use, a minimal Node-stdlib skeleton, and the adversarial-separation rule (harness/oracle authored outside the builder lineage). Register it.",
+      "md": "Create `skills/automated-test-harness/SKILL.md`: the **harness mandate** (behavior is proven by an external harness, not by the coder asserting success), and the four patterns from this work — **ActorSim, AgentSim, DomProbe, FaultInj** — with when-to-use, a minimal Node-stdlib skeleton, and the adversarial-separation rule (harness/oracle authored outside the builder lineage). Register it.",
       "acceptance": [
         "SKILL.md with front-matter (name/description) + the 4 patterns",
         "Harness mandate + adversarial separation stated",
@@ -160,7 +159,7 @@
     },
     {
       "id": "task-PS7",
-      "heading": "P-S7 \u2014 NEW skill: tmux-fleet-orchestration",
+      "heading": "P-S7 — NEW skill: tmux-fleet-orchestration",
       "type": "task",
       "state": "done",
       "md": "Create `skills/tmux-fleet-orchestration/SKILL.md`: the **orchestrator/coder split** (orchestrator plans/reviews/steers, never writes product code; tmux pane agents are the coders), **pane addressing** (e.g. `27:0.1`), **Plan Inbox polling** instead of idle sleeps, the **precise-prompt doctrine** (pre-provide file paths + line numbers; never let the coder rediscover by unbounded find/grep), and send-keys gotchas (single-line input). Register it.",
@@ -173,10 +172,10 @@
     },
     {
       "id": "task-PS8",
-      "heading": "P-S8 \u2014 Wiring, release metadata, verification",
+      "heading": "P-S8 — Wiring, release metadata, verification",
       "type": "task",
       "state": "done",
-      "md": "Update `.synaps-plugin/plugin.json` (skills count/desc), the marketplace index `../.synaps-plugin/marketplace.json`, and `README.md` skill list to include the 2 new skills. Bump version **0.5.0-beta \u2192 0.6.0-beta**. Confirm every SKILL.md has valid front-matter and the full test suite stays green.",
+      "md": "Update `.synaps-plugin/plugin.json` (skills count/desc), the marketplace index `../.synaps-plugin/marketplace.json`, and `README.md` skill list to include the 2 new skills. Bump version **0.5.0-beta → 0.6.0-beta**. Confirm every SKILL.md has valid front-matter and the full test suite stays green.",
       "acceptance": [
         "13 skills registered & listed (was 11)",
         "version bumped to 0.6.0-beta in manifest + marketplace index",
@@ -186,21 +185,20 @@
     },
     {
       "id": "gate-phase2",
-      "heading": "Gate \u2014 Phase 2 complete",
+      "heading": "Gate — Phase 2 complete",
       "type": "gate",
       "approval": "approved",
       "md": "P-S2..P-S8 green, all skills consistent, 2 new skills registered, version 0.6.0-beta, suite green. Human reviews, then we land Phase 2 to main.\n\n**Ready for review 2026-06-25:** 0.6.0-beta, 13 skills, 13/13 valid front-matter, suite 416/416. Awaiting human approval to land to main."
     },
     {
       "id": "gate-viewer",
-      "heading": "Gate \u2014 Viewer live",
+      "heading": "Gate — Viewer live",
       "type": "gate",
       "approval": "approved",
-      "md": "P-V1..P-V4 green and the human has seen the plan render live in a browser. Unblocks Phase 2 (P-S*).\n\n**\u2705 VERIFIED 2026-06-25:** assets serve 200 token-free, /api still 401, headless hydration 5/5 sections, and the human confirmed the live render in a browser. Phase 2 (P-S*) unblocked."
+      "md": "P-V1..P-V4 green and the human has seen the plan render live in a browser. Unblocks Phase 2 (P-S*).\n\n**✅ VERIFIED 2026-06-25:** assets serve 200 token-free, /api still 401, headless hydration 5/5 sections, and the human confirmed the live render in a browser. Phase 2 (P-S*) unblocked."
     }
   ]
-}
-</script>
+}</script>
 <div id="app">Loading… open via the Plans server for live mode.</div>
 <script>if(!window.PlanRenderer){var b=document.createElement("script");b.src="./_assets/plan.js";document.head.appendChild(b);}</script>
 </body>
