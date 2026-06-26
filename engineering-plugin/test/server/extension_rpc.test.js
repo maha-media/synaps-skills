@@ -80,6 +80,45 @@ test("initialize / hook.handle / shutdown handshake unchanged", async () => {
   assert.equal((await d.nextById(3)).result.ok, true);
 });
 
+test("on_session_start hook auto-hosts the repo server (no explicit plan/serve)", async () => {
+  const repo = tmpRepo();
+  const d = driver(repo);
+  // No live server yet.
+  assert.equal((await life.serverStatus(repo)).state, "down");
+  // Synaps fires the session-start lifecycle hook.
+  d.send({ jsonrpc: "2.0", id: 1, method: "hook.handle", params: { kind: "on_session_start" } });
+  assert.equal((await d.nextById(1)).result.action, "continue");
+  // The extension hosted the server as a side effect → now running.
+  const st = await life.serverStatus(repo);
+  assert.equal(st.state, "running");
+});
+
+test("on_session_end hook tears down a server THIS process hosts", async () => {
+  const repo = tmpRepo();
+  const d = driver(repo);
+  d.send({ jsonrpc: "2.0", id: 1, method: "hook.handle", params: { kind: "on_session_start" } });
+  await d.nextById(1);
+  assert.equal((await life.serverStatus(repo)).state, "running");
+  d.send({ jsonrpc: "2.0", id: 2, method: "hook.handle", params: { kind: "on_session_end" } });
+  assert.equal((await d.nextById(2)).result.action, "continue");
+  assert.equal((await life.serverStatus(repo)).state, "down");
+});
+
+test("on_session_end NEVER kills a foreign owner's server (reuser only)", async () => {
+  const repo = tmpRepo();
+  const owner = await life.ensureServer(repo); // foreign owner hosts
+  const d = driver(repo);
+  // session-start reuses the live server (hosts nothing)
+  d.send({ jsonrpc: "2.0", id: 1, method: "hook.handle", params: { kind: "on_session_start" } });
+  await d.nextById(1);
+  // session-end must NOT tear down the foreign server
+  d.send({ jsonrpc: "2.0", id: 2, method: "hook.handle", params: { kind: "on_session_end" } });
+  await d.nextById(2);
+  const st = await life.serverStatus(repo);
+  assert.equal(st.state, "running");
+  assert.equal(st.pid, owner.pid);
+});
+
 test("plan/serve reuses a live repo server (same url as the record)", async () => {
   const repo = tmpRepo();
   // A server is already hosted (e.g. by the sidecar) → recorded.

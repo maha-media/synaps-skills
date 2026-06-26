@@ -537,9 +537,19 @@ function runStdioExtension(opts) {
         return reply(id, { protocol_version: 1, extension: "engineering", capabilities: [], name: "plans-server" });
       case "ping":
         return reply(id, { ok: true, name: "plans-server", protocol: 1 });
-      case "hook.handle":
-        // Lifecycle hooks (on_session_start / on_session_end) — no gating.
+      case "hook.handle": {
+        // Lifecycle hooks dispatched by `params.kind` (Synaps protocol).
+        // on_session_start → auto-host the repo server (best-effort, singleton-
+        // safe: a live owner is reused, hosting nothing). on_session_end → tear
+        // down ONLY a server THIS process hosts (a reuser never kills a foreign
+        // owner). The hosted server is parent/session-bound: it also dies when
+        // our stdin closes or we get SIGTERM (see below). Never gate or block
+        // the session — always reply continue, even on error.
+        const kind = (params && params.kind) || "";
+        if (kind === "on_session_start") { try { await ensureRepoServer(); } catch (_) {} }
+        else if (kind === "on_session_end") { try { await teardown(); } catch (_) {} }
         return reply(id, { action: "continue" });
+      }
       case "shutdown":
         await teardown();
         return reply(id, { ok: true });
