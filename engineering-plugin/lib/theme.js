@@ -328,10 +328,13 @@ function inferAccent(repoRoot) {
   return null;
 }
 
-// pick a deterministic accent from the repo name when no brand color is found.
-function hashAccent(repoRoot) {
-  const key = path.basename(repoRoot) || "repo";
-  const h = crypto.createHash("sha1").update(key).digest();
+// pick a deterministic accent from a stable identity key (project title) when
+// no brand color is found. Hashing the identity — not the on-disk path — keeps
+// the accent stable per project and varied across projects regardless of where
+// the repo is checked out (e.g. random temp dirs).
+function hashAccent(key) {
+  const k = (key && String(key).trim()) || "repo";
+  const h = crypto.createHash("sha1").update(k).digest();
   return ACCENTS[h[0] % ACCENTS.length];
 }
 
@@ -354,7 +357,7 @@ function inferTheme(repoRoot) {
   try { const t = inferTitle(repoRoot); title = t.title || title; tagline = t.tagline || ""; } catch (_) {}
   try { accent = inferAccent(repoRoot); } catch (_) {}
   try { fonts = inferFonts(repoRoot); } catch (_) {}
-  if (!accent) accent = hashAccent(repoRoot);
+  if (!accent) accent = hashAccent(title);
 
   const palette = Object.assign({}, defaultTheme.palette, {
     accent,

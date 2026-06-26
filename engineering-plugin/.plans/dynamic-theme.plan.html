@@ -12,12 +12,13 @@
 <script>window.addEventListener("error",function(){},true);</script>
 </head>
 <body>
-<script id="plan" type="application/json">{
+<script id="plan" type="application/json">
+{
   "schema": "engplan/1",
   "kind": "plan",
   "slug": "dynamic-theme",
   "title": "Dynamic Per-Repo Plan Site Identity & Theme (engtheme/1)",
-  "status": "in_progress",
+  "status": "done",
   "convergence": "none",
   "created_at": "2026-06-26T13:04:29.268Z",
   "updated_at": "2026-06-26T13:04:29.268Z",
@@ -104,11 +105,12 @@
       "id": "gate-land",
       "heading": "Gate — human review & land",
       "type": "gate",
-      "approval": "none",
+      "approval": "approved",
       "md": "**Lighter gate (agreed for frontend work):** automated suite green + new tests, then the **human operator** eyeballs the live themed site and approves.\n\n**Operator confirms:** sidebar shows the **generated project title/wordmark + monogram** (NOT the Maha logo); browser tab title matches; palette + fonts are distinct, fitting, legible; editing `.plans/theme.json` (or `plan theme`) **re-themes live without full reload**; plans list/detail/live updates still work; it **feels like a distinct product** (engagement goal).\n\nThen orchestrator: focused diff review (CSS-injection allowlist on theme.css, asset confinement, no-CDN, never-throw render path), **generates a real `engtheme/1` theme for THIS repo (by the LLM) and commits it**, lands `feat/dynamic-theme` -> `main`, pushes `origin`+`gitlab` in parity, re-syncs the installed plugin (`lib/`, `assets/`, `extensions/`, `bin/`, manifest), restarts the served site."
     }
   ]
-}</script>
+}
+</script>
 <div id="app">Loading… open via the Plans server for live mode.</div>
 <script>if(!window.PlanRenderer){var b=document.createElement("script");b.src="./_assets/plan.js";document.head.appendChild(b);}</script>
 </body>

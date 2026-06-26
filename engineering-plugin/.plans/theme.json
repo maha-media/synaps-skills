@@ -1,0 +1,29 @@
+{
+  "schema": "engtheme/1",
+  "title": "Synaps Engineering",
+  "tagline": "disciplined agentic delivery — evidence before completion",
+  "monogram": "SE",
+  "palette": {
+    "bg": "#0b0e14",
+    "surface": "#11151f",
+    "surface2": "#161b27",
+    "text": "#e6edf3",
+    "muted": "#8b96a8",
+    "border": "rgba(230,237,243,.10)",
+    "accent": "#56d4f0",
+    "accentSoft": "rgba(86,212,240,.12)",
+    "stateTodo": "#6a7c99",
+    "stateDoing": "#56d4f0",
+    "stateDone": "#5ad19a",
+    "stateBlocked": "#ff6b81",
+    "warn": "#ffb454",
+    "review": "#b58cff"
+  },
+  "fonts": {
+    "display": "JetBrains Mono",
+    "ui": "Inter"
+  },
+  "generated_by": "llm",
+  "rationale": "Agentic engineering toolkit: a terminal-deep blue-black canvas with a cyan signal accent reading as 'active/verified'. JetBrains Mono headings make it feel like a developer tool; Inter keeps the UI crisp. State colors map to the plan lifecycle — slate todo, cyan doing, teal done, red blocked, violet review.",
+  "generated_at": "2026-06-26T13:53:54.873Z"
+}
