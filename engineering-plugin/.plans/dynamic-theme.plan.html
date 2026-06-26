@@ -85,7 +85,7 @@
       "id": "task-DT4",
       "heading": "DT-4 — Polish, no-CDN proof, final verification",
       "type": "task",
-      "state": "todo",
+      "state": "done",
       "md": "Polish: monogram chip styling, wordmark scaling, identity block responsive; empty/invalid-theme states; ensure plan-detail + inbox fully track theme vars; tidy dead code; confirm `plan new` still scaffolds a self-rendering standalone file and seeds a theme.\n\nFinal: full suite + capture the **no-CDN proof** (grep served HTML/CSS for external URLs -> none; @font-face only `/_assets/fonts/*`) + degraded `file://` test green + confirm no orphaned servers/processes + clean tree. Prepare the diff for orchestrator review.\n\n**Note:** the orchestrator (LLM) will generate the REAL theme for THIS repo at landing — DT-4 just ensures the machinery + a committed seed theme are correct.\n\nCommit: `feat(theme): DT-4 — polish + no-CDN proof + final verification`.",
       "acceptance": [
         ">=493/493 tests pass (baseline + all new)",
