@@ -32,7 +32,13 @@ const ASSET_TYPES = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".woff2": "font/woff2",
+  ".woff": "font/woff",
+  ".svg": "image/svg+xml; charset=utf-8",
 };
+// Long-lived, content-stable assets (bundled fonts + logo) get an immutable
+// cache; code/markup (js/css/html) stays uncached so edits land immediately.
+const ASSET_CACHE = new Set([".woff2", ".woff", ".svg"]);
 
 const DEFAULT_LIMITS = {
   maxBodyBytes: 256 * 1024,
@@ -101,8 +107,11 @@ function createServer(opts) {
     if (!isInside(assetsDir, abs)) return send(res, 403, "forbidden");
     fs.readFile(abs, (err, data) => {
       if (err) return send(res, 404, "not found");
-      const type = ASSET_TYPES[path.extname(abs)] || "application/octet-stream";
-      send(res, 200, data, { "Content-Type": type });
+      const ext = path.extname(abs);
+      const type = ASSET_TYPES[ext] || "application/octet-stream";
+      const headers = { "Content-Type": type };
+      if (ASSET_CACHE.has(ext)) headers["Cache-Control"] = "public, max-age=31536000, immutable";
+      send(res, 200, data, headers);
     });
   }
 
@@ -117,6 +126,30 @@ function createServer(opts) {
     const { plans } = discovery.discover(repoRoot, { limits: limits.discovery });
     const e = plans.find((p) => p.id === id);
     return e ? path.join(repoRoot, e.path) : null;
+  }
+
+  // Locate a plan file by FILENAME stem (`<id>.plan.html` / `<id>.spec.html`),
+  // independent of whether its embedded JSON parses. Used by /api/plan/:id so a
+  // file with broken JSON can be distinguished (422) from a missing one (404).
+  // Bounded walk, same ignore set as discovery; confined to repoRoot.
+  function findPlanFileByStem(id) {
+    const want = new Set([id + ".plan.html", id + ".spec.html"]);
+    const IGNORE = new Set([".git", "node_modules", ".worktrees", "target", "__pycache__"]);
+    const maxDepth = (limits.discovery && limits.discovery.maxDepth) || 8;
+    let found = null;
+    (function walk(dir, depth) {
+      if (found || depth > maxDepth) return;
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+      for (const ent of entries) {
+        if (found) return;
+        if (IGNORE.has(ent.name)) continue;
+        const full = path.join(dir, ent.name);
+        if (ent.isDirectory()) walk(full, depth + 1);
+        else if (ent.isFile() && want.has(ent.name)) found = full;
+      }
+    })(repoRoot, 0);
+    return found;
   }
 
   function renderShell() {
@@ -189,12 +222,40 @@ function createServer(opts) {
       if (pathname === "/api/agents/stream" && req.method === "GET") {
         return openSse(req, res, rosterClients, () => registry.list(), "roster");
       }
+      // --- JSON plan API (PS-1): parsed engplan/1 for the SPA ---
+      // 200 valid · 400 bad id · 404 missing · 422 unparseable/invalid JSON.
+      const planApiM = pathname.match(/^\/api\/plan\/([^/]+)$/);
+      if (planApiM && req.method === "GET") {
+        const id = planApiM[1];
+        if (!EngPlan.validId(id)) return sendJson(res, 400, { error: "invalid plan id" });
+        // Prefer the discovery path (valid plans anywhere in the repo); fall
+        // back to a filename-stem locate so a file with broken JSON is a 422.
+        const p = findPlanPath(id) || findPlanFileByStem(id);
+        if (!p) return sendJson(res, 404, { error: "plan not found" });
+        let txt;
+        try { txt = fs.readFileSync(p, "utf8"); } catch (_) { return sendJson(res, 404, { error: "plan not found" }); }
+        const json = discovery.extractPlanJson(txt);
+        if (!json) return sendJson(res, 422, { error: "plan JSON missing or unparseable" });
+        let plan;
+        try { plan = EngPlan.parseEngPlan(json); }
+        catch (e) { return sendJson(res, 422, { error: "plan JSON invalid: " + String(e.message) }); }
+        return sendJson(res, 200, plan);
+      }
       // --- render a single plan ---
+      // Decision B (spec §3.4): content-negotiate. A browser *navigation*
+      // (Accept: text/html) gets the SPA shell — the SPA reads the slug and
+      // fetches /api/plan/:id. Any non-navigation request (curl, fetch without
+      // an html Accept) gets the standalone self-contained file, preserving
+      // existing behavior + file:// degraded-mode reachability.
       if (pathname.startsWith("/plan/") && req.method === "GET") {
         const id = pathname.slice("/plan/".length);
         if (!EngPlan.validId(id)) return send(res, 400, "bad id");
         const p = findPlanPath(id);
         if (!p) return send(res, 404, "plan not found");
+        const accept = String(req.headers["accept"] || "");
+        if (/\btext\/html\b/.test(accept)) {
+          return send(res, 200, renderShell(), { "Content-Type": "text/html; charset=utf-8" });
+        }
         let txt; try { txt = fs.readFileSync(p, "utf8"); } catch (_) { return send(res, 404, "plan not found"); }
         return send(res, 200, injectToken(txt), { "Content-Type": "text/html; charset=utf-8" });
       }

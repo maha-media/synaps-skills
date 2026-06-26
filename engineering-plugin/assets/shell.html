@@ -2,19 +2,33 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="engplan-schema" content="engplan/1">
-  <title>Plans — engineering</title>
+  <title>The Plan Site — Maha Media</title>
   <link rel="stylesheet" href="/_assets/plan.css">
+  <link rel="stylesheet" href="/_assets/site.css">
   <script defer src="/_assets/engplan.js"></script>
   <script defer src="/_assets/md.js"></script>
   <script defer src="/_assets/sanitize.js"></script>
   <script defer src="/_assets/plan.js"></script>
-  <script defer src="/_assets/shell.js"></script>
+  <script defer src="/_assets/site.js"></script>
 </head>
 <body>
-  <div class="sidebar">
-    <nav class="plan-list" id="plan-list">Loading plans…</nav>
-    <main id="app"><p>Select a plan.</p></main>
+  <button class="rail-toggle" id="rail-toggle" type="button" aria-label="Toggle plans sidebar" aria-expanded="false">☰ Plans</button>
+  <div id="site" class="site-shell">
+    <aside id="sidebar" class="sidebar-rail">
+      <header class="brand">
+        <span class="brand-logo" role="img" aria-label="Maha Media"></span>
+        <span class="brand-word">Plans</span>
+      </header>
+      <div class="sidebar-search">
+        <input id="plan-search" type="search" placeholder="Filter plans…" autocomplete="off" spellcheck="false" aria-label="Filter plans">
+      </div>
+      <nav id="plan-list" class="plan-list" aria-label="Plans">Loading plans…</nav>
+    </aside>
+    <main id="view" class="view">
+      <div id="app"><div class="empty-state"><p>Select a plan from the sidebar.</p></div></div>
+    </main>
   </div>
 </body>
 </html>

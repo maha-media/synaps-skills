@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="engplan-schema" content="engplan/1">
+<title>The Plan Site — unified SPA shell + Maha Media brand (v1)</title>
+<link rel="stylesheet" href="/_assets/plan.css">
+<script defer src="/_assets/engplan.js"></script>
+<script defer src="/_assets/md.js"></script>
+<script defer src="/_assets/sanitize.js"></script>
+<script defer src="/_assets/plan.js"></script>
+<script>window.addEventListener("error",function(){},true);</script>
+</head>
+<body>
+<script id="plan" type="application/json">{
+  "schema": "engplan/1",
+  "kind": "plan",
+  "slug": "plan-site",
+  "title": "The Plan Site — unified SPA shell + Maha Media brand (v1)",
+  "status": "complete",
+  "convergence": "none",
+  "created_at": "2026-06-26T02:17:49.910Z",
+  "updated_at": "2026-06-26T02:58:42.061Z",
+  "sections": [
+    {
+      "id": "objective",
+      "heading": "Objective",
+      "type": "prose",
+      "md": "Turn the plans-server from **two disconnected pages** (a sidebar shell at `/` and standalone plan files at `/plan/:slug`) into **one cohesive single-page app** — *The Plan Site* — with a **persistent sidebar**, **client-side routing**, a **cooler plan-detail view**, and the **Maha Media brand** (dark + warm-gold editorial).\n\n**Scope = v1:** unified shell + sidebar + cooler plan detail + brand. Dashboard / Fleet / global-Inbox are a **follow-up** (spec §9).\n\n**Hard constraints:** local-first, zero external deps, **no CDN** (fonts bundled as WOFF2). Self-contained plan files + `file://` degraded mode preserved. Additive only — **baseline 447/447 must not regress**. Security (token gate, asset confinement, CSP, token-resolver order) unchanged.\n\n**Coder:** tmux agent pane `27:0.1` (model: session `claude-opus-4-8`). **Orchestrator:** plans, reviews, steers, verifies — never writes product code. Spec: `specs/plan-site.md`."
+    },
+    {
+      "id": "brand",
+      "heading": "Brand reference (extracted from mahamedia.us)",
+      "type": "prose",
+      "md": "Already staged in the worktree: `assets/fonts/outfit-latin.woff2`, `assets/fonts/cormorant-garamond-latin.woff2` (both variable fonts; one file each covers all weights, latin subset), and `assets/mahamedia-logo.svg`.\n\n**Palette:** bg `#0d0d0d` · surface `#1e1e1e` · text `#f5f2eb` (warm off-white) · muted `#b8b4aa` · **accent gold `#d4a574`** · status: todo/slate `#6a8296`, doing/gold `#d4a574`, blocked/red `#d47474`, warn `#d4a054`, review/terracotta `#d48a74`.\n\n**Type:** display = **Cormorant Garamond** (serif, large, tight tracking) for headings + wordmark; UI = **Outfit** (sans, light) for body/UI.\n\n**Texture:** subtle radial gold glows, thin gold dividers, gold focus rings."
+    },
+    {
+      "id": "decision-plan-route",
+      "heading": "Decision — /plan/:id content negotiation",
+      "type": "prose",
+      "md": "Spec §3.4 offers two strategies. **Use (B): content-negotiate.** Serve the **app shell** when the request is a browser navigation (`Accept: text/html`), and keep the **standalone self-contained file** reachable for non-navigation/`curl` and degraded use. This preserves existing `curl /plan/:id` behavior and the 447 baseline. Document the exact discriminator chosen in code comments + a test."
+    },
+    {
+      "id": "task-PS0",
+      "heading": "PS-0 — Brand foundation (fonts, tokens, logo)",
+      "type": "task",
+      "state": "done",
+      "md": "Establish the Maha Media visual system as the single source of truth.\n\n- Add `@font-face` for the two **bundled** WOFF2 (variable; `font-display:swap`) with system fallbacks (`Georgia,serif` / `system-ui,sans-serif`).\n- Define brand CSS custom properties (spec §3.7) in one place; **migrate `plan.css` tokens** to the brand palette so **standalone plan files** (which load `/_assets/plan.css`) also get the new look.\n- Wire the logo SVG (`/_assets/mahamedia-logo.svg`), recolorable via `currentColor`/CSS.\n- **No CDN:** zero external URLs in any CSS/HTML/JS.",
+      "acceptance": [
+        "@font-face references only /_assets/fonts/*.woff2 (no fonts.googleapis / gstatic)",
+        "plan.css brand tokens applied; standalone plan file (file://) renders with new palette + fonts (fallback ok offline)",
+        "grep over assets/ + served HTML finds zero http(s):// font/asset URLs",
+        "full suite still green (>=447/447)"
+      ],
+      "verification": [
+        "node --test \"test/**/*.test.js\"  -> >=447 pass",
+        "grep -rEn 'https?://' assets/  -> no font/CDN URLs",
+        "open a *.plan.html from disk in a browser; confirm brand applies"
+      ]
+    },
+    {
+      "id": "task-PS1",
+      "heading": "PS-1 — JSON plan API + new asset types",
+      "type": "task",
+      "state": "done",
+      "md": "Add `GET /api/plan/:id` (token-gated) returning the parsed `engplan/1` JSON: locate file via existing `findPlanPath`, read, extract via `discovery.extractPlanJson`, validate via `EngPlan.parseEngPlan`. Status codes: 200 valid / 404 missing / 400 bad-id (`EngPlan.validId`) / unparseable → explicit error (code TBD, documented).\n\nServe new asset types under `/_assets/`: `.woff2` (`font/woff2`) and `.svg` (`image/svg+xml`) with correct MIME + caching headers, **still path-confined via `safeRealpath`** and served before the token gate.\n\n**Red->green tests required.**",
+      "acceptance": [
+        "GET /api/plan/:id -> 200 with valid engplan JSON; 404 missing; 400 bad id; unparseable handled",
+        "GET /_assets/fonts/outfit-latin.woff2 -> 200 font/woff2; logo svg -> 200 image/svg+xml",
+        "traversal under /_assets (e.g. ../../etc/passwd, encoded) -> 403; confinement intact",
+        "token still required for /api/plan/:id (401 without)"
+      ],
+      "verification": [
+        "new tests under test/server/ with red->green proof",
+        "node --test \"test/**/*.test.js\" -> all green"
+      ]
+    },
+    {
+      "id": "task-PS2",
+      "heading": "PS-2 — App shell + persistent sidebar",
+      "type": "task",
+      "state": "done",
+      "md": "Rewrite `assets/shell.html` as the **SPA shell**: brand header (logo + wordmark), sidebar container, main mount point; load `site.css` + `site.js` (+ existing renderer deps as needed).\n\nBuild the **sidebar** in `site.js` from `GET /api/plans`: brand header, **filter/search** (client-side by title/slug/kind/status), plan rows with kind glyph + **status pill** + attention chips (blocking/unresolved/needs-review), and **active-route highlight**. Responsive: collapsible on narrow viewports.\n\nThe sidebar must persist across all routes (it lives in the shell, not per-view).",
+      "acceptance": [
+        "/ serves the SPA shell with brand header + sidebar + empty/main mount",
+        "sidebar lists plans with status pills + attention chips from /api/plans",
+        "search/filter narrows the list client-side",
+        "active plan row is highlighted"
+      ],
+      "verification": [
+        "load http://127.0.0.1:PORT/?token=... -> sidebar renders all repo plans",
+        "node --test \"test/**/*.test.js\" -> green"
+      ]
+    },
+    {
+      "id": "cp-shell",
+      "heading": "Checkpoint — shell renders, suite green",
+      "type": "criteria",
+      "md": "Before routing/detail work: the shell + sidebar render against the live server, fonts/logo/brand load locally, and the full suite is green. Orchestrator eyeballs the live sidebar.",
+      "acceptance": [
+        "live shell shows branded sidebar with all plans",
+        ">=447/447 tests pass",
+        "no console errors; no external network requests (DevTools network tab all local)"
+      ]
+    },
+    {
+      "id": "task-PS3",
+      "heading": "PS-3 — Router + cooler plan-detail view",
+      "type": "task",
+      "state": "done",
+      "md": "Add a tiny **History-API router** in `site.js`: intercept in-app links, `pushState` + render (no reload), handle `popstate`, resolve view from `location.pathname` (`/` -> home/empty, `/plan/:slug` -> detail), and **always carry `?token=`** (reuse `resolveToken`). Implement **/plan/:id content negotiation = decision B** server-side (shell for HTML nav, standalone file otherwise).\n\n**Plan-detail view** (reuse `PlanRenderer` for sections + the existing Plan Inbox UI; restyle, don't rewrite the inbox logic): plan header with title (display serif) + status pill + kind + convergence + last-updated + **progress bar** (done/total tasks, computed client-side from `sections[type==task].state`); **sticky section-jump nav** (type icon + state dot; click scrolls); **section cards** with type icons + state pills; collapsible sections; inline inbox threads + composer.\n\n**Red->green tests:** router resolves routes + preserves token; content-negotiation (shell vs standalone).",
+      "acceptance": [
+        "clicking a sidebar plan swaps the main pane with NO full reload; URL updates to /plan/:slug?token=",
+        "back/forward buttons navigate correctly (popstate)",
+        "detail shows progress bar (done/total), status pills, section icons, section-jump nav",
+        "deep-link /plan/:slug?token=... renders directly",
+        "curl /plan/:id (non-nav) still returns the standalone self-contained file"
+      ],
+      "verification": [
+        "router unit test (route resolution + token carry) red->green",
+        "content-negotiation test (Accept: text/html -> shell; else file) red->green",
+        "node --test \"test/**/*.test.js\" -> green"
+      ]
+    },
+    {
+      "id": "task-PS4",
+      "heading": "PS-4 — Live wiring + degraded mode",
+      "type": "task",
+      "state": "done",
+      "md": "Wire **live** into the SPA: subscribe to `/api/stream?plan=:slug` for the open plan; apply section patches via existing `applySectionPatch`; recompute the **progress bar** + refresh **sidebar attention counters** (debounced re-fetch of `/api/plans`) on change. Tear down the SSE subscription on route change.\n\n**Preserve degraded mode:** a `*.plan.html` opened from `file://` (no server) still renders its embedded `engplan/1` via `plan.js` boot. Add an explicit degraded-mode test. **No-CDN proof:** grep served HTML/CSS/JS for external URLs -> none.",
+      "acceptance": [
+        "editing a plan file -> open detail view updates section + progress bar without reload",
+        "sidebar attention counters refresh live (debounced) without full reload",
+        "SSE subscription is replaced/closed on navigation (no leaks/dupes)",
+        "file:// open of a standalone plan still renders (degraded mode) — test proves it"
+      ],
+      "verification": [
+        "degraded-mode test (boot from embedded JSON, no fetch) red->green",
+        "no-CDN grep proof captured",
+        "node --test \"test/**/*.test.js\" -> green"
+      ]
+    },
+    {
+      "id": "task-PS5",
+      "heading": "PS-5 — Polish + final verification",
+      "type": "task",
+      "state": "done",
+      "md": "Final polish: responsive sidebar collapse, focus rings (gold), gold-glow texture on the shell, empty/loading/error states, consistent spacing/typography. Tidy any dead code. Confirm `bin/plan.js` `plan new` still scaffolds a self-rendering standalone file.\n\nRun the full suite + capture the no-CDN proof + confirm no orphaned servers/processes + clean tree. Prepare the diff for orchestrator review.",
+      "acceptance": [
+        ">=447/447 tests pass (baseline + all new)",
+        "plan new still scaffolds a standalone file that self-renders on file://",
+        "no external URLs anywhere in served assets; CSP unchanged",
+        "working tree clean; no orphaned processes"
+      ],
+      "verification": [
+        "node --test \"test/**/*.test.js\" -> final count reported",
+        "git status -> clean; pgrep -af plans -> none after teardown"
+      ]
+    },
+    {
+      "id": "gate-land",
+      "heading": "Gate — human review & land",
+      "type": "gate",
+      "approval": "approved",
+      "md": "**Lighter gate (agreed):** automated suite green + new tests, then the **human operator** eyeballs the live served site (the meaningful review for frontend work) and approves.\n\n**Operator confirms:** sidebar persists; clicking plans swaps main pane with **no full reload**; active highlight + search work; plan detail shows progress bar / status pills / section icons / section-jump nav; **live SSE** updates land without reload; **Maha Media brand** looks good (fonts, gold, logo, texture); back/forward + deep-linking with `?token=` work.\n\nThen orchestrator does a focused diff review (asset confinement for new types + content-negotiation + no-CDN), lands `feat/plan-site` -> `main`, pushes `origin`+`gitlab` in parity, re-syncs the installed plugin (`assets/`, `extensions/`, `bin/`), and restarts the served site.",
+      "updated_at": "2026-06-26T02:58:42.061Z",
+      "note": "Human operator approved via Plan Inbox (gate-land, 2026-06-26T02:57). Automated: 493/493 tests (447 baseline + 46 new); no-CDN proven; asset confinement + content-negotiation (Decision B) reviewed. Landed."
+    }
+  ]
+}</script>
+<div id="app">Loading… open via the Plans server for live mode.</div>
+<script>if(!window.PlanRenderer){var b=document.createElement("script");b.src="./_assets/plan.js";document.head.appendChild(b);}</script>
+</body>
+</html>

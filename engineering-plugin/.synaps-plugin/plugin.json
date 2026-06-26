@@ -81,7 +81,11 @@
       "assets/md.js",
       "assets/sanitize.js",
       "assets/shell.html",
-      "assets/shell.js"
+      "assets/site.js",
+      "assets/site.css",
+      "assets/mahamedia-logo.svg",
+      "assets/fonts/outfit-latin.woff2",
+      "assets/fonts/cormorant-garamond-latin.woff2"
     ]
   }
 }
