@@ -17,4 +17,7 @@ def _no_reflect_spawn(monkeypatch, tmp_path_factory):
     fake = tmp_path_factory.mktemp("noauth") / "auth.json"
     monkeypatch.setenv("XCAL_AUTH_JSON", str(fake))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # Isolate shadow journal: never write to real ~/.config/xcal during tests.
+    fake_journal = tmp_path_factory.mktemp("shadow") / "verdicts.jsonl"
+    monkeypatch.setenv("XCAL_JOURNAL", str(fake_journal))
     yield

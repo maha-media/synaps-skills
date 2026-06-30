@@ -61,6 +61,7 @@ try:
         "score": getattr(out, "score", None),
         "confidence": getattr(out, "confidence", None),
         "evidence": list(getattr(out, "evidence", []) or []),
+        "meta": getattr(out, "meta", None) or {},
     }
     print(json.dumps({"ok": True, "payload": payload}))
 except BaseException as e:

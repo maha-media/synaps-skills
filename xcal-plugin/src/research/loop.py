@@ -37,7 +37,9 @@ from .llm import LLM
 from .router import Router, tool_schema, RouterError, TOOL_NAME
 from .skill_loader import load_skill
 from .verdict import (
-    Verdict, Finding, LensCall, CitationError, verdict_to_json,
+    Verdict, Finding, LensCall, Recommendation,
+    CitationError, MirrorTestError, VetoError, CrossValidationError,
+    verdict_to_json,
 )
 
 SKILL_NAME = "quarterly-check"
@@ -80,13 +82,20 @@ def _extract_tool_uses(content: list[dict]) -> list[dict]:
 _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}\s*$")
 
 
-def _parse_synthesis(text: str) -> tuple[list[dict], str]:
-    """Pull (findings, synthesis) out of the model's final text. Tolerant:
-    accepts a bare JSON object or a JSON object embedded at the end of text.
-    On parse failure: zero findings, synthesis = raw text."""
+def _parse_synthesis(text: str) -> tuple[list[dict], str, dict]:
+    """Pull (findings, synthesis, extras) out of the model's final text.
+    Tolerant: accepts a bare JSON object or a JSON object embedded at the
+    end of text.  On parse failure: zero findings, synthesis = raw text,
+    extras = {}.
+
+    extras contains the verdict-level forced-verdict keys when the LLM
+    produces them: stance, recommendations, mirror_test, inversion,
+    red_flags.  All are optional; absent → extras is empty → Verdict keeps
+    its defaults.  Backward-compatible: a JSON with only {findings,
+    synthesis} returns extras={} and behaviour is unchanged."""
     s = (text or "").strip()
     if not s:
-        return [], ""
+        return [], "", {}
     # try whole-string first
     candidates = [s]
     m = _JSON_BLOCK_RE.search(s)
@@ -109,8 +118,13 @@ def _parse_synthesis(text: str) -> tuple[list[dict], str]:
             findings = obj.get("findings") or []
             synthesis = obj.get("synthesis") or ""
             if isinstance(findings, list) and isinstance(synthesis, str):
-                return findings, synthesis
-    return [], s
+                extras: dict = {}
+                for key in ("stance", "recommendations", "mirror_test",
+                            "inversion", "red_flags"):
+                    if key in obj:
+                        extras[key] = obj[key]
+                return findings, synthesis, extras
+    return [], s, {}
 
 
 def _findings_from_json(items: list[dict]) -> list[Finding]:
@@ -138,14 +152,56 @@ def _findings_from_json(items: list[dict]) -> list[Finding]:
             conf = float(conf)
         except (TypeError, ValueError):
             conf = 0.0
+        # info_richness: only accept "A"/"B"/"C"
+        ir = it.get("info_richness")
+        info_richness = ir if ir in ("A", "B", "C") else None
+        # corroborations: list[str] → tuple
+        corr_raw = it.get("corroborations") or []
+        if not isinstance(corr_raw, list):
+            corr_raw = []
+        corroborations = tuple(str(c) for c in corr_raw if isinstance(c, str))
         out.append(Finding(claim=claim, kind=kind, citations=citations,
-                           value=value, confidence=conf))
+                           value=value, confidence=conf,
+                           info_richness=info_richness,
+                           corroborations=corroborations))
+    return out
+
+
+def _recommendations_from_json(items: list) -> list[Recommendation]:
+    """Tolerant: bad/malformed items are skipped."""
+    out: list[Recommendation] = []
+    if not isinstance(items, list):
+        return out
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        tier = it.get("tier")
+        if tier not in ("aggressive", "steady", "conservative"):
+            continue
+        action = str(it.get("action") or "").strip()
+        if not action:
+            continue
+        def _float_or_none(v):
+            try:
+                return float(v) if v is not None else None
+            except (TypeError, ValueError):
+                return None
+        price_low = _float_or_none(it.get("price_low"))
+        price_high = _float_or_none(it.get("price_high"))
+        cits_raw = it.get("citations") or []
+        if not isinstance(cits_raw, list):
+            cits_raw = []
+        citations = tuple(str(c) for c in cits_raw if isinstance(c, str))
+        out.append(Recommendation(tier=tier, action=action,
+                                  price_low=price_low, price_high=price_high,
+                                  citations=citations))
     return out
 
 
 def _finalize_with_repair(v: Verdict) -> int:
     """Try to finalize. On CitationError, drop offending findings and retry.
-    Returns the number of findings dropped. Loop bound: O(len(findings))."""
+    Also handles CrossValidationError by dropping findings with bad
+    corroborations. Returns the number of findings dropped."""
     dropped = 0
     valid_ids = {lc.call_id for lc in v.lens_calls if lc.status == "ok"}
     keep: list[Finding] = []
@@ -158,6 +214,21 @@ def _finalize_with_repair(v: Verdict) -> int:
             if any(c not in valid_ids for c in f.citations):
                 dropped += 1
                 continue
+        # Drop findings with invalid corroborations (unknown call_id or same-lens overlap)
+        if f.corroborations:
+            bad_corr = any(c not in valid_ids for c in f.corroborations)
+            overlap = set(f.citations) & set(f.corroborations)
+            id_to_lens = {lc.call_id: lc.lens for lc in v.lens_calls}
+            primary_lenses = {id_to_lens[c] for c in f.citations if c in id_to_lens}
+            same_lens = any(
+                id_to_lens.get(c) in primary_lenses
+                for c in f.corroborations
+                if id_to_lens.get(c) is not None
+            )
+            if bad_corr or overlap or same_lens:
+                # Strip corroborations rather than drop whole finding
+                from dataclasses import replace
+                f = replace(f, corroborations=())
         keep.append(f)
     v.findings = keep
     v.finalize()  # must succeed now
@@ -185,15 +256,35 @@ Rules:
 - NEVER invent a number that no lens returned. Fabricated numbers are
   dropped at the type boundary.
 - Qualitative findings may have empty citations.
+
+== Optional: forced-verdict fields ==
+If (and only if) your skill calls for a DECISION (a verdict / buy-sell-hold
+call), include these ADDITIONAL top-level keys in the same JSON object:
+
+  {
+    ...,
+    "stance": "pass" | "fail" | "grey_zone",
+    "mirror_test": "<=5-sentence justification (REQUIRED if stance is 'pass')>",
+    "inversion": "what would make this thesis fail / under what conditions does it die",
+    "red_flags": ["tripped red line", ...],   // any red flag FORBIDS stance 'pass'
+    "recommendations": [
+      {"tier": "aggressive"|"steady"|"conservative", "action": "...",
+       "price_low": 95.0, "price_high": 105.0,
+       "citations": ["finlens:<lens>#<id>"]}   // price bands MUST cite a lens
+    ]
+  }
+Findings may also carry "info_richness": "A"|"B"|"C" (data quality) and
+"corroborations": ["finlens:<otherlens>#<id>"] (a DIFFERENT lens confirming the
+same number). Omit all of these entirely for a non-decision (status) skill.
 """
 
 
-def _build_system_prompt(skill_body: str) -> str:
+def _build_system_prompt(skill_body: str, skill_name: str = SKILL_NAME) -> str:
     return (
         "You are xcal, a disciplined equity research agent.\n"
         "Follow the skill plan below. Use the `finlens` tool for every "
         "lens step. Numbers must always cite a lens call_id.\n\n"
-        f"== Skill: quarterly-check ==\n{skill_body}\n\n"
+        f"== Skill: {skill_name} ==\n{skill_body}\n\n"
         f"{_SYNTHESIS_INSTRUCTIONS}"
     )
 
@@ -211,8 +302,10 @@ def research_ticker(ticker: str, question: str,
     router = deps.router or Router()
     max_iters = max(1, deps.max_iters)
 
-    skill = load_skill(SKILL_NAME)
-    system = _build_system_prompt(skill.body)
+    import os as _os
+    skill_name = _os.environ.get("XCAL_SKILL") or SKILL_NAME
+    skill = load_skill(skill_name)
+    system = _build_system_prompt(skill.body, skill_name)
     tools = [tool_schema()]
 
     messages: list[dict] = [{
@@ -259,7 +352,7 @@ def research_ticker(ticker: str, question: str,
         final_text = ""
 
     # Build the verdict.
-    v = Verdict(ticker=ticker, question=question, skill_used=SKILL_NAME)
+    v = Verdict(ticker=ticker, question=question, skill_used=skill_name)
     for r in router.results:
         v.lens_calls.append(LensCall(
             call_id=r["call_id"], lens=r.get("lens", ""),
@@ -268,11 +361,23 @@ def research_ticker(ticker: str, question: str,
             error=r.get("error"),
         ))
 
-    parsed_findings, synthesis = _parse_synthesis(final_text)
+    parsed_findings, synthesis, extras = _parse_synthesis(final_text)
     v.findings = _findings_from_json(parsed_findings)
     v.synthesis = synthesis or "(no synthesis produced)"
 
-    # Citation guard with repair-by-dropping.
+    # Populate forced-verdict fields from extras (tolerant; absent → defaults).
+    _VALID_STANCES = {"pass", "fail", "grey_zone"}
+    raw_stance = extras.get("stance")
+    v.stance = raw_stance if raw_stance in _VALID_STANCES else None
+    v.recommendations = _recommendations_from_json(extras.get("recommendations") or [])
+    mt = extras.get("mirror_test")
+    v.mirror_test = str(mt) if isinstance(mt, str) else None
+    inv = extras.get("inversion")
+    v.inversion = str(inv) if isinstance(inv, str) else None
+    rf_raw = extras.get("red_flags") or []
+    v.red_flags = tuple(str(x) for x in rf_raw if isinstance(x, str))
+
+    # Finalize with comprehensive repair — never let verdict errors escape.
     try:
         v.finalize()
     except CitationError:
@@ -282,6 +387,44 @@ def research_ticker(ticker: str, question: str,
                 v.synthesis
                 + f"\n[note: {dropped} finding(s) dropped — missing/invalid citation]"
             )
+    except (VetoError, MirrorTestError):
+        # Stance incompatible with model output — downgrade to grey_zone.
+        v.stance = "grey_zone"
+        v.mirror_test = None   # not required for grey_zone
+        v.synthesis = v.synthesis + "\n[note: verdict downgraded to grey_zone — stance/mirror_test constraint]"
+        try:
+            v.finalize()
+        except CitationError:
+            dropped = _finalize_with_repair(v)
+            if dropped:
+                v.synthesis = (
+                    v.synthesis
+                    + f"\n[note: {dropped} finding(s) dropped — missing/invalid citation]"
+                )
+        except Exception:  # noqa: BLE001
+            # Last-ditch: clear stance entirely and force finalize
+            v.stance = None
+            v.recommendations = []
+            v.mirror_test = None
+            v.red_flags = ()
+            try:
+                _finalize_with_repair(v)
+            except Exception:  # noqa: BLE001
+                v._finalized = True  # type: ignore[attr-defined]
+    except CrossValidationError:
+        # Drop bad corroborations and re-finalize.
+        dropped = _finalize_with_repair(v)
+        if dropped:
+            v.synthesis = (
+                v.synthesis
+                + f"\n[note: {dropped} finding(s) dropped — missing/invalid citation]"
+            )
+    except Exception:  # noqa: BLE001
+        # Safety net — should never hit but never crash research_ticker.
+        try:
+            _finalize_with_repair(v)
+        except Exception:  # noqa: BLE001
+            v._finalized = True  # type: ignore[attr-defined]
 
     # Write to Axel (best-effort; failure does not crash the run).
     # Skip the real subprocess shell-out when running under a test fixture,
@@ -308,6 +451,41 @@ def research_ticker(ticker: str, question: str,
         except Exception as e:  # noqa: BLE001
             v.axel_memory_id = None
             v.synthesis = v.synthesis + f"\n[axel write failed: {e}]"
+
+    # Write to Shadow Journal (best-effort; failure does not crash the run).
+    # During fixture tests (XCAL_LLM_FIXTURE set), journal to a temp path so
+    # we never write to the real ~/.config/xcal path and existing tests stay green.
+    try:
+        from . import shadow as _shadow
+        # Extract last-known price from the technicals lens result, if present.
+        _price_at_verdict: Optional[float] = None
+        for _r in router.results:
+            if _r.get("lens") == "technicals" and _r.get("status") == "ok":
+                _payload = _r.get("payload") or {}
+                # price lives in payload.meta.price (finlens technicals); fall
+                # back to a few top-level field names for resilience.
+                _sources = [_payload.get("meta") or {}, _payload]
+                for _src in _sources:
+                    for _field in ("price", "current_price", "last_price", "close"):
+                        _val = _src.get(_field)
+                        if _val is not None:
+                            try:
+                                _price_at_verdict = float(_val)
+                                break
+                            except (TypeError, ValueError):
+                                pass
+                    if _price_at_verdict is not None:
+                        break
+                if _price_at_verdict is not None:
+                    break
+        _journal_path = None
+        if _os.environ.get("XCAL_LLM_FIXTURE"):
+            import tempfile as _tmp
+            _journal_path = _tmp.mktemp(suffix=".jsonl", prefix="xcal_shadow_fixture_")
+        _shadow.record_verdict(v, price_at_verdict=_price_at_verdict,
+                               journal_path=_journal_path)
+    except Exception:  # noqa: BLE001
+        pass
 
     v.reflection = _maybe_spawn_reflection(v, deps)
     return v

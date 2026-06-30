@@ -39,3 +39,24 @@ def test_load_seed_quarterly_check(monkeypatch):
     s = skill_loader.load_skill("quarterly-check")
     assert s.name == "quarterly-check"
     assert "Quarterly Check" in s.body
+
+
+def test_load_seed_value_research(monkeypatch):
+    """Heist target #5: the four-master value-research methodology skill loads
+    and encodes the 7-module sequence + the forced-verdict discipline gates."""
+    repo = Path(__file__).resolve().parents[1]
+    monkeypatch.setenv("XCAL_SKILLS_DIR", str(repo / "skills"))
+    s = skill_loader.load_skill("value-research")
+    assert s.name == "value-research"
+    assert s.path.exists()
+    body = s.body
+    # the four masters are all represented
+    for master in ("Duan", "Buffett", "Munger", "Li Lu"):
+        assert master in body, f"missing master: {master}"
+    # the discipline gates the heist installed must be referenced
+    for gate in ("stance", "mirror_test", "red_flag", "info_richness",
+                 "corroboration", "inversion"):
+        assert gate in body, f"missing discipline gate: {gate}"
+    # it forces a verdict — the whole point
+    assert "No fence-sitting" in body or "force a verdict" in body.lower() \
+        or "Force a `stance`" in body
