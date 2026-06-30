@@ -1,0 +1,29 @@
+{
+  "name": "xcal",
+  "version": "1.0.0",
+  "description": "Self-improving financial-research agent. ReAct over deterministic finlens lenses; every number cited to a lens call (no fabrication); writes findings to Axel memory; reflects to improve its own skills.",
+  "author": {
+    "name": "Haseeb Khalid (0x04am)",
+    "url": "https://github.com/HaseebKhalid1507"
+  },
+  "repository": "https://github.com/maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "finance",
+  "compatibility": {
+    "synaps": ">=0.1.0"
+  },
+  "commands": [
+    {
+      "name": "xcal-setup",
+      "description": "Build the xcal Python venv and install deps.",
+      "command": "bash",
+      "args": ["scripts/setup.sh"]
+    },
+    {
+      "name": "xcal-check",
+      "description": "Verify the venv and run the test suite.",
+      "command": "bash",
+      "args": ["scripts/setup.sh", "--check"]
+    }
+  ]
+}

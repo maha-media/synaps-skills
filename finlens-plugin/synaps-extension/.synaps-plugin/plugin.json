@@ -1,0 +1,12 @@
+{
+  "name": "finlens",
+  "version": "0.1.0",
+  "description": "finlens — multi-lens finance research workflow as Synaps tools. Insider/fundamentals/technicals/sentiment/news/search lenses + Meff-gated synthesis. Research leads, not advice.",
+  "author": "Haseeb Khalid (0x04am)",
+  "extension": {
+    "runtime": "process",
+    "command": ".venv/bin/python",
+    "args": ["synaps-extension/main.py"],
+    "permissions": ["tools.register"]
+  }
+}
