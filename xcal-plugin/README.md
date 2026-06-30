@@ -92,3 +92,27 @@ xcal-plugin/
 ## Author
 
 Haseeb Khalid (0x04am) — <https://github.com/HaseebKhalid1507>
+
+---
+
+## What's New — Forced Verdict + Track Record (`value-research` skill)
+
+This update adds a **decision layer** on top of the cited-research engine.
+
+- **`value-research` skill** — a four-master (Buffett/Munger/Duan/Li Lu)
+  methodology that produces a **decisive stance** (`pass` / `fail` / `grey_zone`)
+  instead of a balanced summary. Use it via `XCAL_SKILL=value-research`
+  (default remains `quarterly-check`).
+- **Forced verdict + mirror test** — a `pass` requires a ≤5-sentence justification
+  or it's rejected at the type boundary. Tiered recommendations
+  (aggressive/steady/conservative) with cited price bands (no fabricated targets).
+- **Anti-bias rig** — per-finding info-richness grade (A/B/C), Munger inversion,
+  and a **red-flag veto** (any red flag structurally forbids a `pass`).
+- **Cross-validation** — a number confirmed by a *different* lens is marked
+  cross-validated (extends the no-fabrication guarantee).
+- **Shadow Account** (`src/research/shadow.py`) — every verdict is journaled with
+  a price anchor and can be scored against outcomes (`score_journal`), enabling a
+  verifiable track record. Journal path via `XCAL_JOURNAL`.
+
+All additive + backward-compatible — the default `quarterly-check` path is
+unchanged. See `NOTICE.md` for methodology credits (AI Berkshire, Vibe-Trading).
