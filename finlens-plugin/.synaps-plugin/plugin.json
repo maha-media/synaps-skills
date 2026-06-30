@@ -1,0 +1,29 @@
+{
+  "name": "finlens",
+  "version": "0.1.0",
+  "description": "Multi-lens financial research — 6 deterministic lenses (insider, fundamentals, technicals, sentiment, news, search-trend) + Meff-gated synthesis. Research leads, not advice; the AI never invents numbers.",
+  "author": {
+    "name": "Haseeb Khalid (0x04am)",
+    "url": "https://github.com/HaseebKhalid1507"
+  },
+  "repository": "https://github.com/maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "finance",
+  "compatibility": {
+    "synaps": ">=0.1.0"
+  },
+  "commands": [
+    {
+      "name": "finlens-setup",
+      "description": "Build the finlens Python venv and install deps.",
+      "command": "bash",
+      "args": ["scripts/setup.sh"]
+    },
+    {
+      "name": "finlens-check",
+      "description": "Verify the venv and run the test suite.",
+      "command": "bash",
+      "args": ["scripts/setup.sh", "--check"]
+    }
+  ]
+}
