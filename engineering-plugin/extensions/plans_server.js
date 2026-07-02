@@ -132,9 +132,15 @@ function createServer(opts) {
   // Locate a plan file by FILENAME stem (`<id>.plan.html` / `<id>.spec.html`),
   // independent of whether its embedded JSON parses. Used by /api/plan/:id so a
   // file with broken JSON can be distinguished (422) from a missing one (404).
-  // Bounded walk, same ignore set as discovery; confined to repoRoot.
+  // Kind-qualified ids (`<slug>.spec` / `<slug>.plan`) resolve to exactly that
+  // artifact; bare ids fall back to the historical dual-stem search (plan
+  // preferred) for backward compatibility. Bounded walk, same ignore set as
+  // discovery; confined to repoRoot.
   function findPlanFileByStem(id) {
-    const want = new Set([id + ".plan.html", id + ".spec.html"]);
+    const km = id.match(/^(.*)\.(plan|spec)$/);
+    const want = km
+      ? new Set([id + ".html"])                            // <slug>.<kind>.html exactly
+      : new Set([id + ".plan.html", id + ".spec.html"]);
     const IGNORE = new Set([".git", "node_modules", ".worktrees", "target", "__pycache__"]);
     const maxDepth = (limits.discovery && limits.discovery.maxDepth) || 8;
     let found = null;
