@@ -237,6 +237,12 @@ pub async fn relay_agent_end_usage(
                 let Ok(val) = serde_json::from_str::<Value>(trimmed) else {
                     continue;
                 };
+                // Seam #3: forward every reply frame to Pria so the user-facing
+                // SSE chat stream can surface it. Best-effort — never blocks the
+                // usage metering below.
+                if let Err(e) = pria.session_output(&identity.session_id, &val).await {
+                    tracing::debug!(error = %e, "session_output forward failed");
+                }
                 if let Some(payload) = tag_agent_end_usage(&val, &identity) {
                     if let Err(e) = pria.usage(&payload).await {
                         tracing::warn!(
