@@ -91,6 +91,13 @@ pub trait SessionProcess: Send + Sync {
     fn take_stdout(&self) -> Option<tokio::process::ChildStdout> {
         None
     }
+    /// Await the child process's natural exit. Used by the zombie reaper task
+    /// (`api/sessions.rs` `start` handler) to learn when to remove the session
+    /// from the store after the child dies. Default impl never resolves so
+    /// existing impls that don't back a real OS process are unaffected.
+    async fn wait_for_exit(&self) {
+        std::future::pending::<()>().await
+    }
 }
 
 /// Launches session processes.
@@ -384,9 +391,18 @@ mod real {
 
     pub struct ChildProcess {
         pid: u32,
-        child: AsyncMutex<Child>,
+        /// Stdin handle for message writes. Separate from `child_wait` so
+        /// `send()` can run concurrently with the background wait task.
+        stdin: AsyncMutex<Option<tokio::process::ChildStdin>>,
+        /// Child process handle held ONLY by the background wait task. Once the
+        /// task acquires this, it calls `wait()` — no other method touches it.
+        child_wait: AsyncMutex<Child>,
         status: StdMutex<SessionStatus>,
         stdout: StdMutex<Option<tokio::process::ChildStdout>>,
+        /// watch(false → true) fired when the OS process exits. Allows
+        /// wait_for_exit() to subscribe without holding any lock.
+        exit_rx: tokio::sync::watch::Receiver<bool>,
+        exit_tx: StdMutex<Option<tokio::sync::watch::Sender<bool>>>,
     }
 
     pub fn spawn(spec: &LaunchSpec) -> Result<std::sync::Arc<dyn SessionProcess>, LaunchError> {
@@ -450,15 +466,38 @@ mod real {
             .map_err(|e| LaunchError(format!("failed to spawn synaps: {e}")))?;
         let pid = child.id().unwrap_or(0);
         let mut child = child;
-        // Take stdout up-front so the usage-relay reader task can own it; the
-        // child stays in the AsyncMutex for stdin writes (send) + lifecycle.
+        // Take stdout + stdin up-front; child_wait holds the Child solely for
+        // the background OS-wait task. Separating stdin lets send() run
+        // concurrently with wait() — no lock contention.
         let stdout = child.stdout.take();
-        Ok(std::sync::Arc::new(ChildProcess {
+        let stdin = child.stdin.take();
+        // watch channel: false = running, true = exited.
+        let (exit_tx, exit_rx) = tokio::sync::watch::channel(false);
+        let proc = std::sync::Arc::new(ChildProcess {
             pid,
-            child: AsyncMutex::new(child),
+            stdin: AsyncMutex::new(stdin),
+            child_wait: AsyncMutex::new(child),
             status: StdMutex::new(SessionStatus::Running),
             stdout: StdMutex::new(stdout),
-        }))
+            exit_rx,
+            exit_tx: StdMutex::new(Some(exit_tx)),
+        });
+        // Background OS-wait task: acquires the child lock and calls wait().
+        // cancel()/close() now use libc::kill() directly (no lock needed), so
+        // SIGKILL is sent immediately; the SIGKILL wakes up this wait() quickly.
+        // No deadlock: cancel/close never contend for the child lock.
+        {
+            let proc_ref = proc.clone();
+            tokio::spawn(async move {
+                // child_wait is held only here — no contention with send/cancel/close.
+                let _ = proc_ref.child_wait.lock().await.wait().await;
+                // Fire the exit watch so any outstanding wait_for_exit() returns.
+                if let Some(tx) = proc_ref.exit_tx.lock().unwrap().take() {
+                    let _ = tx.send(true);
+                }
+            });
+        }
+        Ok(proc)
     }
 
     #[async_trait]
@@ -473,8 +512,10 @@ mod real {
 
         async fn send(&self, message: &str) -> Result<(), LaunchError> {
             use tokio::io::AsyncWriteExt;
-            let mut guard = self.child.lock().await;
-            if let Some(stdin) = guard.stdin.as_mut() {
+            // Lock stdin only — no child_wait lock needed, so send() runs
+            // concurrently with the background wait task.
+            let mut guard = self.stdin.lock().await;
+            if let Some(stdin) = guard.as_mut() {
                 stdin
                     .write_all(format!("{message}\n").as_bytes())
                     .await
@@ -486,21 +527,32 @@ mod real {
         }
 
         async fn cancel(&self) -> Result<(), LaunchError> {
-            let mut guard = self.child.lock().await;
-            let _ = guard.start_kill();
+            // Send SIGKILL directly via pid — no child-mutex needed, so this
+            // never blocks even while the background wait task holds the lock.
+            // SAFETY: kill(2) is always safe; ESRCH means already dead — ok.
+            unsafe { libc::kill(self.pid as libc::pid_t, libc::SIGKILL); }
             *self.status.lock().unwrap() = SessionStatus::Cancelled;
             Ok(())
         }
 
         async fn close(&self, _grace_ms: u64) -> Result<(), LaunchError> {
-            let mut guard = self.child.lock().await;
-            let _ = guard.start_kill();
+            // Same as cancel: SIGKILL via pid, no mutex.
+            unsafe { libc::kill(self.pid as libc::pid_t, libc::SIGKILL); }
             *self.status.lock().unwrap() = SessionStatus::Closed;
             Ok(())
         }
 
         fn status(&self) -> SessionStatus {
             *self.status.lock().unwrap()
+        }
+
+        async fn wait_for_exit(&self) {
+            // Clone the receiver and wait for the watch to become true.
+            // Already true (child already exited before we were called) -> returns
+            // immediately. This does NOT hold the child lock.
+            let mut rx = self.exit_rx.clone();
+            // wait_for returns immediately if the current value matches.
+            let _ = rx.wait_for(|&v| v).await;
         }
     }
 }
@@ -563,14 +615,28 @@ mod fake {
         pid: u32,
         pub sent: Mutex<Vec<String>>,
         status: Mutex<SessionStatus>,
+        /// Sender half: drop it (or call `trigger_exit()`) to signal exit.
+        exit_tx: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        /// Receiver half: `wait_for_exit()` awaits this.
+        exit_rx: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     }
 
     impl FakeProcess {
         pub fn new(pid: u32) -> Self {
+            let (tx, rx) = tokio::sync::oneshot::channel::<()>();
             Self {
                 pid,
                 sent: Mutex::new(Vec::new()),
                 status: Mutex::new(SessionStatus::Running),
+                exit_tx: Mutex::new(Some(tx)),
+                exit_rx: tokio::sync::Mutex::new(Some(rx)),
+            }
+        }
+
+        /// Fire the exit signal (simulates child process death).
+        pub fn trigger_exit(&self) {
+            if let Some(tx) = self.exit_tx.lock().unwrap().take() {
+                let _ = tx.send(());
             }
         }
     }
@@ -594,6 +660,16 @@ mod fake {
         }
         fn status(&self) -> SessionStatus {
             *self.status.lock().unwrap()
+        }
+
+        async fn wait_for_exit(&self) {
+            // Take the oneshot receiver and await it. A dropped sender
+            // (trigger_exit or process drop) resolves immediately.
+            let rx = self.exit_rx.lock().await.take();
+            if let Some(rx) = rx {
+                let _ = rx.await;
+            }
+            // If already taken (second call), resolve immediately.
         }
     }
 }

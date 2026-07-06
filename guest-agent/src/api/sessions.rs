@@ -231,6 +231,38 @@ pub async fn start(
         tokio::spawn(relay_agent_end_usage(stdout, identity, pria));
     }
 
+    // #212 smoke-check: if synaps rpc crashes on startup (bad env, missing HOME,
+    // permission crash, etc), catch it here as a LOUD failure instead of returning
+    // 200 to a caller who then discovers the corpse via a mislabeled 404 on /send.
+    // 500ms is enough for the runtime to init logging + fail on config issues but
+    // short enough not to add noticeable latency.
+    //
+    // Clone the Arc before the timeout so `process` is still available to move
+    // into SessionEntry afterwards (same pattern Case used for reaper_proc).
+    let smoke_proc = process.clone();
+    let smoke = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        smoke_proc.wait_for_exit(),
+    )
+    .await;
+    if smoke.is_ok() {
+        // Process exited within 500ms — it was DOA. Report loud.
+        tracing::error!(
+            session_id = %req.session_id,
+            pid,
+            "smoke-check: synaps rpc exited within 500ms of spawn — check spec.env and HOME",
+        );
+        return Err(GuestAgentError::new(
+            ErrorCode::SynapsLaunchFailed,
+            "synaps rpc exited within 500ms of spawn — check spec.env and HOME",
+        )
+        .with_request_id(rid));
+    }
+    // Timeout elapsed → child survived → proceed.
+
+    // Clone the process Arc BEFORE moving it into SessionEntry so the reaper
+    // task can await process exit without holding the session table lock.
+    let reaper_proc = process.clone();
     state.sessions.insert(SessionEntry {
         session_id: req.session_id.clone(),
         account_id: req.account_id.clone(),
@@ -242,6 +274,21 @@ pub async fn start(
         context_path: context_path.clone(),
         process,
     });
+
+    // Zombie reaper: background task that awaits natural child exit and
+    // removes the session from the store so status/send return 404 (not lies).
+    // Keeps launcher pure — session lifecycle is owned here, not in the launcher.
+    {
+        let sessions = state.sessions.clone();
+        let sid = req.session_id.clone();
+        tokio::spawn(async move {
+            reaper_proc.wait_for_exit().await;
+            // Only remove if still present — explicit close/cancel may have
+            // already removed it, and remove() is idempotent on absent keys.
+            sessions.remove(&sid);
+            tracing::info!(session_id = %sid, "reaper: session removed after child exit");
+        });
+    }
 
     // Emit session.started audit (spec §6.4 step 6).
     let ev = AuditEventBuilder::new(kinds::SESSION_STARTED)
