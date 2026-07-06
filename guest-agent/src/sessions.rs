@@ -23,6 +23,11 @@ pub struct SessionEntry {
 /// The session table. Increments/decrements the runtime active-session counter.
 pub struct SessionStore {
     sessions: Mutex<HashMap<String, SessionEntry>>,
+    /// Secondary index: uid → session_id. Enables O(1) `find_by_uid` in the
+    /// fsmon audit hot path. Assumes single-session-per-uid, which is enforced
+    /// by the current single-session policy (spec §5.1). If multi-session-per-uid
+    /// is ever needed, change this to `HashMap<u32, Vec<String>>`.
+    uid_index: Mutex<HashMap<u32, String>>,
     runtime: Arc<RuntimeState>,
 }
 
@@ -30,6 +35,7 @@ impl SessionStore {
     pub fn new(runtime: Arc<RuntimeState>) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            uid_index: Mutex::new(HashMap::new()),
             runtime,
         }
     }
@@ -39,10 +45,14 @@ impl SessionStore {
     }
 
     pub fn insert(&self, entry: SessionEntry) {
+        let uid = entry.uid;
+        let sid = entry.session_id.clone();
         let mut map = self.sessions.lock().unwrap();
-        if map.insert(entry.session_id.clone(), entry).is_none() {
+        if map.insert(sid.clone(), entry).is_none() {
             self.runtime.incr_sessions();
         }
+        drop(map);
+        self.uid_index.lock().unwrap().insert(uid, sid);
     }
 
     /// Clone out the process handle (an `Arc`) so async control methods can be
@@ -64,9 +74,15 @@ impl SessionStore {
 
     /// Resolve a uid to its session identity tags (for fsmon audit enrichment).
     /// Returns `(session_id, account_id, instance_id, user_id)`.
+    ///
+    /// O(1): looks up the uid_index first, then fetches the full entry. There is
+    /// a small TOCTOU window between the two locks — if a concurrent `remove()`
+    /// fires between them the sessions lookup returns None, which is correct
+    /// (session gone, treat as unauthenticated event).
     pub fn find_by_uid(&self, uid: u32) -> Option<(String, String, String, String)> {
+        let sid = self.uid_index.lock().unwrap().get(&uid).cloned()?;
         let map = self.sessions.lock().unwrap();
-        map.values().find(|e| e.uid == uid).map(|e| {
+        map.get(&sid).map(|e| {
             (
                 e.session_id.clone(),
                 e.account_id.clone(),
@@ -96,8 +112,10 @@ impl SessionStore {
     pub fn remove(&self, session_id: &str) -> Option<SessionEntry> {
         let mut map = self.sessions.lock().unwrap();
         let removed = map.remove(session_id);
-        if removed.is_some() {
+        if let Some(ref e) = removed {
             self.runtime.decr_sessions();
+            drop(map);
+            self.uid_index.lock().unwrap().remove(&e.uid);
         }
         removed
     }
@@ -221,4 +239,70 @@ mod tests {
             "smoke-check: live process must NOT resolve wait_for_exit within the timeout"
         );
     }
+
+    fn make_entry(session_id: &str, uid: u32) -> SessionEntry {
+        SessionEntry {
+            session_id: session_id.to_string(),
+            account_id: "acct_test".to_string(),
+            instance_id: "inst_test".to_string(),
+            user_id: "user_test".to_string(),
+            uid,
+            pid: 1000,
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+            context_path: "/tmp/ctx.json".to_string(),
+            process: Arc::new(FakeProcess::new(1000)),
+        }
+    }
+
+    /// After insert, find_by_uid returns the expected tuple.
+    #[test]
+    fn find_by_uid_returns_session_after_insert() {
+        let runtime = Arc::new(RuntimeState::new());
+        let store = SessionStore::new(runtime);
+        store.insert(make_entry("sess_uid_1", 2001));
+        let result = store.find_by_uid(2001);
+        assert_eq!(
+            result,
+            Some((
+                "sess_uid_1".to_string(),
+                "acct_test".to_string(),
+                "inst_test".to_string(),
+                "user_test".to_string(),
+            ))
+        );
+    }
+
+    /// After remove, find_by_uid returns None and uid_index is cleared.
+    #[test]
+    fn find_by_uid_returns_none_after_remove() {
+        let runtime = Arc::new(RuntimeState::new());
+        let store = SessionStore::new(runtime);
+        store.insert(make_entry("sess_uid_2", 2002));
+        store.remove("sess_uid_2");
+        assert!(store.find_by_uid(2002).is_none(), "must be None after remove");
+        // uid_index must no longer hold the entry
+        assert!(
+            !store.uid_index.lock().unwrap().contains_key(&2002),
+            "uid_index must be cleared after remove"
+        );
+    }
+
+    /// Unknown uid returns None without panicking.
+    #[test]
+    fn find_by_uid_returns_none_for_unknown_uid() {
+        let runtime = Arc::new(RuntimeState::new());
+        let store = SessionStore::new(runtime);
+        assert!(store.find_by_uid(9999).is_none());
+    }
+
+    /// After insert, uid_index contains the correct session_id mapping.
+    #[test]
+    fn insert_updates_uid_index() {
+        let runtime = Arc::new(RuntimeState::new());
+        let store = SessionStore::new(runtime);
+        store.insert(make_entry("sess_uid_3", 2003));
+        let idx = store.uid_index.lock().unwrap();
+        assert_eq!(idx.get(&2003).map(|s| s.as_str()), Some("sess_uid_3"));
+    }
+
 }
