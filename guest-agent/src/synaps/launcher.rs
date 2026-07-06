@@ -535,9 +535,21 @@ mod real {
             Ok(())
         }
 
-        async fn close(&self, _grace_ms: u64) -> Result<(), LaunchError> {
-            // Same as cancel: SIGKILL via pid, no mutex.
-            unsafe { libc::kill(self.pid as libc::pid_t, libc::SIGKILL); }
+        async fn close(&self, grace_ms: u64) -> Result<(), LaunchError> {
+            // Graceful shutdown: SIGTERM -> wait up to grace_ms -> SIGKILL if needed.
+            // Synaps writes its final agent_end frame on SIGTERM's shutdown path;
+            // SIGKILL alone drops that frame and the turn's usage goes unmetered.
+            // SAFETY: kill(2) with ESRCH (already dead) is harmless.
+            unsafe { libc::kill(self.pid as libc::pid_t, libc::SIGTERM); }
+
+            let grace = std::time::Duration::from_millis(grace_ms);
+            let exited = tokio::time::timeout(grace, self.wait_for_exit()).await.is_ok();
+
+            if !exited {
+                // Grace period expired -- force termination.
+                unsafe { libc::kill(self.pid as libc::pid_t, libc::SIGKILL); }
+            }
+
             *self.status.lock().unwrap() = SessionStatus::Closed;
             Ok(())
         }
@@ -654,7 +666,10 @@ mod fake {
             *self.status.lock().unwrap() = SessionStatus::Cancelled;
             Ok(())
         }
-        async fn close(&self, _grace_ms: u64) -> Result<(), LaunchError> {
+        async fn close(&self, grace_ms: u64) -> Result<(), LaunchError> {
+            // Mirror real::ChildProcess: wait up to grace_ms for exit, then force.
+            let grace = std::time::Duration::from_millis(grace_ms);
+            let _ = tokio::time::timeout(grace, self.wait_for_exit()).await;
             *self.status.lock().unwrap() = SessionStatus::Closed;
             Ok(())
         }
@@ -915,5 +930,56 @@ mod tests {
             session_id: "s".into(),
         };
         assert!(l.launch(&spec).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn close_respects_grace_when_child_exits_early() {
+        // FakeProcess exits at ~50ms; close(500) should complete around 50ms
+        // without hitting the SIGKILL fallback path.
+        let proc = std::sync::Arc::new(FakeProcess::new(99));
+        let proc_clone = proc.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            proc_clone.trigger_exit();
+        });
+        let start = std::time::Instant::now();
+        proc.close(500).await.unwrap();
+        let elapsed = start.elapsed();
+        assert_eq!(proc.status(), SessionStatus::Closed);
+        // Should return well before the 500ms grace window expires.
+        assert!(
+            elapsed < std::time::Duration::from_millis(400),
+            "close took too long: {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn close_falls_back_to_sigkill_after_grace() {
+        // FakeProcess never exits; close(50) must return after ~50ms (grace
+        // period exhausted) with status Closed.
+        let proc = FakeProcess::new(100);
+        let start = std::time::Instant::now();
+        proc.close(50).await.unwrap();
+        let elapsed = start.elapsed();
+        assert_eq!(proc.status(), SessionStatus::Closed);
+        // Must have waited at least the grace period before returning.
+        assert!(
+            elapsed >= std::time::Duration::from_millis(45),
+            "close returned too early: {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn close_zero_grace_does_not_wait() {
+        // close(0) must return almost immediately regardless of exit state.
+        let proc = FakeProcess::new(101);
+        let start = std::time::Instant::now();
+        proc.close(0).await.unwrap();
+        let elapsed = start.elapsed();
+        assert_eq!(proc.status(), SessionStatus::Closed);
+        assert!(
+            elapsed < std::time::Duration::from_millis(100),
+            "close(0) was too slow: {elapsed:?}"
+        );
     }
 }
