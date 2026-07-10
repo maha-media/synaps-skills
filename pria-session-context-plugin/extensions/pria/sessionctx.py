@@ -8,6 +8,8 @@ Resolution order (first existing wins):
   1. ${XDG_RUNTIME_DIR}/synaps/sessions/<id>/context.json
   2. ${HOME}/.synaps-cli/sessions/<id>/context.json
   3. ${SYNAPS_BASE_DIR}/sessions/<id>/context.json   (best-effort)
+  4. glob fallback: sessions/*/context.json across all three roots
+     (single-session VM safety net — see load_context for rationale)
 """
 import json
 import os
@@ -50,6 +52,27 @@ def load_context(session_id: str):
                     return json.load(fh), str(path)
         except (OSError, ValueError):
             continue
+    # Fallback: the guest-agent writes context keyed by the Pria session ID,
+    # but the plugin receives the Synaps-internal session ID. In single-session
+    # VMs, globbing is safe — there's exactly one context file.
+    roots = []
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        roots.append(Path(xdg) / "synaps")
+    home = os.environ.get("HOME")
+    if home:
+        roots.append(Path(home) / ".synaps-cli")
+    base = os.environ.get("SYNAPS_BASE_DIR")
+    if base:
+        roots.append(Path(base))
+    for root in roots:
+        for match in sorted(root.glob("sessions/*/context.json")):
+            try:
+                if match.is_file():
+                    with match.open("r", encoding="utf-8") as fh:
+                        return json.load(fh), str(match)
+            except (OSError, ValueError):
+                continue
     return None, None
 
 

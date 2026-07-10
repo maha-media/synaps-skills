@@ -30,6 +30,13 @@ pub struct TransportSpec {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ExtensionRef {
+    pub name: String,
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct StartSessionRequest {
     pub account_id: String,
     pub instance_id: String,
@@ -57,6 +64,10 @@ pub struct StartSessionRequest {
     pub environment: HashMap<String, String>,
     #[serde(default)]
     pub request_id: Option<String>,
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub extensions: Vec<ExtensionRef>,
 }
 
 #[derive(Debug, Serialize)]
@@ -191,19 +202,67 @@ pub async fn start(
         expires_at: expires,
         created_at: created.clone(),
     };
-    let written = write_context(&ctx, state.config.paths.run_root.as_path())
+    // Build args: base is always `rpc`; add `--system <file>` when a non-empty
+    // system prompt is provided (spec §Q1 — agent-runtime resolves file paths).
+    let mut args = vec!["rpc".to_string()];
+    if let Some(ref prompt) = req.system_prompt {
+        if !prompt.trim().is_empty() {
+            let prompt_path = crate::synaps::system_prompt::write_system_prompt(
+                prompt,
+                &req.session_dir,
+                req.uid,
+            )
+            .map_err(|e| e.with_request_id(rid.clone()))?;
+            args.push("--system".into());
+            args.push(prompt_path.display().to_string());
+        }
+    }
+
+    // Build env: start from the request environment then inject SYNAPS_BASE_DIR
+    // when extensions are staged (spec §Q2 — only SYNAPS_BASE_DIR redirects both
+    // extension and skill discovery in the runtime).
+    let mut env = req.environment.clone();
+    let staged_base: Option<PathBuf> = if !req.extensions.is_empty() {
+        let plugin_store = state.config.synaps.plugin_dir.as_deref().ok_or_else(|| {
+            GuestAgentError::new(
+                ErrorCode::InvalidRequest,
+                "extensions requested but synaps.plugin_dir is not configured",
+            )
+            .with_request_id(rid.clone())
+        })?;
+        let base = crate::synaps::plugin_stage::stage_extensions(
+            &req.extensions,
+            &req.session_dir,
+            plugin_store,
+            req.uid,
+        )
         .map_err(|e| e.with_request_id(rid.clone()))?;
+        env.insert("SYNAPS_BASE_DIR".into(), base.display().to_string());
+        Some(base)
+    } else {
+        None
+    };
+
+    // Re-write the context with the optional base-dir mirror so the
+    // pria-session-context plugin can find it via its third lookup path
+    // ($SYNAPS_BASE_DIR/sessions/<id>/context.json).
+    let written = write_context(
+        &ctx,
+        state.config.paths.run_root.as_path(),
+        staged_base.as_deref(),
+    )
+    .map_err(|e| e.with_request_id(rid.clone()))?;
     let context_path = written.path.to_string_lossy().to_string();
 
     // Launch synaps dropped to uid/gid (spec §6.4 step 4, §16.3).
     let spec = LaunchSpec {
         binary: state.config.synaps.binary.clone(),
-        args: vec!["rpc".to_string()],
+        args,
         uid: req.uid,
         gid: req.gid,
         groups,
         cwd: Some(req.workspace_dir.clone()),
-        env: req.environment.clone(),
+        env,
         context_path: written.path.clone(),
         session_id: req.session_id.clone(),
     };

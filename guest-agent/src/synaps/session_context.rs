@@ -110,15 +110,31 @@ pub fn context_paths(
 }
 
 /// Write the session context to its canonical path(s). Files are created 0600.
+///
+/// When `base_dir` is `Some`, the context is additionally mirrored to
+/// `<base_dir>/sessions/<session_id>/context.json` so that the
+/// `pria-session-context` plugin can discover it via its third lookup path
+/// (`$SYNAPS_BASE_DIR/sessions/<id>/context.json`).
 pub fn write_context(
     ctx: &SessionContext,
     run_root: &Path,
+    base_dir: Option<&Path>,
 ) -> Result<WrittenContext, GuestAgentError> {
     ctx.assert_no_secrets()?;
 
     let xdg = std::env::var("XDG_RUNTIME_DIR").ok();
     let home = std::env::var("HOME").ok();
-    let paths = context_paths(&ctx.session_id, run_root, xdg.as_deref(), home.as_deref());
+    let mut paths = context_paths(&ctx.session_id, run_root, xdg.as_deref(), home.as_deref());
+
+    // Third lookup path: $SYNAPS_BASE_DIR/sessions/<id>/context.json.
+    // Appended only when extensions have been staged (caller passes the base dir).
+    if let Some(bd) = base_dir {
+        paths.push(
+            bd.join("sessions")
+                .join(&ctx.session_id)
+                .join("context.json"),
+        );
+    }
 
     let json = serde_json::to_vec_pretty(ctx)
         .map_err(|e| GuestAgentError::internal(format!("serialize context: {e}")))?;
