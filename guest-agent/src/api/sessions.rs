@@ -254,6 +254,16 @@ pub async fn start(
     .map_err(|e| e.with_request_id(rid.clone()))?;
     let context_path = written.path.to_string_lossy().to_string();
 
+    // chown the synaps-base session-state tree to the session uid. write_context
+    // (running as root) creates <base>/sessions/<id>/context.json owned by root,
+    // but synaps runs dropped to `req.uid` and must persist turn state there —
+    // without this the runtime crashes with "failed to save session: Permission
+    // denied". Mirrors the inbox/run chown in plugin staging. plugins/ stays
+    // root-owned (read-only staged) on purpose.
+    if let Some(bd) = staged_base.as_deref() {
+        chown_tree_to_uid(&bd.join("sessions"), req.uid);
+    }
+
     // Launch synaps dropped to uid/gid (spec §6.4 step 4, §16.3).
     let spec = LaunchSpec {
         binary: state.config.synaps.binary.clone(),
@@ -534,4 +544,28 @@ fn prepare_workspace_dir(dir: &Path, uid: u32) -> Result<(), String> {
     // SAFETY: valid NUL-terminated path; gid u32::MAX == (gid_t)-1 = unchanged.
     let _ = unsafe { libc::chown(c_path.as_ptr(), uid, u32::MAX) };
     Ok(())
+}
+
+/// Best-effort recursive chown of `root` (dirs + files) to `uid`, gid unchanged.
+/// Used for the synaps-base/sessions state tree that write_context creates as
+/// root but the dropped-privilege synaps process must write to.
+fn chown_tree_to_uid(root: &Path, uid: u32) {
+    fn chown_one(p: &Path, uid: u32) {
+        if let Ok(c_path) = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()) {
+            // SAFETY: valid NUL-terminated path; gid u32::MAX == (gid_t)-1 = unchanged.
+            let _ = unsafe { libc::chown(c_path.as_ptr(), uid, u32::MAX) };
+        }
+    }
+    chown_one(root, uid);
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            chown_tree_to_uid(&p, uid);
+        } else {
+            chown_one(&p, uid);
+        }
+    }
 }
