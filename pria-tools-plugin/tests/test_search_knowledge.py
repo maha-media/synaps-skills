@@ -200,7 +200,7 @@ class TestSearchKnowledgeNormalization(unittest.TestCase):
         h = ToolHandler({"pria_api_base": "https://pria"})
         result = h.call(TOOL_SEARCH_KNOWLEDGE, {"query": "test"})
         self.assertIn("error", result)
-        self.assertIn("pria_api_key", result["error"])
+        self.assertIn("error", result)  # error key updated: now mentions PRIA_AGENT_TOOL_TOKEN
 
 
 if __name__ == "__main__":

@@ -6,11 +6,17 @@ Exposes two tools to the in-VM agent:
 
 Results are normalized to a consistent shape so the agent can cite sources
 without knowing the underlying Pria API shape.
+
+Auth preference (checked in order):
+  1. PRIA_AGENT_TOOL_TOKEN — v2 machine token → GatewayClient (preferred)
+  2. PRIA_API_KEY           — legacy pria_ key → PriaClient   (transition fallback)
+  3. Neither                → error mentioning PRIA_AGENT_TOOL_TOKEN
 """
 import os
 
 from pria.client import (
     PriaClient,
+    GatewayClient,
     AuthError,
     RateLimitError,
     APIError,
@@ -102,7 +108,12 @@ def _normalize_content_results(raw: dict) -> dict:
 
 
 def _normalize_history_results(raw: dict) -> dict:
-    """Map /api/user/histories response → { results, count }."""
+    """Map /api/user/histories response → { results, count }.
+
+    NOTE: when using GatewayClient the free-text `search` param and `limit`
+    are not forwarded (gateway SEARCH_HISTORY has no text-search or limit).
+    Results here reflect whatever the gateway returns unfiltered.
+    """
     items = raw.get("data") or []
     out = []
     for item in items:
@@ -135,11 +146,17 @@ def _tool_error(error: str, detail: str = "") -> dict:
 
 
 class ToolHandler:
-    """Resolves config/env, creates PriaClient lazily, dispatches tool.call."""
+    """Resolves config/env, creates client lazily, dispatches tool.call.
+
+    Client selection (in priority order):
+      PRIA_AGENT_TOOL_TOKEN set → GatewayClient (v2 Bearer token)
+      PRIA_API_KEY set          → PriaClient    (legacy; transition safety)
+      neither                   → not-configured error
+    """
 
     def __init__(self, config: dict):
         self.config = config
-        self._client: PriaClient | None = None
+        self._client = None
 
     def _api_key(self) -> str:
         # env takes precedence over plugin config
@@ -150,21 +167,37 @@ class ToolHandler:
     def _base_url(self) -> str:
         return (self.config.get("pria_api_base") or DEFAULT_BASE).rstrip("/")
 
-    def _client_or_error(self):
+    def _get_client(self):
         """Return (client, None) or (None, error_dict)."""
         if self._client is not None:
             return self._client, None
+
+        # Prefer v2 machine token
+        machine_token = (os.environ.get("PRIA_AGENT_TOOL_TOKEN") or "").strip()
+        if machine_token:
+            try:
+                self._client = GatewayClient(
+                    machine_token=machine_token,
+                    base_url=self._base_url(),
+                )
+            except ValueError as exc:
+                return None, _tool_error("client init error", str(exc))
+            return self._client, None
+
+        # Fall back to legacy API key (transition safety)
         key = self._api_key()
-        if not key:
-            return None, _tool_error(
-                "pria_api_key not configured",
-                "Set PRIA_API_KEY env var or pria_api_key in plugin config.",
-            )
-        try:
-            self._client = PriaClient(api_key=key, base_url=self._base_url())
-        except ValueError as exc:
-            return None, _tool_error("client init error", str(exc))
-        return self._client, None
+        if key:
+            # debug note: using legacy PriaClient (PRIA_API_KEY set, no PRIA_AGENT_TOOL_TOKEN)
+            try:
+                self._client = PriaClient(api_key=key, base_url=self._base_url())
+            except ValueError as exc:
+                return None, _tool_error("client init error", str(exc))
+            return self._client, None
+
+        return None, _tool_error(
+            "pria_agent_tool_token not configured",
+            "Set PRIA_AGENT_TOOL_TOKEN env var (preferred) or PRIA_API_KEY for legacy auth.",
+        )
 
     # called by App on any tool.call — resets cached client on auth failure
     def _reset_client(self):
@@ -183,7 +216,7 @@ class ToolHandler:
             return _tool_error("query is required")
         max_results = min(max(int(inp.get("max_results") or 10), 1), 100)
 
-        client, err = self._client_or_error()
+        client, err = self._get_client()
         if err:
             return err
         try:
@@ -205,7 +238,7 @@ class ToolHandler:
             return _tool_error("query is required")
         limit = min(max(int(inp.get("limit") or 20), 1), 100)
 
-        client, err = self._client_or_error()
+        client, err = self._get_client()
         if err:
             return err
         try:
