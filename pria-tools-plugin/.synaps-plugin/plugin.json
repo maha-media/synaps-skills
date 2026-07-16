@@ -38,6 +38,13 @@
         "description": "Pria API key (pria_<40 hex chars>). Prefer PRIA_API_KEY env var.",
         "required": false,
         "secret_env": "PRIA_API_KEY"
+      },
+      {
+        "key": "pria_agent_tool_token",
+        "type": "string",
+        "description": "Capability Gateway v2 machine token. Prefer the PRIA_AGENT_TOOL_TOKEN env var.",
+        "required": false,
+        "secret_env": "PRIA_AGENT_TOOL_TOKEN"
       }
     ]
   }
