@@ -218,10 +218,14 @@ pub async fn start(
         }
     }
 
-    // Build env: start from the request environment then inject SYNAPS_BASE_DIR
-    // when extensions are staged (spec §Q2 — only SYNAPS_BASE_DIR redirects both
-    // extension and skill discovery in the runtime).
+    // Build env. Persistent configuration/plugin discovery stays at SYNAPS_BASE_DIR,
+    // but Unix RPC sockets cannot live under the long EFS session path: Linux
+    // sockaddr_un.sun_path is limited to 108 bytes. Give the runtime a short,
+    // per-UID 0700 directory instead.
     let mut env = req.environment.clone();
+    let runtime_dir = prepare_synaps_runtime_dir(req.uid)
+        .map_err(|e| GuestAgentError::internal(e).with_request_id(rid.clone()))?;
+    env.insert("SYNAPS_RUNTIME_DIR".into(), runtime_dir.display().to_string());
     let staged_base: Option<PathBuf> = if !req.extensions.is_empty() {
         let plugin_store = state.config.synaps.plugin_dir.as_deref().ok_or_else(|| {
             GuestAgentError::new(
@@ -544,6 +548,32 @@ fn prepare_workspace_dir(dir: &Path, uid: u32) -> Result<(), String> {
     // SAFETY: valid NUL-terminated path; gid u32::MAX == (gid_t)-1 = unchanged.
     let _ = unsafe { libc::chown(c_path.as_ptr(), uid, u32::MAX) };
     Ok(())
+}
+
+/// Create the short, per-UID socket root used by Synaps RPC.
+///
+/// This intentionally is not under EFS or SYNAPS_BASE_DIR: socket paths have a
+/// kernel-imposed 108-byte limit.  `/run/user/<uid>` is tmpfs-backed and its
+/// UID-specific child is 0700, so equal session IDs from separate principals
+/// cannot collide or be read by another UID.
+fn prepare_synaps_runtime_dir(uid: u32) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = PathBuf::from(format!("/run/user/{uid}/synaps"));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create runtime dir {}: {e}", dir.display()))?;
+    let meta = std::fs::symlink_metadata(&dir)
+        .map_err(|e| format!("stat runtime dir {}: {e}", dir.display()))?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err(format!("unsafe runtime dir {}", dir.display()));
+    }
+    let c_path = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes())
+        .map_err(|e| format!("runtime dir NUL: {e}"))?;
+    // Guest agent is root; explicitly make this UID's ephemeral socket root private.
+    if unsafe { libc::chown(c_path.as_ptr(), uid, u32::MAX) } != 0 {
+        return Err(format!("chown runtime dir {}: {}", dir.display(), std::io::Error::last_os_error()));
+    }
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| format!("chmod runtime dir {}: {e}", dir.display()))?;
+    Ok(dir)
 }
 
 /// Best-effort recursive chown of `root` (dirs + files) to `uid`, gid unchanged.

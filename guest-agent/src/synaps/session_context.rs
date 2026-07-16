@@ -243,7 +243,7 @@ mod tests {
     fn write_then_read_back_validates_required_fields() {
         let tmp = std::env::temp_dir().join(format!("ga-ctx-{}", uuid::Uuid::new_v4()));
         let ctx = sample("sess_w");
-        let written = write_context(&ctx, &tmp).unwrap();
+        let written = write_context(&ctx, &tmp, None).unwrap();
         let raw = std::fs::read_to_string(&written.path).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
         for f in [
@@ -268,6 +268,6 @@ mod tests {
         let mut ctx = sample("sess_s");
         ctx.transport = json!({"kind": "x", "token": "long-lived-secret"});
         let tmp = std::env::temp_dir().join("ga-ctx-secret");
-        assert!(write_context(&ctx, &tmp).is_err());
+        assert!(write_context(&ctx, &tmp, None).is_err());
     }
 }
