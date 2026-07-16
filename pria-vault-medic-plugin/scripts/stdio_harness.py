@@ -61,7 +61,7 @@ def main():
     responses, err = run([
         ("initialize", {
             "synaps_version": "test",
-            "extension_protocol_version": 2,
+            "extension_protocol_version": 1,
             "plugin_id": "pria-vault-medic",
             "config": {"pria_api_base": "https://pria.praxislxp.com"},
         }),
@@ -77,14 +77,14 @@ def main():
     init = responses[0]
     assert "error" not in init, f"initialize error: {init}"
     result = init["result"]
-    assert result["protocol_version"] == 2, f"bad protocol_version: {result}"
+    assert result["protocol_version"] == 1, f"bad protocol_version: {result}"
     tool_names = [t["name"] for t in result["capabilities"]["tools"]]
     assert "vault_health" in tool_names, f"missing vault_health: {tool_names}"
     assert "vault_diagnose" in tool_names, f"missing vault_diagnose: {tool_names}"
     assert "vault_repair" in tool_names, f"missing vault_repair: {tool_names}"
     assert "vault_regrade" in tool_names, f"missing vault_regrade: {tool_names}"
     assert len(tool_names) == 4, f"expected 4 tools, got: {tool_names}"
-    print(f"✓ initialize: protocol_version=2, tools={tool_names}")
+    print(f"✓ initialize: protocol_version=1, tools={tool_names}")
 
     # hooks
     hook_session = responses[1]

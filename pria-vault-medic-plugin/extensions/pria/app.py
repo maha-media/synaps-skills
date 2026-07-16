@@ -16,7 +16,7 @@ class App:
             self.config = {**self.config, **incoming}
         self._handler = ToolHandler(self.config)
         return {
-            "protocol_version": 2,
+            "protocol_version": 1,
             "capabilities": {
                 "tools": TOOL_SPECS,
             },

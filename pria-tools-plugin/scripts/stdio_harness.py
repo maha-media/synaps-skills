@@ -61,7 +61,7 @@ def main():
     responses, err = run([
         ("initialize", {
             "synaps_version": "test",
-            "extension_protocol_version": 2,
+            "extension_protocol_version": 1,
             "plugin_id": "pria-tools",
             "config": {"pria_api_base": "https://pria.praxislxp.com"},
         }),
@@ -76,11 +76,11 @@ def main():
     init = responses[0]
     assert "error" not in init, f"initialize error: {init}"
     result = init["result"]
-    assert result["protocol_version"] == 2, f"bad protocol_version: {result}"
+    assert result["protocol_version"] == 1, f"bad protocol_version: {result}"
     tool_names = [t["name"] for t in result["capabilities"]["tools"]]
     assert "search_knowledge" in tool_names, f"missing search_knowledge: {tool_names}"
     assert "search_history" in tool_names, f"missing search_history: {tool_names}"
-    print(f"✓ initialize: protocol_version=2, tools={tool_names}")
+    print(f"✓ initialize: protocol_version=1, tools={tool_names}")
 
     hook_session = responses[1]
     assert hook_session.get("result", {}).get("action") == "continue", \

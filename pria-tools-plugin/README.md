@@ -129,7 +129,7 @@ python3 scripts/smoke.py --query "machine learning" --limit 3
 ```
 pria-tools-plugin/
 ├── .synaps-plugin/
-│   └── plugin.json           # manifest (protocol_version: 2, tools.register)
+│   └── plugin.json           # manifest (protocol_version: 1, tools.register)
 ├── extensions/
 │   ├── pria_tools.py         # RPC loop entry point
 │   └── pria/

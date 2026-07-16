@@ -51,15 +51,20 @@ class FramingTest(unittest.TestCase):
 
 
 class HandshakeTest(unittest.TestCase):
-    def test_initialize_returns_protocol_2_with_tools(self):
+    def test_initialize_returns_protocol_1_with_tools(self):
         app = App("pria-tools")
         result = app.initialize({"config": {"pria_api_base": "https://x"}})
-        self.assertEqual(result["protocol_version"], 2)
+        self.assertEqual(result["protocol_version"], 1)
         tools = result["capabilities"]["tools"]
         names = [t["name"] for t in tools]
         self.assertIn("search_knowledge", names)
         self.assertIn("search_history", names)
         self.assertEqual(app.config["pria_api_base"], "https://x")
+
+    def test_manifest_protocol_matches_initialize_handshake(self):
+        manifest = json.loads((Path(__file__).resolve().parents[1] / ".synaps-plugin" / "plugin.json").read_text())
+        self.assertEqual(manifest["extension"]["protocol_version"], 1)
+        self.assertEqual(App("pria-tools").initialize({"config": {}})["protocol_version"], manifest["extension"]["protocol_version"])
 
     def test_initialize_merges_config(self):
         app = App("pria-tools")

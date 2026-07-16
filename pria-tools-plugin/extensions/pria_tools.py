@@ -2,7 +2,7 @@
 """pria-tools — Synaps process extension entry point.
 
 Implements the SynapsCLI extension JSON-RPC 2.0 / Content-Length stdio protocol
-(protocol_version: 2). Methods handled: initialize, hook.handle, tool.call, shutdown.
+(protocol_version: 1). Methods handled: initialize, hook.handle, tool.call, shutdown.
 
 Tools exposed (via tools.register permission):
   search_knowledge — Pria IP Vault RAG/KAG search
