@@ -299,6 +299,14 @@ class TestGetClientDispatch(unittest.TestCase):
         self.assertIsNone(err)
         self.assertIsInstance(client, PriaClient)
 
+    def test_manifest_config_token_returns_gateway_client_when_child_env_is_cleared(self):
+        # Synaps starts extension subprocesses with a filtered environment and
+        # delivers secret_env values in the initialize config instead.
+        h = ToolHandler({"pria_api_base": GW_BASE, "pria_agent_tool_token": TOKEN})
+        client, err = h._get_client()
+        self.assertIsNone(err)
+        self.assertIsInstance(client, GatewayClient)
+
     def test_machine_token_preferred_over_api_key(self):
         os.environ["PRIA_AGENT_TOOL_TOKEN"] = TOKEN
         os.environ["PRIA_API_KEY"] = "pria_" + "a" * 40

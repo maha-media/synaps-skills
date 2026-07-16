@@ -173,7 +173,13 @@ class ToolHandler:
             return self._client, None
 
         # Prefer v2 machine token
-        machine_token = (os.environ.get("PRIA_AGENT_TOOL_TOKEN") or "").strip()
+        # Synaps resolves manifest `secret_env` entries into extension config,
+        # not necessarily into the child extension process environment (the RPC
+        # parent may have it while this Python subprocess intentionally does not).
+        # Accept both delivery paths; environment still wins for direct launches.
+        machine_token = (os.environ.get("PRIA_AGENT_TOOL_TOKEN") or "").strip() or (
+            self.config.get("pria_agent_tool_token") or ""
+        ).strip()
         if machine_token:
             try:
                 self._client = GatewayClient(
