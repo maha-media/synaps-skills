@@ -16,6 +16,13 @@ const MAX_CAPTURE_ID_BYTES: usize = 128;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct CaptureQuery {
+    operation: String,
+    capture_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Capture {
     capture_id: String,
     project_key: String,
@@ -37,6 +44,38 @@ pub fn handle_capture(brain: &Arc<Mutex<Option<AxelBrain>>>, params: &Value) -> 
         .len();
     if encoded_len > MAX_CAPTURE_BYTES {
         return Err(anyhow!("capture exceeds size limit"));
+    }
+    if params.get("operation").is_some() {
+        let query: CaptureQuery =
+            serde_json::from_value(params.clone()).map_err(|_| anyhow!("invalid capture query"))?;
+        if query.operation != "query"
+            || query.capture_id.is_empty()
+            || query.capture_id.len() > MAX_CAPTURE_ID_BYTES
+        {
+            return Err(anyhow!("invalid capture query"));
+        }
+        let id = stable_memory_id(&query.capture_id);
+        let guard = brain
+            .lock()
+            .map_err(|_| anyhow!("capture store unavailable"))?;
+        let brain = guard
+            .as_ref()
+            .ok_or_else(|| anyhow!("capture store unavailable"))?;
+        let committed = brain
+            .search_db()
+            .conn()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM memories WHERE id=?1)",
+                [&id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|_| anyhow!("capture lookup failed"))?
+            != 0;
+        return Ok(json!({
+            "ok": true,
+            "committed": committed,
+            "capture_id": query.capture_id
+        }));
     }
     let capture: Capture = serde_json::from_value(params.clone())
         .map_err(|_| anyhow!("invalid capture request"))?;

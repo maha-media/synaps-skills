@@ -108,7 +108,7 @@ impl Ext {
         }
     }
 
-    fn request(&mut self, method: &str, params: Value) -> Value {
+    fn send_request(&mut self, method: &str, params: Value) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         self.stdin
@@ -117,6 +117,11 @@ impl Ext {
             })))
             .expect("write frame");
         self.stdin.flush().expect("flush");
+        id
+    }
+
+    fn request(&mut self, method: &str, params: Value) -> Value {
+        let _id = self.send_request(method, params);
         read_response(&mut self.reader)
     }
 
@@ -128,6 +133,11 @@ impl Ext {
 
     fn tool(&mut self, name: &str, input: Value) -> Value {
         self.request("tool.call", json!({ "name": name, "input": input }))
+    }
+
+    fn kill(mut self) {
+        self.child.kill().expect("kill extension");
+        let _ = self.child.wait();
     }
 
     fn shutdown(mut self) {
@@ -143,6 +153,55 @@ fn long_content(tag: &str) -> String {
     )
 }
 
+fn capture_params(capture_id: &str, project_key: &str, content: &str, session: &str) -> Value {
+    json!({
+        "capture_id": capture_id,
+        "project_key": project_key,
+        "content": content,
+        "source_session_id": session,
+        "source_turn_id": "turn-c5"
+    })
+}
+
+fn recall_params(project_key: &str, session: &str, query: &str) -> Value {
+    json!({
+        "schema": "recall/1",
+        "lease_id": format!("lease-{session}"),
+        "project_id": project_key,
+        "session_id": session,
+        "turn_id": format!("turn-{session}"),
+        "query": query,
+        "recent_context_digest": "00".repeat(32),
+        "budget": { "max_records": 8, "max_rendered_tokens": 4096 },
+        "permitted_classes": ["model_visible"]
+    })
+}
+
+fn project_key(project: &Path) -> String {
+    use sha2::Digest;
+    let canonical = std::fs::canonicalize(project).unwrap();
+    let digest = sha2::Sha256::digest(canonical.to_string_lossy().as_bytes());
+    format!("proj_{}", hex::encode(&digest[..8]))
+}
+
+fn capture_count(brain: &Path, project_key: &str) -> Option<i64> {
+    if !brain.exists() {
+        return None;
+    }
+    let uri = format!("file:{}?mode=ro", brain.display());
+    let conn = rusqlite::Connection::open_with_flags(
+        uri,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .ok()?;
+    conn.query_row(
+        "SELECT COUNT(*) FROM memories WHERE project_key=?1 AND provenance='synaps:chat_capture'",
+        [project_key],
+        |row| row.get(0),
+    )
+    .ok()
+}
+
 // ── capture wire contract ─────────────────────────────────────────────────────
 
 #[test]
@@ -151,24 +210,141 @@ fn duplicate_capture_id_stores_exactly_one_record_over_framed_rpc() {
     let cache = TempDir::new().unwrap();
     let brain = tmp.path().join("capture.r8");
     let mut ext = Ext::spawn(&brain, cache.path(), None);
-    let params = json!({
-        "capture_id": "capture-stable-1",
-        "project_key": "proj_wire",
-        "content": long_content("CAPTURE-WIRE-SENTINEL"),
-        "source_session_id": "session-1",
-        "source_turn_id": "turn-1"
-    });
+    let params = capture_params(
+        "capture-stable-1",
+        "proj_wire",
+        &long_content("CAPTURE-WIRE-SENTINEL"),
+        "session-1",
+    );
+    let absent = ext.request(
+        "context_provider.capture",
+        json!({"operation": "query", "capture_id": "capture-stable-1"}),
+    );
+    assert_eq!(absent["result"]["committed"], false, "{absent}");
     let first = ext.request("context_provider.capture", params.clone());
+    let committed = ext.request(
+        "context_provider.capture",
+        json!({"operation": "query", "capture_id": "capture-stable-1"}),
+    );
     let second = ext.request("context_provider.capture", params);
     assert_eq!(first["result"]["duplicate"], false, "{first}");
+    assert_eq!(committed["result"]["committed"], true, "{committed}");
     assert_eq!(second["result"]["duplicate"], true, "{second}");
     ext.shutdown();
 
-    let conn = rusqlite::Connection::open(brain).unwrap();
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM memories WHERE project_key='proj_wire'", [], |r| r.get(0))
+    assert_eq!(capture_count(&brain, "proj_wire"), Some(1));
+}
+
+#[test]
+fn kill_after_commit_reopen_recovers_capture_without_duplicate() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let brain = tmp.path().join("kill-after-commit.r8");
+    let params = capture_params(
+        "capture-kill-commit-c5",
+        "proj_kill",
+        &long_content("KILL-AFTER-COMMIT-C5"),
+        "session-before-kill",
+    );
+
+    let mut first = Ext::spawn(&brain, cache.path(), None);
+    let _request_id = first.send_request("context_provider.capture", params.clone());
+    let committed_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while capture_count(&brain, "proj_kill") != Some(1)
+        && std::time::Instant::now() < committed_deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(
+        capture_count(&brain, "proj_kill"),
+        Some(1),
+        "harness must observe the durable commit before kill, without consuming the reply"
+    );
+    first.kill();
+
+    let mut reopened = Ext::spawn(&brain, cache.path(), None);
+    let replay = reopened.request("context_provider.capture", params);
+    assert_eq!(replay["result"]["duplicate"], true, "{replay}");
+    reopened.shutdown();
+    assert_eq!(capture_count(&brain, "proj_kill"), Some(1));
+}
+
+#[test]
+fn cross_session_recall_finds_capture_after_kill_and_reopen() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    let key = project_key(project.path());
+    let brain = tmp.path().join("cross-session.r8");
+    let needle = "C5-CROSS-SESSION-ZEBRAFISH";
+
+    let mut first = Ext::spawn(&brain, cache.path(), Some(project.path()));
+    let _request_id = first.send_request(
+        "context_provider.capture",
+        capture_params(
+            "capture-cross-session-c5",
+            &key,
+            &long_content(needle),
+            "old-session",
+        ),
+    );
+    let committed_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while capture_count(&brain, &key) != Some(1) && std::time::Instant::now() < committed_deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(
+        capture_count(&brain, &key),
+        Some(1),
+        "capture must commit before kill"
+    );
+    first.kill();
+
+    let mut reopened = Ext::spawn(&brain, cache.path(), Some(project.path()));
+    let recalled = reopened.request(
+        "context_provider.recall",
+        recall_params(&key, "new-session", needle),
+    );
+    let result = recalled
+        .get("result")
+        .unwrap_or_else(|| panic!("recall must succeed after reopen: {recalled}"));
+    assert!(
+        result["records"]
+            .as_array()
+            .is_some_and(|records| !records.is_empty()),
+        "new session must recall the prior capture: {recalled}"
+    );
+    assert!(
+        result.to_string().contains(needle),
+        "recalled contribution must contain the stored capture needle: {recalled}"
+    );
+    reopened.shutdown();
+}
+
+#[test]
+fn one_gib_synthetic_capture_is_rejected_at_fixed_frame_bound_and_process_exits() {
+    const SYNTHETIC_CAPTURE_BYTES: u64 = 1 << 30;
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let brain = tmp.path().join("one-gib.r8");
+    let mut ext = Ext::spawn(&brain, cache.path(), None);
+
+    // Advertise the synthetic 1 GiB capture at the framing boundary. The
+    // plugin must reject before allocating or reading that body, close its
+    // consumer, and leave the producer free to observe the closed pipe.
+    ext.stdin
+        .write_all(format!("Content-Length: {SYNTHETIC_CAPTURE_BYTES}\r\n\r\n").as_bytes())
         .unwrap();
-    assert_eq!(count, 1);
+    ext.stdin.flush().unwrap();
+    drop(ext.stdin);
+    let status = ext.child.wait().unwrap();
+    assert!(
+        status.success(),
+        "oversized capture must close cleanly: {status}"
+    );
+    assert!(
+        !brain.exists() || std::fs::metadata(&brain).unwrap().len() < 16 * 1024 * 1024,
+        "synthetic 1 GiB capture must not be retained on disk"
+    );
 }
 
 #[test]
