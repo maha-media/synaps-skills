@@ -17,9 +17,18 @@
     "setup": "scripts/setup.sh",
     "permissions": [
       "config.subscribe",
+      "context_providers.register",
       "tools.register"
     ],
     "deferred": {
+      "context_providers": [
+        {
+          "capability": "project-memory",
+          "description": "Dormant project-memory context provider: bounded, project-scoped, lower-authority recall contributions from the local axel brain (.r8), activated only by an exact host memory-context lease.",
+          "id": "project-memory",
+          "schema_version": 1
+        }
+      ],
       "tools": [
         {
           "description": "Search project-scoped memories in the local axel brain (offline lexical search). Returns bounded descriptors with stable IDs and short snippets — never full bodies, never secret content. Results are lower-authority recall aids.",

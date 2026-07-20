@@ -648,3 +648,104 @@ fn legacy_r8_migrates_and_stays_out_of_scope() {
     assert_eq!(resp["result"]["count"], 1);
     ext.shutdown();
 }
+
+// ── task B3: context-provider declaration + recall over the real wire ────────
+
+/// The live initialize response's `capabilities.context_providers` must
+/// literally equal the manifest's passive
+/// `extension.deferred.context_providers` declarations (task A3 host-side
+/// exact-match validation), and the manifest must request the
+/// `context_providers.register` permission that gates them.
+#[test]
+fn initialize_context_providers_literally_match_manifest_declarations() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+
+    let mut ext = Ext::spawn(&tmp.path().join("b.r8"), cache.path(), Some(project.path()));
+    let init = ext.initialize();
+
+    let manifest_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../.synaps-plugin/plugin.json");
+    let manifest: Value =
+        serde_json::from_str(&std::fs::read_to_string(manifest_path).unwrap()).unwrap();
+    assert_eq!(
+        manifest
+            .pointer("/extension/deferred/context_providers")
+            .expect("manifest extension.deferred.context_providers"),
+        init.pointer("/result/capabilities/context_providers")
+            .expect("live capabilities.context_providers"),
+        "manifest passive context-provider declarations must equal the live initialize \
+         capabilities exactly"
+    );
+    let perms = manifest.pointer("/extension/permissions").unwrap().as_array().unwrap();
+    assert!(perms.iter().any(|p| p == "context_providers.register"));
+    ext.shutdown();
+}
+
+/// `context_provider.recall` over the real stdio wire: a well-formed
+/// request returns a bounded contribution; a malformed one fails closed
+/// with a static error that never echoes the raw input.
+#[test]
+fn context_provider_recall_round_trip_and_fail_closed_over_the_wire() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+
+    let mut ext = Ext::spawn(&tmp.path().join("b.r8"), cache.path(), Some(project.path()));
+    ext.initialize();
+    let key = store_and_get_key(&mut ext, &long_content("wire recall zebrafish decision"));
+
+    // Well-formed request.
+    let resp = ext.request(
+        "context_provider.recall",
+        json!({
+            "schema": "recall/1",
+            "lease_id": "memctx-lease-wire",
+            "project_id": key,
+            "session_id": "sess-wire",
+            "turn_id": "turn-1",
+            "query": "zebrafish",
+            "recent_context_digest": "ab".repeat(32),
+            "budget": { "max_records": 8, "max_rendered_tokens": 4096 },
+            "permitted_classes": ["model_visible"]
+        }),
+    );
+    let result = resp.get("result").unwrap_or_else(|| panic!("recall must succeed: {resp}"));
+    assert_eq!(result["schema"], "contribution/1");
+    assert_eq!(result["project_id"], key);
+    let records = result["records"].as_array().expect("records array");
+    assert!(!records.is_empty(), "stored record must be recallable: {resp}");
+    assert!(records.len() <= 8);
+    for r in records {
+        assert!(!r["rank_reason"].as_array().unwrap().is_empty());
+        assert_eq!(r["sensitivity"], "model_visible");
+    }
+    assert!(result["rendered"].as_str().unwrap().len() <= 4096 * 4);
+
+    // Malformed request: static fail-closed error, no echo.
+    let marker = "WIRE-INJECT-77aa-NEVER-ECHO";
+    let resp = ext.request("context_provider.recall", json!({ "surprise": marker }));
+    let err = resp.pointer("/error/message").and_then(Value::as_str).expect("error reply");
+    assert_eq!(err, "context_provider.recall: malformed params (fail closed)");
+    assert!(!serde_json::to_string(&resp).unwrap().contains(marker));
+
+    // Wrong project: static mismatch error with no existence leakage.
+    let resp = ext.request(
+        "context_provider.recall",
+        json!({
+            "schema": "recall/1",
+            "lease_id": "memctx-lease-wire",
+            "project_id": "proj_ffffffffffffffff",
+            "session_id": "sess-wire",
+            "turn_id": "turn-2",
+            "query": "zebrafish",
+            "recent_context_digest": "ab".repeat(32),
+            "budget": { "max_records": 8, "max_rendered_tokens": 4096 },
+            "permitted_classes": ["model_visible"]
+        }),
+    );
+    let err = resp.pointer("/error/message").and_then(Value::as_str).expect("error reply");
+    assert_eq!(err, "context_provider.recall: project scope mismatch (fail closed)");
+    assert!(!err.contains("proj_ffffffffffffffff"));
+    ext.shutdown();
+}

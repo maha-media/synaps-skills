@@ -24,9 +24,10 @@ mod scope;
 mod settings;
 mod timer;
 mod tools;
-/// Task B1 — wire-compatible recall protocol types (no RPC dispatch until
-/// task B3).
+/// Task B1 — wire-compatible recall protocol types.
 pub mod context;
+/// Task B3 — `context_provider.recall` handler (bounded Axel retrieval).
+pub mod recall;
 use gliner::GlinerSession;
 use settings::{GlinerEnabled, Settings};
 use timer::{spawn_consolidation_timer, TimerCmd};
@@ -358,7 +359,13 @@ fn dispatch(
                 // Live tool specs — must match the manifest's passive
                 // extension.deferred.tools declarations exactly (deferred
                 // activation).
-                "tools": tools::tool_specs()
+                "tools": tools::tool_specs(),
+                // Passive context-provider declarations (task B3 /
+                // spec §7.1) — must match the manifest's
+                // extension.deferred.context_providers exactly (task A3
+                // host-side exact-match validation). Dormant until an
+                // exact host memory-context lease.
+                "context_providers": recall::context_provider_specs()
             }
         }),
 
@@ -369,6 +376,12 @@ fn dispatch(
             let input = params.get("input").cloned().unwrap_or(json!({}));
             tools::handle_tool_call(brain, settings, name, &input)?
         }
+
+        // Host-leased per-prompt recall (task B3, spec §7.4): parse fails
+        // closed on malformed/oversized input, project scope is confirmed
+        // against the SAME trusted derivation memory_search uses, and the
+        // contribution is bounded by the request's engine-authored budget.
+        "context_provider.recall" => recall::handle_recall(brain, settings, params)?,
 
         "shutdown" => json!({ "ok": true }),
 

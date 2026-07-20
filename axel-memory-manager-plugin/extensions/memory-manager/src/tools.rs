@@ -161,7 +161,11 @@ pub fn tool_specs() -> Value {
     ])
 }
 
-fn require_scope(settings: &Arc<Mutex<Settings>>) -> anyhow::Result<ProjectScope> {
+/// Resolve the trusted project scope or fail closed. Shared with the
+/// `context_provider.recall` handler (task B3) so recall derives its
+/// project key from the SAME trusted source as `memory_search` — never an
+/// independent derivation.
+pub(crate) fn require_scope(settings: &Arc<Mutex<Settings>>) -> anyhow::Result<ProjectScope> {
     let s = settings.lock().expect("settings lock").clone();
     scope::resolve(&s).ok_or_else(|| {
         anyhow::anyhow!(
