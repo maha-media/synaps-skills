@@ -20,8 +20,16 @@ use axel::AxelBrain;
 
 mod enricher;
 mod gliner;
+mod scope;
 mod settings;
 mod timer;
+mod tools;
+/// Task B1 — wire-compatible recall protocol types.
+pub mod context;
+/// Task B3 — `context_provider.recall` handler (bounded Axel retrieval).
+pub mod recall;
+/// Task C3 — durable, idempotent chat-turn capture.
+pub mod capture;
 use gliner::GlinerSession;
 use settings::{GlinerEnabled, Settings};
 use timer::{spawn_consolidation_timer, TimerCmd};
@@ -29,9 +37,6 @@ use timer::{spawn_consolidation_timer, TimerCmd};
 const PROTOCOL_VERSION: u32 = 1;
 const NAME: &str = "memory-manager";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// Importance score for memories captured automatically from chat turns.
-const AUTO_IMPORTANCE: f64 = 0.5;
 
 /// Max search results to retrieve for `before_message` recall.
 const RECALL_LIMIT: usize = 5;
@@ -112,17 +117,43 @@ fn main() -> anyhow::Result<()> {
             continue;
         }
 
-        // Prewarm the embedding model during `initialize` so the first
-        // `before_message` hook (capped at 5s by Synaps) doesn't hit a
-        // model download. `initialize` has no Synaps-side timeout, so we
-        // can take as long as we need (~minutes on first run for the
-        // 86 MB model download; instant once cached).
+        // Apply host-resolved initialize config FIRST (hardened 0.2 path):
+        // the host injects trusted, host-owned values — notably the
+        // reserved `project_root` host-context key — via
+        // `params.config`. They must land in the runtime Settings before
+        // anything resolves a project scope or consults settings (the
+        // embeddings prewarm below, tool calls, timers). Values route
+        // through the same validated `apply_kv` path as the on-disk
+        // config file; the on-disk file remains a fallback for older
+        // hosts that send no config.
         if method == "initialize" {
-            let mut g = brain.lock().expect("brain lock");
-            if let Some(b) = g.as_mut() {
-                prewarm_brain(b);
+            if let Some(config) = params.get("config").and_then(|c| c.as_object()) {
+                let mut s = settings.lock().expect("settings lock");
+                s.apply_config_object(config);
             }
-            drop(g);
+        }
+
+        // Prewarm the embedding model during `initialize` — but ONLY when the
+        // user has explicitly opted into embeddings AND the model is already
+        // cached on disk. Default is lexical-only: no model load, no network,
+        // no download (T35 — the old unconditional prewarm could implicitly
+        // download ~86 MiB, which is forbidden by default).
+        if method == "initialize" {
+            let embeddings_on = settings.lock().expect("settings lock").embeddings.is_on();
+            if embeddings_on {
+                if embedder_model_cached() {
+                    let mut g = brain.lock().expect("brain lock");
+                    if let Some(b) = g.as_mut() {
+                        prewarm_brain(b);
+                    }
+                    drop(g);
+                } else {
+                    eprintln!(
+                        "axel: embeddings=on but model not cached — staying lexical-only. \
+                         Run `axel download-embeddings` to fetch it explicitly."
+                    );
+                }
+            }
         }
 
         let result = dispatch(&brain, &settings, &gliner, &gliner_load_attempted, method, &params);
@@ -198,6 +229,15 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Is the (86 MiB) embedding model already present in the local cache?
+/// We never download it implicitly — `axel download-embeddings` is the
+/// only path that fetches it, and only on explicit user request.
+fn embedder_model_cached() -> bool {
+    let dir = velocirag::download::models_cache_dir()
+        .join(velocirag::download::EMBEDDER_MODEL.local_dir);
+    dir.join("model.onnx").is_file() || dir.join("onnx/model.onnx").is_file()
+}
+
 /// Force the embedding model to load by issuing a tiny dummy search.
 ///
 /// Why: `before_message` runs `contextual_recall`, which lazily loads (and
@@ -244,7 +284,8 @@ fn read_frame<R: BufRead>(reader: &mut R) -> io::Result<Option<Value>> {
     }
 
     let len = match content_length {
-        Some(n) => n,
+        Some(n) if n <= capture::MAX_CAPTURE_BYTES => n,
+        Some(_) => return Err(io::Error::new(io::ErrorKind::InvalidData, "frame exceeds size limit")),
         None => return Ok(Some(json!({}))), // malformed: skip
     };
 
@@ -311,15 +352,43 @@ fn dispatch(
             "version": VERSION,
             "protocol_version": PROTOCOL_VERSION,
             "capabilities": {
-                "hooks": [
-                    "before_message",
-                    "on_message_complete",
-                    "after_tool_call",
-                    "on_session_start",
-                    "on_session_end"
-                ]
+                // Tool-only hardened manifest (0.2 / T32): NO hook
+                // registrations — the process may only ever be started by
+                // exact tool activation, so it must never claim passive
+                // per-turn surfaces. The legacy `hook.handle` handler
+                // below remains for compatibility with explicitly eager
+                // legacy hosts but is manifest-inactive.
+                "hooks": [],
+                // Live tool specs — must match the manifest's passive
+                // extension.deferred.tools declarations exactly (deferred
+                // activation).
+                "tools": tools::tool_specs(),
+                // Passive context-provider declarations (task B3 /
+                // spec §7.1) — must match the manifest's
+                // extension.deferred.context_providers exactly (task A3
+                // host-side exact-match validation). Dormant until an
+                // exact host memory-context lease.
+                "context_providers": recall::context_provider_specs()
             }
         }),
+
+        // Extension tool invocation (host: ProcessExtension::call_tool).
+        // params: { "name": "<tool>", "input": { ... } }
+        "tool.call" => {
+            let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let input = params.get("input").cloned().unwrap_or(json!({}));
+            tools::handle_tool_call(brain, settings, name, &input)?
+        }
+
+        // Host-leased per-prompt recall (task B3, spec §7.4): parse fails
+        // closed on malformed/oversized input, project scope is confirmed
+        // against the SAME trusted derivation memory_search uses, and the
+        // contribution is bounded by the request's engine-authored budget.
+        "context_provider.recall" => recall::handle_recall(brain, settings, params)?,
+
+        // Host-leased terminal-turn capture (task C3). Validation and Axel
+        // persistence are bounded and diagnostics never contain turn text.
+        "context_provider.capture" => capture::handle_capture(brain, params)?,
 
         "shutdown" => json!({ "ok": true }),
 
@@ -395,7 +464,7 @@ fn dispatch(
                 })
                 .unwrap_or_default();
             let sub = args.first().map(String::as_str).unwrap_or("help");
-            handle_axel_command(brain, gliner, sub)
+            handle_axel_command(brain, settings, gliner, sub)
         }
 
         // Synaps dispatches every hook through a single "hook.handle" RPC,
@@ -466,20 +535,28 @@ fn handle_hook(
 ) -> Value {
     match kind {
         "on_session_start" => {
-            // Inject Tier-0 handoff + Tier-1 memories as a system preamble.
+            // T36: automatic boot injection is OFF by default (explicit
+            // opt-in), project-scoped, bounded, and lower-authority.
+            let (enabled, snap) = {
+                let s = settings.lock().expect("settings lock");
+                (s.boot_injection.is_on(), s.clone())
+            };
+            if !enabled {
+                return json!({ "action": "continue" });
+            }
+            let Some(project) = scope::resolve(&snap) else {
+                eprintln!("axel: boot_injection=on but no trusted project scope — skipping");
+                return json!({ "action": "continue" });
+            };
             let mut g = brain.lock().expect("brain lock");
             let result = if let Some(b) = g.as_mut() {
-                match b.boot_context() {
-                    Ok(ctx) if !ctx.formatted.trim().is_empty() => json!({
+                match scoped_recall_block(b, &project, None) {
+                    Some(content) => json!({
                         "action": "inject_message",
                         "role": "system",
-                        "content": ctx.formatted
+                        "content": content
                     }),
-                    Ok(_) => json!({ "action": "continue" }),
-                    Err(e) => {
-                        eprintln!("axel: boot_context failed: {e}");
-                        json!({ "action": "continue" })
-                    }
+                    None => json!({ "action": "continue" }),
                 }
             } else {
                 json!({ "action": "continue" })
@@ -527,23 +604,28 @@ fn handle_hook(
         }
 
         "before_message" => {
-            // VolciRAG contextual recall on the user's incoming message.
+            // T36: recall injection is OFF by default (explicit opt-in),
+            // project-scoped, bounded, lower-authority, offline-lexical.
+            let (enabled, snap) = {
+                let s = settings.lock().expect("settings lock");
+                (s.auto_recall.is_on(), s.clone())
+            };
+            if !enabled {
+                return json!({ "action": "continue" });
+            }
+            let Some(project) = scope::resolve(&snap) else {
+                eprintln!("axel: auto_recall=on but no trusted project scope — skipping");
+                return json!({ "action": "continue" });
+            };
             let user_text = extract_text(params);
             if user_text.trim().len() < 5 {
                 return json!({ "action": "continue" });
             }
             let mut g = brain.lock().expect("brain lock");
             let result = if let Some(b) = g.as_mut() {
-                match b.contextual_recall(&user_text, RECALL_LIMIT) {
-                    Ok(ctx) if !ctx.formatted.trim().is_empty() => json!({
-                        "action": "inject",
-                        "content": ctx.formatted
-                    }),
-                    Ok(_) => json!({ "action": "continue" }),
-                    Err(e) => {
-                        eprintln!("axel: contextual_recall failed: {e}");
-                        json!({ "action": "continue" })
-                    }
+                match scoped_recall_block(b, &project, Some(&user_text)) {
+                    Some(content) => json!({ "action": "inject", "content": content }),
+                    None => json!({ "action": "continue" }),
                 }
             } else {
                 json!({ "action": "continue" })
@@ -553,32 +635,38 @@ fn handle_hook(
         }
 
         "on_message_complete" => {
-            // Lightweight online consolidation: capture the assistant turn as
-            // a Memory if it's substantial. Two paths:
-            //   * enrichment_trigger=Off       → legacy `remember()` (Events).
-            //   * enrichment_trigger=OnComplete → heuristic + GLiNER enrichment
-            //     via `remember_full(Memory)` (Track A API).
-            //   * enrichment_trigger=OnSessionEnd → v1 logs once and behaves
-            //     like OnComplete; batched enrichment is a follow-up.
+            // Capture the assistant turn as a project-scoped memory when a
+            // trusted scope exists. Without a trusted scope we skip: writes
+            // are never unscoped (fail closed) and never trigger the
+            // embedding path (offline lexical index only).
             let text = extract_text(params);
-            let (min_len, trigger) = {
+            let (min_len, snap) = {
                 let g = settings.lock().expect("settings lock");
-                (g.min_consolidate_len, g.enrichment_trigger)
+                (g.min_consolidate_len, g.clone())
             };
             if text.len() >= min_len {
-                // Lazy-load GLiNER on first qualifying turn so the heuristic
-                // enricher can be promoted to entity-aware extraction.
-                {
-                    let s = settings.lock().expect("settings lock");
-                    ensure_gliner(gliner, gliner_load_attempted, &s);
-                }
-                let mut g = brain.lock().expect("brain lock");
-                if let Some(b) = g.as_mut() {
-                    if let Err(e) = remember_with_trigger(b, &text, trigger, gliner) {
-                        eprintln!("axel: remember failed: {e}");
+                match scope::resolve(&snap) {
+                    None => {
+                        eprintln!(
+                            "axel: no trusted project scope — skipping auto-capture \
+                             (set project_root or SYNAPS_PROJECT_ROOT)"
+                        );
+                    }
+                    Some(project) => {
+                        // Lazy-load GLiNER for enrichment (never downloads).
+                        {
+                            let s = settings.lock().expect("settings lock");
+                            ensure_gliner(gliner, gliner_load_attempted, &s);
+                        }
+                        let mut g = brain.lock().expect("brain lock");
+                        if let Some(b) = g.as_mut() {
+                            if let Err(e) = remember_scoped_capture(b, &text, &project, gliner) {
+                                eprintln!("axel: remember failed: {e}");
+                            }
+                        }
+                        drop(g);
                     }
                 }
-                drop(g);
             }
             json!({ "action": "continue" })
         }
@@ -619,73 +707,72 @@ fn extract_text(params: &Value) -> String {
     String::new()
 }
 
-/// Apply a chat-turn `text` to the brain via the path selected by the user's
-/// `enrichment_trigger` setting:
-///
-///   * `Off` — legacy `remember()` (single Events row).
-///   * `OnComplete` — heuristic + (lazy) GLiNER enrichment, persisted via
-///     `remember_full(Memory)` (Track A API).
-///   * `OnSessionEnd` — same as `OnComplete` in v1 (batched enrichment is a
-///     planned follow-up; we log a one-shot warning on first hit and use the
-///     same path).
-fn remember_with_trigger(
+/// Build a bounded, lower-authority, project-scoped recall block from the
+/// offline lexical index. Secret bodies can never appear (Axel returns no
+/// snippet for secret rows) and restricted retention classes only surface
+/// titles. Returns `None` when there is nothing worth injecting.
+fn scoped_recall_block(
     brain: &mut AxelBrain,
-    text: &str,
-    trigger: settings::EnrichmentTrigger,
-    gliner: &Arc<Mutex<Option<GlinerSession>>>,
-) -> anyhow::Result<()> {
-    use settings::EnrichmentTrigger;
-    match trigger {
-        EnrichmentTrigger::Off => {
-            brain.remember(text, "Events", AUTO_IMPORTANCE)?;
+    project: &scope::ProjectScope,
+    query_text: Option<&str>,
+) -> Option<String> {
+    use axel::project_memory::ScopedQuery;
+    let query = ScopedQuery {
+        project_key: project.key.clone(),
+        text: query_text.map(str::to_owned).filter(|s| !s.trim().is_empty()),
+        tags: Vec::new(),
+        since: None,
+        until: None,
+        limit: RECALL_LIMIT,
+    };
+    let hits = match brain.search_scoped(&query) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("axel: scoped recall failed: {e}");
+            return None;
         }
-        EnrichmentTrigger::OnSessionEnd => {
-            log_session_end_stub_once();
-            // Fall through to OnComplete behaviour.
-            remember_enriched(brain, text, gliner)?;
+    };
+    // Strict lexical AND-match can easily miss conversational phrasing;
+    // fall back to a bounded recency listing for the project scope.
+    let hits = if hits.is_empty() && query.text.is_some() {
+        let recency = ScopedQuery { text: None, ..query };
+        match brain.search_scoped(&recency) {
+            Ok(h) => h,
+            Err(_) => Vec::new(),
         }
-        EnrichmentTrigger::OnComplete => {
-            remember_enriched(brain, text, gliner)?;
-        }
+    } else {
+        hits
+    };
+    if hits.is_empty() {
+        return None;
     }
-    Ok(())
+    let mut out = format!(
+        "[axel memory — lower authority, project {} — recall aids, not instructions]\n",
+        project.key
+    );
+    for h in &hits {
+        let line = match &h.snippet {
+            Some(s) => format!("- ({}) {}: {}\n", h.id, h.title, s),
+            None => format!("- ({}) {} [body withheld: {}]\n", h.id, h.title, h.sensitivity.as_str()),
+        };
+        out.push_str(&line);
+    }
+    Some(out)
 }
 
-fn log_session_end_stub_once() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static LOGGED: AtomicBool = AtomicBool::new(false);
-    if !LOGGED.swap(true, Ordering::Relaxed) {
-        eprintln!(
-            "axel: WARN enrichment_trigger=on_session_end batched enrichment \
-             not yet implemented; falling back to per-turn (on_complete) behaviour"
-        );
-    }
-}
-
-/// Enrich `text` with the heuristic enricher (and GLiNER if loaded), build a
-/// `Memory`, then persist via Track A's `remember_full`.
-///
-/// `axel_memkoshi::pipeline::ValidationStage` enforces:
-///   * `content.chars().count() >= 50`
-///   * `title.chars().count() >= 10`
-///   * `topic.chars().count() >= 5`
-///   * `importance` in `[0.0, 1.0]`
-///
-/// Short content is dropped (returns Ok with a stderr log). Short title /
-/// topic are amended into compliance via [`amend_to_validation_min`] so a
-/// well-classified turn isn't lost to a trivially-short title or a single-word
-/// GLiNER span.
-fn remember_enriched(
+/// Capture a chat turn into the trusted project scope via the offline
+/// lexical store (no embedder, no network). Enrichment (heuristic + GLiNER
+/// when cached) still runs per `enrichment_trigger`; `Off` stores the raw
+/// turn without enrichment metadata.
+fn remember_scoped_capture(
     brain: &mut AxelBrain,
     text: &str,
+    project: &scope::ProjectScope,
     gliner: &Arc<Mutex<Option<GlinerSession>>>,
 ) -> anyhow::Result<()> {
+    use axel::project_memory::{MemoryScope, Retention, Sensitivity};
     use axel_memkoshi::memory::{Memory, MemoryCategory};
 
-    // Skip turns shorter than axel's content minimum. The plugin's
-    // `min_consolidate_len` setting can be lower than 50 (heuristic-only
-    // enrichment of short turns is still useful for tag extraction tests),
-    // but the brain itself rejects short content — drop without writing.
     if text.chars().count() < 50 {
         eprintln!(
             "axel: remember: skipping turn ({} chars < 50, axel content min)",
@@ -694,8 +781,7 @@ fn remember_enriched(
         return Ok(());
     }
 
-    // Hold the GLiNER lock only for the duration of the enrich() call —
-    // brain I/O happens after the guard is dropped.
+    // Hold the GLiNER lock only for the duration of the enrich() call.
     let g = gliner.lock().expect("gliner lock");
     let patch = enricher::enrich(text, g.as_ref());
     drop(g);
@@ -709,16 +795,20 @@ fn remember_enriched(
 
     let mut memory = Memory::new(category, topic, title, text);
     apply_patch_to_memory(&mut memory, patch);
-    // Re-amend after apply_patch — apply_patch_to_memory may overwrite topic
-    // with a still-short patch.topic (now filtered upstream by enricher, but
-    // belt-and-braces), and won't touch title.
     if memory.topic.chars().count() < 5 {
         memory.topic = category.as_str().to_string();
     }
     if memory.title.chars().count() < 10 {
         memory.title = format!("{}: {}", category.as_str(), memory.title);
     }
-    let _ = brain.remember_full(memory)?;
+
+    let mem_scope = MemoryScope {
+        project_key: project.key.clone(),
+        sensitivity: Sensitivity::Normal,
+        retention: Retention::Standard,
+        provenance: "synaps:auto_capture".to_string(),
+    };
+    let _ = brain.store_scoped(memory, &mem_scope)?;
     Ok(())
 }
 
@@ -786,6 +876,7 @@ fn apply_patch_to_memory(m: &mut axel_memkoshi::memory::Memory, p: axel::MemoryP
 ///   * `consolidate` — invoke the existing `consolidate` RPC for parity with the bg timer.
 fn handle_axel_command(
     brain: &Arc<Mutex<Option<AxelBrain>>>,
+    settings: &Arc<Mutex<Settings>>,
     gliner: &Arc<Mutex<Option<GlinerSession>>>,
     sub: &str,
 ) -> Value {
@@ -797,8 +888,47 @@ fn handle_axel_command(
                 help          Show this help.\n  \
                 models        List cached models in $XDG_CACHE_HOME/velocirag/models/.\n  \
                 download      Eagerly download the GLiNER model (~165 MB) so the\n                first chat turn doesn't block.\n  \
+                download-embeddings\n                Explicitly download the ~86 MB embedding model\n                (never downloaded implicitly; embeddings setting must be on).\n  \
+                retention     Per-retention-class memory counts for the trusted\n                project scope (fails closed without one).\n  \
                 consolidate   Run a consolidation pass (reindex → strengthen → prune).";
             json!({ "ok": true, "output": text })
+        }
+        "download-embeddings" => {
+            // The ONLY path that fetches the embedding model — explicit user
+            // request. Default runtime is lexical-only and never downloads.
+            let started = std::time::Instant::now();
+            match velocirag::download::ensure_model(&velocirag::download::EMBEDDER_MODEL) {
+                Ok(p) => json!({
+                    "ok": true,
+                    "path": p.display().to_string(),
+                    "elapsed_secs": started.elapsed().as_secs_f32(),
+                    "note": "set the 'embeddings' plugin setting to 'on' to use it"
+                }),
+                Err(e) => json!({ "ok": false, "error": e.to_string() }),
+            }
+        }
+        "retention" => {
+            let snap = settings.lock().expect("settings lock").clone();
+            let Some(project) = scope::resolve(&snap) else {
+                return json!({
+                    "ok": false,
+                    "error": "no trusted project scope (set project_root or SYNAPS_PROJECT_ROOT)"
+                });
+            };
+            let g = brain.lock().expect("brain lock");
+            let result = match g.as_ref() {
+                Some(b) => match b.retention_stats_scoped(&project.key) {
+                    Ok(stats) => json!({
+                        "ok": true,
+                        "project": project.key,
+                        "classes": stats.iter().map(|(k, n)| json!({ "retention": k, "count": n })).collect::<Vec<_>>(),
+                    }),
+                    Err(e) => json!({ "ok": false, "error": e.to_string() }),
+                },
+                None => json!({ "ok": false, "reason": "no brain" }),
+            };
+            drop(g);
+            result
         }
         "models" => {
             let dir = velocirag::download::models_cache_dir();
