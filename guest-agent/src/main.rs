@@ -53,31 +53,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         runtime.clone(),
     ));
     let fsmon: std::sync::Arc<dyn pria_guest_agent::fsmon::client::FsmonControl> =
-        std::sync::Arc::new(
-            pria_guest_agent::fsmon::client::UdsFsmonControl::new(config.fsmon.socket.clone())
-                .with_daemon(
-                    std::path::PathBuf::from("/usr/local/sbin/synaps_fsmon"),
-                    config.fsmon.forward_socket.clone(),
-                )
-                // Narrow the fanotify mark to the account EFS mount instead of the
-                // whole `/`: only opens on the account data subtree generate a
-                // synchronous FAN_OPEN_PERM round-trip, so a busy root filesystem
-                // never floods the permission loop into fd-exhaustion. This is
-                // also a complete envelope: the data needing containment (instance
-                // workspaces, session dirs, immutable prefixes) is EFS-rooted, so
-                // it sits under this mount. Per-user homes (`/home/<user>`) hold
-                // only ephemeral, legitimately-writable runtime config
-                // (`~/.synaps-cli`, `~/.vnc`) and are isolated by Unix DAC (distinct
-                // uid + 0700), not fanotify. System-path tamper protection (`/etc`,
-                // `/srv/synaps`) is handled out-of-band (chattr +i / read-only
-                // binds), not by a whole-`/` permission mark.
-                .with_mount(config.paths.efs_root.clone()),
-        );
-    // Desktop store uses run_root for persisted allocations + env files.
+        if config.mode == "aws-ecs" {
+            // Fargate cannot grant fanotify's CAP_SYS_ADMIN. Keep the policy
+            // contract alive but report explicit degraded enforcement.
+            std::sync::Arc::new(pria_guest_agent::fsmon::client::NoopFsmonControl)
+        } else {
+            std::sync::Arc::new(
+                pria_guest_agent::fsmon::client::UdsFsmonControl::new(config.fsmon.socket.clone())
+                    .with_daemon(
+                        std::path::PathBuf::from("/usr/local/sbin/synaps_fsmon"),
+                        config.fsmon.forward_socket.clone(),
+                    )
+                    // Narrow the fanotify mark to the account EFS mount instead
+                    // of the whole root filesystem.
+                    .with_mount(config.paths.efs_root.clone()),
+            )
+        };
+    // Desktop lifecycle is systemd-backed on VMs and child-process-backed in
+    // Fargate. Both implement the frozen SystemctlBackend/UnitGenerator seams.
+    let (desktop_backend, unit_generator): (
+        Arc<dyn pria_guest_agent::desktop::kasmvnc::SystemctlBackend>,
+        Arc<dyn pria_guest_agent::desktop::kasmvnc::UnitGenerator>,
+    ) = if config.mode == "aws-ecs" {
+        (
+            Arc::new(
+                pria_guest_agent::desktop::container::ContainerSystemctl::new(
+                    config.paths.run_root.clone(),
+                ),
+            ),
+            Arc::new(pria_guest_agent::desktop::kasmvnc::DefaultUnitNaming),
+        )
+    } else {
+        (
+            Arc::new(pria_guest_agent::desktop::kasmvnc::RealSystemctl),
+            Arc::new(pria_guest_agent::desktop::kasmvnc::FileUnitGenerator::default()),
+        )
+    };
     let desktops = Arc::new(
         pria_guest_agent::desktop::kasmvnc::DesktopStore::new(
             config.paths.run_root.clone(),
-            Arc::new(pria_guest_agent::desktop::kasmvnc::RealSystemctl),
+            desktop_backend,
         )
         .with_port_readiness(Arc::new(
             pria_guest_agent::desktop::kasmvnc::TcpPortReadiness::new(
@@ -87,9 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_password_applier(Arc::new(
             pria_guest_agent::desktop::kasmvnc::SetpwApplier::default(),
         ))
-        .with_unit_generator(Arc::new(
-            pria_guest_agent::desktop::kasmvnc::FileUnitGenerator::default(),
-        )),
+        .with_unit_generator(unit_generator),
     );
     let state = AppState {
         config: Arc::new(config),

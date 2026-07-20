@@ -9,5 +9,6 @@
 //!
 //! The HTTP handlers live in [`crate::api::desktop`].
 
+pub mod container;
 pub mod kasmvnc;
 pub mod ports;

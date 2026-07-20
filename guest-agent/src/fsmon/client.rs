@@ -64,6 +64,34 @@ pub trait FsmonControl: Send + Sync {
     }
 }
 
+/// Container-safe fsmon backend for substrates that cannot grant fanotify's
+/// `CAP_SYS_ADMIN` (AWS Fargate). It accepts and records policy at the guest
+/// runtime layer but performs no synchronous kernel enforcement. Callers can
+/// surface the explicit `degraded` bit instead of pretending parity.
+#[derive(Default)]
+pub struct NoopFsmonControl;
+
+#[async_trait]
+impl FsmonControl for NoopFsmonControl {
+    async fn apply_policy(&self, _doc: &PolicyDoc) -> Result<FsmonStats, FsmonError> {
+        Ok(FsmonStats {
+            degraded: Some(true),
+            ..FsmonStats::default()
+        })
+    }
+
+    async fn ping(&self) -> Result<(), FsmonError> {
+        Ok(())
+    }
+
+    async fn stats(&self) -> Result<FsmonStats, FsmonError> {
+        Ok(FsmonStats {
+            degraded: Some(true),
+            ..FsmonStats::default()
+        })
+    }
+}
+
 /// UDS-backed control client.
 pub struct UdsFsmonControl {
     socket_path: std::path::PathBuf,
@@ -266,6 +294,20 @@ impl FsmonControl for UdsFsmonControl {
     }
 }
 
+#[cfg(test)]
+mod noop_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn fargate_backend_is_available_but_explicitly_degraded() {
+        let backend = NoopFsmonControl;
+        backend.ensure_running().await.unwrap();
+        backend.ping().await.unwrap();
+        let stats = backend.stats().await.unwrap();
+        assert_eq!(stats.degraded, Some(true));
+    }
+}
+
 // ── test fake ────────────────────────────────────────────────────────────────
 
 #[cfg(any(test, feature = "test-fakes"))]
@@ -359,8 +401,8 @@ mod tests {
         let default = UdsFsmonControl::new("/run/pria/fsmon.sock");
         assert_eq!(default.mount_path, std::path::PathBuf::from("/"));
 
-        let narrowed = UdsFsmonControl::new("/run/pria/fsmon.sock")
-            .with_mount("/efs/accounts/acct_abc123");
+        let narrowed =
+            UdsFsmonControl::new("/run/pria/fsmon.sock").with_mount("/efs/accounts/acct_abc123");
         assert_eq!(
             narrowed.mount_path,
             std::path::PathBuf::from("/efs/accounts/acct_abc123")

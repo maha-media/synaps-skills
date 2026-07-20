@@ -1,0 +1,191 @@
+//! Container-native KasmVNC child-process lifecycle for AWS ECS/Fargate.
+//!
+//! `DesktopStore` still allocates ports and writes context env files. This
+//! backend interprets the same unit name as a stable handle, starts `vncserver`
+//! directly as the reconciled Linux user, and tracks the child without systemd.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+use async_trait::async_trait;
+use tokio::process::Child;
+
+use super::kasmvnc::{read_env_file, SystemctlBackend, SystemctlError, UnitStatus};
+
+const CONTEXT_PREFIX: &str = "pria-kasmvnc-";
+const CONTEXT_SUFFIX: &str = ".service";
+const LEGACY_PREFIX: &str = "kasmvnc@";
+const LEGACY_SUFFIX: &str = ".service";
+
+pub struct ContainerSystemctl {
+    run_root: PathBuf,
+    children: Mutex<HashMap<String, Child>>,
+}
+
+impl ContainerSystemctl {
+    pub fn new(run_root: PathBuf) -> Self {
+        Self {
+            run_root,
+            children: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn key_and_user(unit: &str) -> Result<(String, String), SystemctlError> {
+        if let Some(key) = unit
+            .strip_prefix(CONTEXT_PREFIX)
+            .and_then(|s| s.strip_suffix(CONTEXT_SUFFIX))
+        {
+            let user = key.split_once("__").map(|(u, _)| u).unwrap_or(key);
+            return Ok((key.to_string(), user.to_string()));
+        }
+        if let Some(user) = unit
+            .strip_prefix(LEGACY_PREFIX)
+            .and_then(|s| s.strip_suffix(LEGACY_SUFFIX))
+        {
+            return Ok((user.to_string(), user.to_string()));
+        }
+        Err(SystemctlError(format!(
+            "invalid desktop unit handle: {unit}"
+        )))
+    }
+
+    fn reap_finished(&self, unit: &str) -> Result<Option<UnitStatus>, SystemctlError> {
+        let mut children = self.children.lock().unwrap();
+        let Some(child) = children.get_mut(unit) else {
+            return Ok(None);
+        };
+        match child.try_wait() {
+            Ok(None) => Ok(Some(UnitStatus::Active)),
+            Ok(Some(status)) => {
+                children.remove(unit);
+                Ok(Some(if status.success() {
+                    UnitStatus::Inactive
+                } else {
+                    UnitStatus::Failed
+                }))
+            }
+            Err(e) => Err(SystemctlError(format!("inspect {unit}: {e}"))),
+        }
+    }
+}
+
+#[async_trait]
+impl SystemctlBackend for ContainerSystemctl {
+    async fn start(&self, unit: &str) -> Result<(), SystemctlError> {
+        if matches!(self.reap_finished(unit)?, Some(UnitStatus::Active)) {
+            return Ok(());
+        }
+        let (key, user) = Self::key_and_user(unit)?;
+        let env = read_env_file(&self.run_root, &key)
+            .ok_or_else(|| SystemctlError(format!("missing desktop env for {key}")))?;
+
+        // Container mode has no systemd ExecStartPre, so materialize the
+        // context-specific Kasm credential before the server can accept traffic.
+        // The helper reads the password from the root-owned 0600 env file; it is
+        // never placed on argv or emitted to logs.
+        let setpw = tokio::process::Command::new("/usr/local/sbin/pria-kasm-setpw")
+            .args([&user, &key])
+            .env("PRIA_RUN_ROOT", &self.run_root)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit())
+            .status()
+            .await
+            .map_err(|e| SystemctlError(format!("configure desktop password for {unit}: {e}")))?;
+        if !setpw.success() {
+            return Err(SystemctlError(format!(
+                "desktop password helper failed for {unit}"
+            )));
+        }
+
+        let uid_out = tokio::process::Command::new("id")
+            .args(["-u", &user])
+            .output()
+            .await
+            .map_err(|e| SystemctlError(format!("resolve uid for {user}: {e}")))?;
+        let gid_out = tokio::process::Command::new("id")
+            .args(["-g", &user])
+            .output()
+            .await
+            .map_err(|e| SystemctlError(format!("resolve gid for {user}: {e}")))?;
+        if !uid_out.status.success() || !gid_out.status.success() {
+            return Err(SystemctlError(format!(
+                "desktop user does not exist: {user}"
+            )));
+        }
+        let uid = String::from_utf8_lossy(&uid_out.stdout)
+            .trim()
+            .parse::<u32>()
+            .map_err(|e| SystemctlError(format!("invalid uid for {user}: {e}")))?;
+        let gid = String::from_utf8_lossy(&gid_out.stdout)
+            .trim()
+            .parse::<u32>()
+            .map_err(|e| SystemctlError(format!("invalid gid for {user}: {e}")))?;
+
+        let mut cmd = tokio::process::Command::new("/usr/bin/vncserver");
+        cmd.args([
+            &env.display,
+            "-fg",
+            "-geometry",
+            &env.geometry,
+            "-websocketPort",
+            &env.ws_port.to_string(),
+            "-interface",
+            "0.0.0.0",
+            "-KasmPasswordFile",
+            &format!("/home/{user}/.vnc/pria-{key}.passwd"),
+        ])
+        .uid(uid)
+        .gid(gid)
+        .env("HOME", format!("/home/{user}"))
+        .env("USER", &user)
+        .env("LOGNAME", &user)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .kill_on_drop(true);
+
+        let child = cmd
+            .spawn()
+            .map_err(|e| SystemctlError(format!("start {unit}: {e}")))?;
+        self.children
+            .lock()
+            .unwrap()
+            .insert(unit.to_string(), child);
+        Ok(())
+    }
+
+    async fn stop(&self, unit: &str) -> Result<(), SystemctlError> {
+        let child = self.children.lock().unwrap().remove(unit);
+        if let Some(mut child) = child {
+            child
+                .start_kill()
+                .map_err(|e| SystemctlError(format!("stop {unit}: {e}")))?;
+            let _ = child.wait().await;
+        }
+        Ok(())
+    }
+
+    async fn status(&self, unit: &str) -> Result<UnitStatus, SystemctlError> {
+        Ok(self.reap_finished(unit)?.unwrap_or(UnitStatus::Inactive))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_context_and_legacy_handles_without_shell_input() {
+        assert_eq!(
+            ContainerSystemctl::key_and_user("pria-kasmvnc-pria_u_1__inst_2.service").unwrap(),
+            ("pria_u_1__inst_2".into(), "pria_u_1".into()),
+        );
+        assert_eq!(
+            ContainerSystemctl::key_and_user("kasmvnc@pria_u_1.service").unwrap(),
+            ("pria_u_1".into(), "pria_u_1".into()),
+        );
+        assert!(ContainerSystemctl::key_and_user("../../evil").is_err());
+    }
+}
