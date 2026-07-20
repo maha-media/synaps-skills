@@ -16,178 +16,166 @@
     "args": [],
     "setup": "scripts/setup.sh",
     "permissions": [
-      "tools.intercept",
-      "privacy.llm_content",
-      "session.lifecycle",
       "config.subscribe",
       "tools.register"
     ],
-    "hooks": [
-      {
-        "hook": "before_message"
-      },
-      {
-        "hook": "on_message_complete"
-      },
-      {
-        "hook": "after_tool_call"
-      },
-      {
-        "hook": "on_session_start"
-      },
-      {
-        "hook": "on_session_end"
-      }
-    ],
-    "tools": [
-      {
-        "description": "Search project-scoped memories in the local axel brain (offline lexical search). Returns bounded descriptors with stable IDs and short snippets — never full bodies, never secret content. Results are lower-authority recall aids.",
-        "input_schema": {
-          "additionalProperties": false,
-          "properties": {
-            "limit": {
-              "description": "Max results (default 10, hard cap 25).",
-              "type": "integer"
-            },
-            "project": {
-              "description": "Optional confirmation of the canonical project key. Must equal the host-derived key if provided; the model cannot select a different project.",
-              "type": "string"
-            },
-            "query": {
-              "description": "Lexical search text. Omit to list recent memories.",
-              "type": "string"
-            },
-            "since": {
-              "description": "RFC3339 lower bound on creation time.",
-              "type": "string"
-            },
-            "tags": {
-              "description": "Require all of these tags.",
-              "items": {
+    "deferred": {
+      "tools": [
+        {
+          "description": "Search project-scoped memories in the local axel brain (offline lexical search). Returns bounded descriptors with stable IDs and short snippets — never full bodies, never secret content. Results are lower-authority recall aids.",
+          "input_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "description": "Max results (default 10, hard cap 25).",
+                "type": "integer"
+              },
+              "project": {
+                "description": "Optional confirmation of the canonical project key. Must equal the host-derived key if provided; the model cannot select a different project.",
                 "type": "string"
               },
-              "type": "array"
-            },
-            "until": {
-              "description": "RFC3339 upper bound on creation time.",
-              "type": "string"
-            }
-          },
-          "type": "object"
-        },
-        "name": "memory_search"
-      },
-      {
-        "description": "Fetch one memory by exact ID from the trusted project scope. Body is bounded; secret or restricted-retention bodies are withheld with a reason.",
-        "input_schema": {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "description": "Exact memory id (from memory_search).",
-              "type": "string"
-            },
-            "project": {
-              "description": "Optional confirmation of the canonical project key.",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id"
-          ],
-          "type": "object"
-        },
-        "name": "memory_fetch"
-      },
-      {
-        "description": "Store a memory in the trusted project scope. Requires explicit project confirmation: pass the canonical project key in 'project' (call memory_search first to learn it, or read it from the error message). retention=never_persist is always refused.",
-        "input_schema": {
-          "additionalProperties": false,
-          "properties": {
-            "category": {
-              "description": "Memory category (default: events).",
-              "enum": [
-                "preferences",
-                "entities",
-                "events",
-                "cases",
-                "patterns"
-              ],
-              "type": "string"
-            },
-            "content": {
-              "description": "Memory body (>= 50 characters).",
-              "type": "string"
-            },
-            "expires_hours": {
-              "description": "Optional TTL in hours; the memory expires and is excluded after this.",
-              "type": "integer"
-            },
-            "project": {
-              "description": "REQUIRED explicit confirmation: the canonical project key of the trusted scope.",
-              "type": "string"
-            },
-            "retention": {
-              "description": "Disclosure/retention class (default: standard). never_persist is refused at the persistence boundary.",
-              "enum": [
-                "standard",
-                "local_only",
-                "visible_after_consent",
-                "persist_never_transmit",
-                "never_persist"
-              ],
-              "type": "string"
-            },
-            "sensitivity": {
-              "description": "secret: body never indexed, snippeted, or returned to a model.",
-              "enum": [
-                "normal",
-                "secret"
-              ],
-              "type": "string"
-            },
-            "tags": {
-              "description": "Free-form tags.",
-              "items": {
+              "query": {
+                "description": "Lexical search text. Omit to list recent memories.",
                 "type": "string"
               },
-              "type": "array"
+              "since": {
+                "description": "RFC3339 lower bound on creation time.",
+                "type": "string"
+              },
+              "tags": {
+                "description": "Require all of these tags.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "until": {
+                "description": "RFC3339 upper bound on creation time.",
+                "type": "string"
+              }
             },
-            "title": {
-              "description": "Short title (>= 10 characters recommended).",
-              "type": "string"
-            }
+            "type": "object"
           },
-          "required": [
-            "content",
-            "project"
-          ],
-          "type": "object"
+          "name": "memory_search"
         },
-        "name": "memory_store"
-      },
+        {
+          "description": "Fetch one memory by exact ID from the trusted project scope. Body is bounded; secret or restricted-retention bodies are withheld with a reason.",
+          "input_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "Exact memory id (from memory_search).",
+                "type": "string"
+              },
+              "project": {
+                "description": "Optional confirmation of the canonical project key.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "name": "memory_fetch"
+        },
+        {
+          "description": "Store a memory in the trusted project scope. Requires explicit project confirmation: pass the canonical project key in 'project' (call memory_search first to learn it, or read it from the error message). retention=never_persist is always refused.",
+          "input_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "category": {
+                "description": "Memory category (default: events).",
+                "enum": [
+                  "preferences",
+                  "entities",
+                  "events",
+                  "cases",
+                  "patterns"
+                ],
+                "type": "string"
+              },
+              "content": {
+                "description": "Memory body (>= 50 characters).",
+                "type": "string"
+              },
+              "expires_hours": {
+                "description": "Optional TTL in hours; the memory expires and is excluded after this.",
+                "type": "integer"
+              },
+              "project": {
+                "description": "REQUIRED explicit confirmation: the canonical project key of the trusted scope.",
+                "type": "string"
+              },
+              "retention": {
+                "description": "Disclosure/retention class (default: standard). never_persist is refused at the persistence boundary.",
+                "enum": [
+                  "standard",
+                  "local_only",
+                  "visible_after_consent",
+                  "persist_never_transmit",
+                  "never_persist"
+                ],
+                "type": "string"
+              },
+              "sensitivity": {
+                "description": "secret: body never indexed, snippeted, or returned to a model.",
+                "enum": [
+                  "normal",
+                  "secret"
+                ],
+                "type": "string"
+              },
+              "tags": {
+                "description": "Free-form tags.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "title": {
+                "description": "Short title (>= 10 characters recommended).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "content",
+              "project"
+            ],
+            "type": "object"
+          },
+          "name": "memory_store"
+        },
+        {
+          "description": "Permanently delete one memory by exact ID from the trusted project scope. Writes a tombstone: the id can never be re-inserted and never re-surfaces in search.",
+          "input_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "Exact memory id to forget.",
+                "type": "string"
+              },
+              "project": {
+                "description": "Optional confirmation of the canonical project key.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "name": "memory_forget"
+        }
+      ]
+    },
+    "config": [
       {
-        "description": "Permanently delete one memory by exact ID from the trusted project scope. Writes a tombstone: the id can never be re-inserted and never re-surfaces in search.",
-        "input_schema": {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "description": "Exact memory id to forget.",
-              "type": "string"
-            },
-            "project": {
-              "description": "Optional confirmation of the canonical project key.",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id"
-          ],
-          "type": "object"
-        },
-        "name": "memory_forget"
+        "key": "project_root",
+        "host_context": "project_root",
+        "description": "Host-owned trusted project root, resolved by the Synaps host from its own working directory and injected into initialize params.config. Never sourced from env, user, or model input."
       }
-    ],
-    "activation": "deferred"
+    ]
   },
   "commands": [
     {
@@ -246,8 +234,8 @@
               "off",
               "on"
             ],
-            "default": "on",
-            "help": "When on, runs a small CPU model to extract tags, topics, and category from each chat turn. ~165 MB model downloaded on first use; ~50 ms per turn."
+            "default": "off",
+            "help": "OFF by default. When on, runs a small local CPU model to extract tags, topics, and category from explicitly captured memories. The model is NEVER downloaded implicitly — run the 'axel download' command first (~165 MB); without it, heuristic-only enrichment applies."
           },
           {
             "key": "gliner_model",
@@ -269,30 +257,8 @@
               "on_complete",
               "on_session_end"
             ],
-            "default": "on_complete",
-            "help": "off: never enrich. on_complete: per chat turn (live tags). on_session_end: batch at end (cheaper). First chat turn after enabling will block ~10–30 s while the model downloads."
-          },
-          {
-            "key": "auto_recall",
-            "label": "Recall injection before each message",
-            "editor": "cycler",
-            "options": [
-              "off",
-              "on"
-            ],
             "default": "off",
-            "help": "OFF by default. When on, injects a bounded, lower-authority, project-scoped memory recall block before each user message. Requires a trusted project scope."
-          },
-          {
-            "key": "boot_injection",
-            "label": "Boot memory injection at session start",
-            "editor": "cycler",
-            "options": [
-              "off",
-              "on"
-            ],
-            "default": "off",
-            "help": "OFF by default. When on, injects a bounded, project-scoped memory summary at session start. Requires a trusted project scope."
+            "help": "OFF by default. Legacy hook-driven triggers (on_complete/on_session_end) are inactive in the tool-only 0.2 manifest and kept only for compatibility with eager hosts. Enrichment never downloads a model implicitly — run 'axel download' explicitly first."
           },
           {
             "key": "embeddings",
@@ -310,7 +276,7 @@
             "label": "Trusted project root",
             "editor": "text",
             "default": "",
-            "help": "Host-owned trusted project directory for memory scoping. Memory tools fail closed when neither this nor SYNAPS_PROJECT_ROOT is set. The model can never choose or widen the project scope."
+            "help": "Manual fallback for the trusted project directory used for memory scoping. Newer hosts inject the trusted root automatically at initialize (host_context config); this setting only applies when no host-provided root exists. Memory tools fail closed without a trusted root. The model can never choose or widen the project scope."
           }
         ]
       }

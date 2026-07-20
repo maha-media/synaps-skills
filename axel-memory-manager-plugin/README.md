@@ -28,7 +28,9 @@ need a Rust toolchain for supported platforms. Current release assets are named:
    declared in the plugin manifest. If no matching prebuilt binary exists and
    Cargo is installed, it falls back to a local release build.
 
-3. Restart Synaps. The extension will load with 5 hooks registered.
+3. Restart Synaps. The extension loads **tool-only deferred**: its four
+   memory tools are advertised from the manifest with **zero processes
+   spawned** — the binary starts only on exact tool activation (T32).
 
 ### Requirements
 
@@ -77,12 +79,21 @@ resolves the pinned rev directly.
 
 ## How it works
 
-| Hook | Behaviour |
+Since `0.2.0` the manifest is **tool-only deferred** (native
+`extension.deferred.tools`): the plugin subscribes to **no hooks**, requests
+no hook permissions, and the host starts the process only on **exact tool
+activation** — never at boot, never on a session/message event (T32).
+
+The hook handlers below still exist in the binary as **legacy
+compatibility** for an explicitly eager legacy host, but they are
+**manifest-inactive** in 0.2 and can never fire on the hardened path:
+
+| Legacy hook (inactive in 0.2 manifest) | Behaviour when eagerly hosted |
 |---|---|
-| `on_session_start`    | **OFF by default** (`boot_injection` setting). When on: bounded, project-scoped, lower-authority memory summary. |
-| `before_message`      | **OFF by default** (`auto_recall` setting). When on: bounded, project-scoped, lower-authority lexical recall block. |
-| `on_message_complete` | Auto-captures substantial assistant turns **into the trusted project scope** (provenance `synaps:auto_capture`). Skipped when no trusted project scope exists. |
-| `after_tool_call`     | Reserved for selective tool-output capture (currently a no-op). |
+| `on_session_start`    | **OFF by default** (`auto` settings removed from the 0.2 manifest). |
+| `before_message`      | **OFF by default**. |
+| `on_message_complete` | Auto-captures substantial assistant turns into the trusted project scope. |
+| `after_tool_call`     | Reserved (no-op). |
 | `on_session_end`      | `flush()` → persist the .r8. |
 
 ## Memory tools (T32–T36)
@@ -103,9 +114,14 @@ deferred-activation host never has to spawn the process to advertise them):
 The **model never chooses the project.** The canonical project key
 (`proj_` + 16 hex of SHA-256 of the canonicalized root) is derived only from:
 
-1. `SYNAPS_PROJECT_ROOT` (set by the host), or
-2. `AXEL_PROJECT_ROOT` (local override), or
-3. the host-owned `project_root` plugin setting.
+1. the **host-injected `project_root`** sent in `initialize`
+   `params.config` — the manifest declares
+   `config: [{ key: "project_root", host_context: "project_root" }]`, so a
+   hardened Synaps host resolves its own canonical project root and injects
+   it (no env forwarding, never user/model input), or
+2. `SYNAPS_PROJECT_ROOT` (set by the host env, legacy), or
+3. `AXEL_PROJECT_ROOT` (local override), or
+4. the host-owned `project_root` plugin setting (manual fallback).
 
 Without any of these, every memory tool **fails closed** with an explicit
 error. A model-supplied `project` argument may only confirm the derived key.
@@ -136,6 +152,12 @@ operates over source directories and should be invoked on a schedule.
 / `memory_store` / `memory_forget`), trusted project scoping (fail closed),
 sensitivity + retention classes, tombstoned forget, offline-lexical default
 (no implicit model download), opt-in recall/boot injection.
+
+`0.2.0` hardening: tool-only deferred manifest (no hooks, no hook
+permissions, zero spawn until exact tool activation), host-injected trusted
+`project_root` via the reserved `host_context` config source, and GLiNER /
+enrichment **off by default** — the optional local model is explicit opt-in
+AND explicit download only (`axel download`).
 
 Requires axel with the project-memory layer (branch
 `feat/project-memory-t32-t36`, commit `562e6508f5de0cdc0bbc803b2448aeb7431a6bed`).

@@ -404,8 +404,9 @@ fn memory_forget(
 mod tests {
     use super::*;
 
-    /// The manifest's passive `extension.tools` declarations must match the
-    /// live `initialize` specs exactly (deferred-activation contract).
+    /// The manifest's passive `extension.deferred.tools` declarations must
+    /// match the live `initialize` specs exactly (deferred-activation
+    /// contract).
     #[test]
     fn manifest_tools_match_live_specs() {
         let manifest_path = concat!(
@@ -415,12 +416,12 @@ mod tests {
         let manifest: Value =
             serde_json::from_str(&std::fs::read_to_string(manifest_path).unwrap()).unwrap();
         let declared = manifest
-            .pointer("/extension/tools")
-            .expect("manifest must declare extension.tools");
+            .pointer("/extension/deferred/tools")
+            .expect("manifest must declare extension.deferred.tools");
         assert_eq!(
             declared,
             &tool_specs(),
-            "manifest extension.tools must match live initialize capabilities.tools exactly"
+            "manifest extension.deferred.tools must match live initialize capabilities.tools exactly"
         );
     }
 

@@ -6,8 +6,12 @@
 //! 1. `SYNAPS_PROJECT_ROOT` — set by a Synaps host that forwards the
 //!    session's project root to the extension environment.
 //! 2. `AXEL_PROJECT_ROOT` — local override for tests / power users.
-//! 3. The `project_root` key in the host-owned plugin config file
-//!    (`$SYNAPS_BASE_DIR/plugins/axel-memory-manager/config`) — written via
+//! 3. The `project_root` runtime setting, populated (highest to lowest)
+//!    from the host-resolved `initialize` `params.config` — where hardened
+//!    hosts inject their host-owned trusted root via the reserved
+//!    `host_context: "project_root"` manifest config entry — or from the
+//!    `project_root` key in the host-owned plugin config file
+//!    (`$SYNAPS_BASE_DIR/plugins/axel-memory-manager/config`), written via
 //!    the Synaps settings UI, never by the model.
 //!
 //! When none of these yields a usable directory, there is **no trusted

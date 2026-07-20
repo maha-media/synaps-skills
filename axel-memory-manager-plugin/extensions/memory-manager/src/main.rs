@@ -111,6 +111,22 @@ fn main() -> anyhow::Result<()> {
             continue;
         }
 
+        // Apply host-resolved initialize config FIRST (hardened 0.2 path):
+        // the host injects trusted, host-owned values — notably the
+        // reserved `project_root` host-context key — via
+        // `params.config`. They must land in the runtime Settings before
+        // anything resolves a project scope or consults settings (the
+        // embeddings prewarm below, tool calls, timers). Values route
+        // through the same validated `apply_kv` path as the on-disk
+        // config file; the on-disk file remains a fallback for older
+        // hosts that send no config.
+        if method == "initialize" {
+            if let Some(config) = params.get("config").and_then(|c| c.as_object()) {
+                let mut s = settings.lock().expect("settings lock");
+                s.apply_config_object(config);
+            }
+        }
+
         // Prewarm the embedding model during `initialize` — but ONLY when the
         // user has explicitly opted into embeddings AND the model is already
         // cached on disk. Default is lexical-only: no model load, no network,
@@ -329,15 +345,16 @@ fn dispatch(
             "version": VERSION,
             "protocol_version": PROTOCOL_VERSION,
             "capabilities": {
-                "hooks": [
-                    "before_message",
-                    "on_message_complete",
-                    "after_tool_call",
-                    "on_session_start",
-                    "on_session_end"
-                ],
+                // Tool-only hardened manifest (0.2 / T32): NO hook
+                // registrations — the process may only ever be started by
+                // exact tool activation, so it must never claim passive
+                // per-turn surfaces. The legacy `hook.handle` handler
+                // below remains for compatibility with explicitly eager
+                // legacy hosts but is manifest-inactive.
+                "hooks": [],
                 // Live tool specs — must match the manifest's passive
-                // extension.tools declarations exactly (deferred activation).
+                // extension.deferred.tools declarations exactly (deferred
+                // activation).
                 "tools": tools::tool_specs()
             }
         }),

@@ -44,7 +44,8 @@ struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { gliner_enabled: GlinerEnabled::On }
+        // Mirrors production since 0.2: GLiNER is OFF by default.
+        Self { gliner_enabled: GlinerEnabled::Off }
     }
 }
 
@@ -137,7 +138,9 @@ fn lazy_load_against_real_model() {
     // Force the helper to use our located dir, regardless of $HOME.
     std::env::set_var("AXEL_GLINER_MODEL_DIR", &model_dir);
 
-    let s = Settings::default(); // gliner_enabled defaults to On
+    // Explicit opt-in: GLiNER defaults OFF since 0.2, so the lazy-load
+    // path must be exercised with the setting explicitly enabled.
+    let s = Settings { gliner_enabled: GlinerEnabled::On };
     let gliner: Arc<Mutex<Option<GlinerSession>>> = Arc::new(Mutex::new(None));
     let attempted = AtomicBool::new(false);
 

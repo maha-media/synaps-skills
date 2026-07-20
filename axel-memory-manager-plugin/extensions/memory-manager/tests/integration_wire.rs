@@ -174,19 +174,81 @@ fn initialize_capabilities_match_manifest_and_carry_no_memory_bodies() {
         "initialize response must not carry stored memory bodies"
     );
 
-    // Exact schema match with the manifest passive declarations.
+    // Exact schema match with the manifest passive declarations (native
+    // extension.deferred.tools since 0.2).
     let manifest_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../.synaps-plugin/plugin.json");
     let manifest: Value =
         serde_json::from_str(&std::fs::read_to_string(manifest_path).unwrap()).unwrap();
     assert_eq!(
-        manifest.pointer("/extension/tools").expect("manifest extension.tools"),
+        manifest.pointer("/extension/deferred/tools").expect("manifest extension.deferred.tools"),
         init.pointer("/result/capabilities/tools").expect("live capabilities.tools"),
         "manifest passive tool declarations must equal live initialize schemas"
     );
-    // Manifest must request tools.register and declare deferred activation.
+    // Tool-only hardened manifest (T32): tools.register requested, native
+    // deferred block present, NO legacy activation alias, NO hooks, NO
+    // hook permissions — and the live runtime registers zero hooks.
     let perms = manifest.pointer("/extension/permissions").unwrap().as_array().unwrap();
     assert!(perms.iter().any(|p| p == "tools.register"));
-    assert_eq!(manifest.pointer("/extension/activation").unwrap(), "deferred");
+    for hook_perm in ["tools.intercept", "privacy.llm_content", "session.lifecycle"] {
+        assert!(
+            !perms.iter().any(|p| p == hook_perm),
+            "tool-only manifest must not request hook permission {hook_perm}"
+        );
+    }
+    assert!(manifest.pointer("/extension/activation").is_none());
+    assert!(manifest.pointer("/extension/hooks").is_none());
+    assert_eq!(
+        init.pointer("/result/capabilities/hooks").expect("hooks capability"),
+        &json!([]),
+        "live initialize must register zero hooks"
+    );
+    // Host-context project_root config declaration present.
+    assert_eq!(
+        manifest.pointer("/extension/config/0/key").unwrap(),
+        "project_root"
+    );
+    assert_eq!(
+        manifest.pointer("/extension/config/0/host_context").unwrap(),
+        "project_root"
+    );
+    ext.shutdown();
+}
+
+/// The host injects its trusted project root at initialize via
+/// `params.config` (reserved host_context source). With NO project env
+/// vars at all, the applied config must produce the trusted scope every
+/// memory tool uses.
+#[test]
+fn initialize_config_project_root_establishes_trusted_scope() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    // No AXEL_PROJECT_ROOT / SYNAPS_PROJECT_ROOT: env plays no part.
+    let mut ext = Ext::spawn(&tmp.path().join("b.r8"), cache.path(), None);
+    let resp = ext.request(
+        "initialize",
+        json!({ "config": { "project_root": project.path().display().to_string() } }),
+    );
+    assert_eq!(resp["result"]["name"], "memory-manager", "{resp}");
+
+    // Store + search work against the host-provided scope.
+    let key = store_and_get_key(&mut ext, &long_content("host context scope"));
+    let expected = {
+        use sha2::Digest;
+        let canonical = std::fs::canonicalize(project.path()).unwrap();
+        let digest = sha2::Sha256::digest(canonical.to_string_lossy().as_bytes());
+        format!("proj_{}", hex::encode(&digest[..8]))
+    };
+    assert_eq!(key, expected, "scope key must derive from the host-injected root");
+    let resp = ext.tool("memory_search", json!({ "query": "scope", "project": key }));
+    assert_eq!(resp["result"]["count"], 1, "{resp}");
+    ext.shutdown();
+
+    // Without host config AND without env, tools fail closed.
+    let mut ext = Ext::spawn(&tmp.path().join("c.r8"), cache.path(), None);
+    ext.initialize();
+    let err = ext.tool("memory_store", json!({ "content": long_content("unscoped") }));
+    assert!(err["error"]["message"].as_str().unwrap().contains("project"), "{err}");
     ext.shutdown();
 }
 
