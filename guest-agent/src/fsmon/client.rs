@@ -306,6 +306,22 @@ mod noop_tests {
         let stats = backend.stats().await.unwrap();
         assert_eq!(stats.degraded, Some(true));
     }
+
+    #[tokio::test]
+    async fn apply_policy_accepts_but_reports_degraded_enforcement() {
+        // The policy contract stays alive (Ok) but the response never claims
+        // kernel enforcement: degraded is explicitly true, counters absent.
+        let backend = NoopFsmonControl;
+        let stats = backend
+            .apply_policy(&PolicyDoc::default())
+            .await
+            .expect("policy accepted at contract level");
+        assert_eq!(stats.degraded, Some(true));
+        assert_eq!(stats.cache_len, None);
+        assert_eq!(stats.principals, None);
+        backend.ping().await.expect("ping is always ok");
+        backend.ensure_stopped().await.unwrap();
+    }
 }
 
 // ── test fake ────────────────────────────────────────────────────────────────
