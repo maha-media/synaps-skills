@@ -242,8 +242,19 @@ impl SystemctlBackend for ContainerSystemctl {
         // Container mode has no systemd ExecStartPre, so run the password
         // helper synchronously before the server can accept traffic. The
         // password travels via the environment only — never argv, never logs.
+        // Run it AS THE DESKTOP USER (mirroring systemd, where ExecStartPre
+        // executes as the unit's User=): the helper materializes ~/.vnc and the
+        // passwd file, and a root-run helper under the hardened umask would
+        // leave ~/.vnc root-owned 0700 — the user's vncserver then cannot write
+        // its pid/log files there.
         let setpw_status = {
-            let mut cmd = tokio::process::Command::new(&self.setpw_bin);
+            let mut cmd = if self.use_runuser {
+                let mut c = tokio::process::Command::new("runuser");
+                c.arg("-u").arg(&user).arg("--").arg(&self.setpw_bin);
+                c
+            } else {
+                tokio::process::Command::new(&self.setpw_bin)
+            };
             cmd.arg(&user);
             if is_context {
                 cmd.arg(&key);
