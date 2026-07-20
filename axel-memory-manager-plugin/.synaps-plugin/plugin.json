@@ -1,7 +1,7 @@
 {
   "name": "axel-memory-manager",
-  "version": "0.2.0",
-  "description": "Axel — portable agent intelligence: project-scoped memory tools (memory_search/fetch/store/forget), offline lexical FTS, sensitivity + retention classes, one .r8 file as the agent's entire brain.",
+  "version": "0.3.0",
+  "description": "Axel — portable agent intelligence with OFF-by-default continuous memory: lease-gated context-provider recall and capture, history import, project-scoped memory tools, and one local .r8 brain.",
   "author": {
     "name": "J.R. Morton",
     "url": "https://github.com/maha-media"
@@ -267,7 +267,7 @@
               "on_session_end"
             ],
             "default": "off",
-            "help": "OFF by default. Legacy hook-driven triggers (on_complete/on_session_end) are inactive in the tool-only 0.2 manifest and kept only for compatibility with eager hosts. Enrichment never downloads a model implicitly — run 'axel download' explicitly first."
+            "help": "OFF by default. Legacy hook-driven triggers (on_complete/on_session_end) are inactive in the hook-free 0.3 manifest and kept only for compatibility with eager hosts. Enrichment never downloads a model implicitly — run 'axel download' explicitly first."
           },
           {
             "key": "embeddings",
