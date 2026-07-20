@@ -11,12 +11,42 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use tokio::process::Child;
 
-use super::kasmvnc::{read_env_file, SystemctlBackend, SystemctlError, UnitStatus};
+use super::kasmvnc::{
+    context_unit, kasmvnc_unit, read_env_file, DesktopUnitSpec, SystemctlBackend, SystemctlError,
+    UnitGenerator, UnitStatus,
+};
 
 const CONTEXT_PREFIX: &str = "pria-kasmvnc-";
 const CONTEXT_SUFFIX: &str = ".service";
 const LEGACY_PREFIX: &str = "kasmvnc@";
 const LEGACY_SUFFIX: &str = ".service";
+
+// ── unit "generation" (T2) ────────────────────────────────────────────────────
+
+/// Container-mode [`UnitGenerator`]: resolves the SAME unit names as the
+/// systemd path — `pria-kasmvnc-<key>.service` for instance-aware desktops,
+/// `kasmvnc@<user>.service` for legacy — so `DesktopStore::rehydrate` and every
+/// persisted session sidecar remain bit-identical across substrates, but it
+/// writes NO files (there is no systemd to consume them; the name is purely a
+/// handle for [`ContainerSystemctl`]). `remove` is a no-op for the same reason.
+pub struct ContainerUnitGenerator;
+
+#[async_trait]
+impl UnitGenerator for ContainerUnitGenerator {
+    async fn ensure(&self, spec: &DesktopUnitSpec) -> Result<String, String> {
+        Ok(if spec.is_instance_aware() {
+            context_unit(&spec.key)
+        } else {
+            kasmvnc_unit(&spec.linux_username)
+        })
+    }
+
+    async fn remove(&self, _spec: &DesktopUnitSpec) -> Result<(), String> {
+        // Nothing was materialized on disk; the in-process supervisor owns the
+        // child lifecycle via SystemctlBackend::stop.
+        Ok(())
+    }
+}
 
 pub struct ContainerSystemctl {
     run_root: PathBuf,
@@ -175,6 +205,34 @@ impl SystemctlBackend for ContainerSystemctl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn spec(user: &str, instance: Option<&str>) -> DesktopUnitSpec {
+        let key = crate::desktop::kasmvnc::desktop_key(user, instance);
+        DesktopUnitSpec {
+            key: key.clone(),
+            linux_username: user.into(),
+            instance_id: instance.map(String::from),
+            env_file: std::path::PathBuf::from(format!("/run/pria/kasmvnc/{key}.env")),
+        }
+    }
+
+    #[tokio::test]
+    async fn container_generator_names_context_unit_without_writing_files() {
+        let s = spec("pria_u_1", Some("inst_2"));
+        let unit = ContainerUnitGenerator.ensure(&s).await.unwrap();
+        // Identical to the systemd path so rehydrate stays bit-identical.
+        assert_eq!(unit, context_unit(&s.key));
+        assert_eq!(unit, "pria-kasmvnc-pria_u_1__inst_2.service");
+        ContainerUnitGenerator.remove(&s).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn container_generator_names_legacy_template_unit() {
+        let s = spec("pria_u_1", None);
+        let unit = ContainerUnitGenerator.ensure(&s).await.unwrap();
+        assert_eq!(unit, kasmvnc_unit("pria_u_1"));
+        assert_eq!(unit, "kasmvnc@pria_u_1.service");
+    }
 
     #[test]
     fn parses_context_and_legacy_handles_without_shell_input() {
