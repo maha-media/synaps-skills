@@ -119,6 +119,22 @@ fi
 # the tail keepalive prevents Xvnc from exiting if one component crashes.
 VNC_DIR="${HOME_DIR}/.vnc"
 install -d -m 0700 -o "${LINUX_USER}" "${VNC_DIR}" 2>/dev/null || mkdir -p "${VNC_DIR}"
+
+# Container desktops invoke vncserver directly instead of Kasm's
+# /dockerstartup/vnc_startup.sh. That startup script normally creates the
+# combined certificate/private-key PEM configured in /etc/kasmvnc/kasmvnc.yaml;
+# without it Xvnc exits before binding the websocket port. Generate a private,
+# per-user self-signed PEM on first use and retain it across desktop restarts.
+TLS_PEM="${VNC_DIR}/self.pem"
+if [ ! -s "${TLS_PEM}" ]; then
+  openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+    -keyout "${TLS_PEM}" -out "${TLS_PEM}" \
+    -subj "/C=US/ST=VA/L=None/O=None/OU=Pria/CN=kasm/emailAddress=none@none.none" \
+    >/dev/null 2>&1
+fi
+chmod 0600 "${TLS_PEM}"
+chown "${LINUX_USER}" "${TLS_PEM}" 2>/dev/null || true
+
 cat > "${VNC_DIR}/xstartup" <<'XSTARTUP'
 #!/bin/sh
 set +e
