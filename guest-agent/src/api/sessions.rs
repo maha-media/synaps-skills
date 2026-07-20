@@ -587,6 +587,23 @@ fn prepare_synaps_runtime_dir(uid: u32) -> Result<PathBuf, String> {
     use std::os::unix::fs::PermissionsExt;
     let dir = PathBuf::from(format!("/run/user/{uid}/synaps"));
     std::fs::create_dir_all(&dir).map_err(|e| format!("create runtime dir {}: {e}", dir.display()))?;
+    // The hardened runtime umask (077) leaves the /run/user and /run/user/<uid>
+    // intermediates created above at 0700 root — the dropped-privilege synaps
+    // process then cannot traverse to its own runtime dir and dies at startup
+    // ("failed to register session: write error: Permission denied").
+    // Normalize: /run/user 0711 (traverse-only), /run/user/<uid> uid-owned 0700
+    // (systemd-logind convention).
+    std::fs::set_permissions(Path::new("/run/user"), std::fs::Permissions::from_mode(0o711))
+        .map_err(|e| format!("chmod /run/user: {e}"))?;
+    let user_dir = PathBuf::from(format!("/run/user/{uid}"));
+    let c_user = std::ffi::CString::new(user_dir.as_os_str().as_encoded_bytes())
+        .map_err(|e| format!("user runtime dir NUL: {e}"))?;
+    // SAFETY: valid NUL-terminated path; gid u32::MAX == (gid_t)-1 = unchanged.
+    if unsafe { libc::chown(c_user.as_ptr(), uid, u32::MAX) } != 0 {
+        return Err(format!("chown {}: {}", user_dir.display(), std::io::Error::last_os_error()));
+    }
+    std::fs::set_permissions(&user_dir, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| format!("chmod {}: {e}", user_dir.display()))?;
     let meta = std::fs::symlink_metadata(&dir)
         .map_err(|e| format!("stat runtime dir {}: {e}", dir.display()))?;
     if meta.file_type().is_symlink() || !meta.is_dir() {
