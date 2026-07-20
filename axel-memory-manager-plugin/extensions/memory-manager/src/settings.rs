@@ -47,6 +47,45 @@ pub struct Settings {
     pub gliner_model: GlinerModelVariant,
     /// "off" | "on_complete" | "on_session_end" — when to run enrichment.
     pub enrichment_trigger: EnrichmentTrigger,
+    /// "off" | "on" — inject before_message memory recall (T36: OFF by
+    /// default; explicit opt-in only).
+    pub auto_recall: Toggle,
+    /// "off" | "on" — inject boot context at session start (T36: OFF by
+    /// default; explicit opt-in only).
+    pub boot_injection: Toggle,
+    /// "off" | "on" — allow the local embedding model to be used (T35:
+    /// OFF by default; even when on, the model is never downloaded
+    /// implicitly — only used if already cached).
+    pub embeddings: Toggle,
+    /// Trusted project root written by the host-owned config store (or the
+    /// SYNAPS_PROJECT_ROOT env var from a newer host). Empty = no trusted
+    /// project scope: memory tools fail closed.
+    pub project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Toggle {
+    Off,
+    On,
+}
+
+impl Toggle {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::On => "on",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "off" => Some(Self::Off),
+            "on" => Some(Self::On),
+            _ => None,
+        }
+    }
+    pub fn is_on(self) -> bool {
+        matches!(self, Self::On)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,6 +165,10 @@ impl Default for Settings {
             gliner_enabled: GlinerEnabled::On,
             gliner_model: GlinerModelVariant::Small,
             enrichment_trigger: EnrichmentTrigger::OnComplete,
+            auto_recall: Toggle::Off,
+            boot_injection: Toggle::Off,
+            embeddings: Toggle::Off,
+            project_root: None,
         }
     }
 }
@@ -249,6 +292,35 @@ impl Settings {
                         self.enrichment_trigger.as_str()
                     ),
                 },
+                "auto_recall" => match Toggle::parse(value) {
+                    Some(v) => self.auto_recall = v,
+                    None => eprintln!(
+                        "axel: WARN auto_recall={value:?} not in [off,on]; keeping {}",
+                        self.auto_recall.as_str()
+                    ),
+                },
+                "boot_injection" => match Toggle::parse(value) {
+                    Some(v) => self.boot_injection = v,
+                    None => eprintln!(
+                        "axel: WARN boot_injection={value:?} not in [off,on]; keeping {}",
+                        self.boot_injection.as_str()
+                    ),
+                },
+                "embeddings" => match Toggle::parse(value) {
+                    Some(v) => self.embeddings = v,
+                    None => eprintln!(
+                        "axel: WARN embeddings={value:?} not in [off,on]; keeping {}",
+                        self.embeddings.as_str()
+                    ),
+                },
+                "project_root" => {
+                    let trimmed = value.trim();
+                    self.project_root = if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    };
+                }
                 _ => {
                     // Unknown keys are tolerated (forward-compat with future
                     // settings written by a newer host). Log at debug verbosity.

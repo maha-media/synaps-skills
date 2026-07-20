@@ -1,18 +1,18 @@
 //! Integration tests that drive the compiled `memory-manager` binary over its
-//! JSON-RPC stdio wire protocol.
+//! real JSON-RPC stdio wire protocol (LSP-style Content-Length framing).
 //!
-//! Tests use a temp-dir brain so they never touch the real `~/.config/axel/axel.r8`.
+//! T32–T36 battery: exact capability-schema matching against the manifest's
+//! passive declarations, first-turn "no memory body" guarantee, no-network /
+//! no-model-download default, memory tool round-trips, cross-project
+//! fail-closed, secret sentinels, legacy `.r8` migration, kill-9
+//! crash/reopen durability, and result bounds.
 //!
-//! Sub-test (b) — `before_message_returns_inject` — exercises `contextual_recall`,
-//! which loads the ONNX embedding model on first call (~86 MB).  Because the
-//! models are cached in `~/.cache/velocirag/` after the first run, this is fast
-//! on a development machine but would add ~1 min on a fresh CI runner with no
-//! cache.  The test is therefore marked `#[ignore]` so that `cargo test` skips
-//! it by default and CI can opt-in with `cargo test -- --ignored`.
-//! Sub-test (a) (`on_message_complete_writes_memory`) does NOT need embeddings
-//! and is the hard requirement for Phase 1.
+//! Tests use a temp-dir brain so they never touch the real
+//! `~/.config/axel/axel.r8`, and a temp XDG_CACHE_HOME so they can assert no
+//! model download happens.
 
 use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use serde_json::{json, Value};
@@ -29,8 +29,7 @@ fn frame(value: &Value) -> Vec<u8> {
     out
 }
 
-/// Consume one Content-Length-framed JSON-RPC response (mirrors `read_frame` in
-/// src/main.rs).
+/// Consume one Content-Length-framed JSON-RPC message.
 fn read_frame(reader: &mut impl BufRead) -> Value {
     let mut content_length: Option<usize> = None;
     loop {
@@ -52,194 +51,538 @@ fn read_frame(reader: &mut impl BufRead) -> Value {
     serde_json::from_slice(&body).expect("parse JSON response")
 }
 
-/// Read frames until we see a JSON-RPC *response* (one with `result` or
-/// `error`, not `method`). Plugin-emitted requests like the post-initialize
-/// `config.subscribe` are skipped.
+/// Read frames until we see a JSON-RPC *response* (`result`/`error`, no
+/// `method`). Plugin-originated requests (config.subscribe) are skipped.
 fn read_response(reader: &mut impl BufRead) -> Value {
     loop {
         let frame = read_frame(reader);
         if frame.get("method").is_some() {
-            // Plugin-originated request (e.g. config.subscribe). Ignore.
             continue;
         }
         return frame;
     }
 }
 
-// ── binary path ───────────────────────────────────────────────────────────────
-
 fn bin_path() -> String {
-    // CARGO_BIN_EXE_memory-manager is set by cargo when running integration tests.
     env!("CARGO_BIN_EXE_memory-manager").to_string()
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── harness ───────────────────────────────────────────────────────────────────
 
-/// Spawn the binary, send `initialize`, drain its response, and return the
-/// process handles plus the reader.
-fn spawn_and_init(
-    brain_path: &std::path::Path,
-) -> (
-    std::process::ChildStdin,
-    BufReader<std::process::ChildStdout>,
-    std::process::Child,
-) {
-    let mut child = Command::new(bin_path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .env("AXEL_BRAIN", brain_path)
-        .spawn()
-        .expect("spawn memory-manager binary");
-
-    let mut stdin = child.stdin.take().expect("stdin");
-    let stdout = child.stdout.take().expect("stdout");
-    let mut reader = BufReader::new(stdout);
-
-    stdin
-        .write_all(&frame(&json!({
-            "jsonrpc": "2.0",
-            "id": 0,
-            "method": "initialize",
-            "params": {}
-        })))
-        .expect("write initialize");
-    stdin.flush().expect("flush");
-
-    let resp = read_response(&mut reader);
-    assert_eq!(resp["result"]["name"], "memory-manager", "bad initialize response: {resp}");
-
-    (stdin, reader, child)
+struct Ext {
+    stdin: std::process::ChildStdin,
+    reader: BufReader<std::process::ChildStdout>,
+    child: std::process::Child,
+    next_id: u64,
 }
 
-// ── sub-test (a): on_message_complete writes a memory row ────────────────────
-
-/// Verify that a long-enough `on_message_complete` message (≥ 80 chars) is
-/// persisted to the SQLite brain.  This does NOT require the ONNX embedding
-/// model and must always pass.
-#[test]
-fn on_message_complete_writes_memory() {
-    let tmp = TempDir::new().expect("temp dir");
-    let brain_path = tmp.path().join("test.r8");
-
-    let (mut stdin, mut reader, mut child) = spawn_and_init(&brain_path);
-
-    // Send on_message_complete with a message ≥ min_consolidate_len (80 chars).
-    let msg = "Rust's ownership system ensures memory safety without a garbage \
-               collector by enforcing borrow rules at compile time.";
-    assert!(msg.len() >= 80, "message must be ≥ 80 chars for this test to be meaningful");
-
-    stdin
-        .write_all(&frame(&json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "hook.handle",
-            "params": {
-                "kind": "on_message_complete",
-                "message": msg,
-                "data": null
+impl Ext {
+    /// Spawn with an isolated brain, cache dir, and (optionally) a trusted
+    /// project root. Does NOT send initialize.
+    fn spawn(brain: &Path, cache: &Path, project_root: Option<&Path>) -> Self {
+        let mut cmd = Command::new(bin_path());
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .env("AXEL_BRAIN", brain)
+            .env("XDG_CACHE_HOME", cache)
+            // Isolate from any real user settings file.
+            .env("AXEL_SETTINGS_PATH", brain.with_extension("settings"));
+        cmd.env_remove("SYNAPS_PROJECT_ROOT");
+        match project_root {
+            Some(p) => {
+                cmd.env("AXEL_PROJECT_ROOT", p);
             }
-        })))
-        .expect("write hook frame");
-    stdin.flush().expect("flush");
+            None => {
+                cmd.env_remove("AXEL_PROJECT_ROOT");
+            }
+        }
+        let mut child = cmd.spawn().expect("spawn memory-manager binary");
+        let stdin = child.stdin.take().expect("stdin");
+        let stdout = child.stdout.take().expect("stdout");
+        Ext {
+            stdin,
+            reader: BufReader::new(stdout),
+            child,
+            next_id: 0,
+        }
+    }
 
-    let resp = read_response(&mut reader);
-    assert_eq!(resp["result"]["action"], "continue", "unexpected hook result: {resp}");
+    fn request(&mut self, method: &str, params: Value) -> Value {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.stdin
+            .write_all(&frame(&json!({
+                "jsonrpc": "2.0", "id": id, "method": method, "params": params
+            })))
+            .expect("write frame");
+        self.stdin.flush().expect("flush");
+        read_response(&mut self.reader)
+    }
 
-    // Graceful shutdown so the brain flushes WAL to the main .r8 file.
-    stdin
-        .write_all(&frame(&json!({
-            "jsonrpc": "2.0",
-            "id": 99,
-            "method": "shutdown",
-            "params": {}
-        })))
-        .expect("write shutdown");
-    stdin.flush().expect("flush");
-    child.wait().expect("wait for shutdown");
+    fn initialize(&mut self) -> Value {
+        let resp = self.request("initialize", json!({}));
+        assert_eq!(resp["result"]["name"], "memory-manager", "bad initialize: {resp}");
+        resp
+    }
 
-    // Open the SQLite file and assert at least one memory row was written.
-    let db = rusqlite::Connection::open(&brain_path)
-        .expect("open brain SQLite");
-    let count: i64 = db
-        .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
-        .expect("SELECT COUNT(*) FROM memories");
-    assert!(count > 0, "expected at least 1 memory row; got {count}");
+    fn tool(&mut self, name: &str, input: Value) -> Value {
+        self.request("tool.call", json!({ "name": name, "input": input }))
+    }
+
+    fn shutdown(mut self) {
+        let _ = self.request("shutdown", json!({}));
+        let _ = self.child.wait();
+    }
 }
 
-// ── sub-test (b): before_message returns inject after seeding a memory ────────
-//
-// IGNORED by default because `contextual_recall` loads the ONNX embedding model
-// (~86 MB) on first use.  On a developer machine with a warm `~/.cache/velocirag/`
-// cache this is fast (~0.5 s).  On a fresh CI runner it may take several minutes
-// to download.  Run manually with:
-//
-//   cargo test --test integration_wire -- --ignored --nocapture \
-//       --manifest-path axel-memory-manager-plugin/extensions/memory-manager/Cargo.toml
-//
-// If the env var AXEL_BRAIN_SKIP_EMBED_TEST=1 is set, the test is still ignored
-// (the #[ignore] attribute already handles that).
+fn long_content(tag: &str) -> String {
+    format!(
+        "{tag}: this memory body is deliberately padded so it satisfies the \
+         fifty character axel content validation minimum with room to spare."
+    )
+}
+
+// ── initialize contract ───────────────────────────────────────────────────────
+
+/// The initialize response's capabilities.tools must match the manifest's
+/// passive extension.tools declarations byte-for-byte (JSON-structurally),
+/// and the first response must carry no stored memory content.
+#[test]
+fn initialize_capabilities_match_manifest_and_carry_no_memory_bodies() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+
+    // Seed a brain that already contains a memory with a sentinel body.
+    let sentinel = "FIRST-TURN-SENTINEL-0f9e8d";
+    {
+        let mut ext = Ext::spawn(&tmp.path().join("b.r8"), cache.path(), Some(project.path()));
+        let init = ext.initialize();
+        let key = store_and_get_key(&mut ext, &long_content(sentinel));
+        assert!(key.starts_with("proj_"));
+        drop(init);
+        ext.shutdown();
+    }
+
+    // Fresh process over the same brain: initialize must NOT contain the body.
+    let mut ext = Ext::spawn(&tmp.path().join("b.r8"), cache.path(), Some(project.path()));
+    let init = ext.initialize();
+    let raw = serde_json::to_string(&init).unwrap();
+    assert!(
+        !raw.contains(sentinel),
+        "initialize response must not carry stored memory bodies"
+    );
+
+    // Exact schema match with the manifest passive declarations.
+    let manifest_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../.synaps-plugin/plugin.json");
+    let manifest: Value =
+        serde_json::from_str(&std::fs::read_to_string(manifest_path).unwrap()).unwrap();
+    assert_eq!(
+        manifest.pointer("/extension/tools").expect("manifest extension.tools"),
+        init.pointer("/result/capabilities/tools").expect("live capabilities.tools"),
+        "manifest passive tool declarations must equal live initialize schemas"
+    );
+    // Manifest must request tools.register and declare deferred activation.
+    let perms = manifest.pointer("/extension/permissions").unwrap().as_array().unwrap();
+    assert!(perms.iter().any(|p| p == "tools.register"));
+    assert_eq!(manifest.pointer("/extension/activation").unwrap(), "deferred");
+    ext.shutdown();
+}
+
+/// Default configuration must not download or even initialise any model:
+/// after initialize + store + search, the temp cache dir has no model dirs.
+#[test]
+fn no_network_no_model_download_by_default() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    let mut ext = Ext::spawn(&tmp.path().join("b.r8"), cache.path(), Some(project.path()));
+    let t0 = std::time::Instant::now();
+    ext.initialize();
+    assert!(
+        t0.elapsed() < std::time::Duration::from_secs(30),
+        "initialize must not block on model download (finished in {:?})",
+        t0.elapsed()
+    );
+    let _ = store_and_get_key(&mut ext, &long_content("offline"));
+    let resp = ext.tool("memory_search", json!({ "query": "offline" }));
+    assert_eq!(resp["result"]["count"], 1, "{resp}");
+    ext.shutdown();
+
+    for forbidden in ["velocirag", "axel"] {
+        let dir = cache.path().join(forbidden);
+        assert!(
+            !dir.exists(),
+            "default run must not create model/cache dir {dir:?}"
+        );
+    }
+}
+
+// ── tool round-trips ──────────────────────────────────────────────────────────
+
+/// Store requires explicit project confirmation; the error tells the caller
+/// the canonical key (derived from the trusted root, never from the model).
+fn store_and_get_key(ext: &mut Ext, content: &str) -> String {
+    // First store without confirmation → error carrying the canonical key.
+    let err = ext.tool("memory_store", json!({ "content": content }));
+    let msg = err["error"]["message"].as_str().expect("confirmation error");
+    let key = msg
+        .split("proj_")
+        .nth(1)
+        .map(|s| format!("proj_{}", &s[..16]))
+        .expect("error must contain the canonical project key");
+    let resp = ext.tool("memory_store", json!({ "content": content, "project": key }));
+    assert_eq!(resp["result"]["stored"], true, "{resp}");
+    key
+}
 
 #[test]
-#[ignore = "requires ONNX embedding model; run manually with --ignored after prewarm"]
-fn before_message_returns_inject() {
-    let tmp = TempDir::new().expect("temp dir");
-    let brain_path = tmp.path().join("test.r8");
+fn store_search_fetch_forget_roundtrip() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    let mut ext = Ext::spawn(&tmp.path().join("b.r8"), cache.path(), Some(project.path()));
+    ext.initialize();
 
-    // Step 1: plant a memory via on_message_complete.
-    let (mut stdin, mut reader, mut child) = spawn_and_init(&brain_path);
+    let key = store_and_get_key(&mut ext, &long_content("roundtrip alpha needle"));
 
-    let msg = "Rust's ownership system ensures memory safety without a garbage \
-               collector by enforcing borrow rules at compile time.";
+    // Search: banner + bounded descriptor with stable id.
+    let resp = ext.tool("memory_search", json!({ "query": "needle", "project": key }));
+    let result = &resp["result"];
+    assert!(result["banner"].as_str().unwrap().to_lowercase().contains("lower-authority"));
+    assert_eq!(result["count"], 1);
+    let id = result["results"][0]["id"].as_str().unwrap().to_string();
+    assert!(id.starts_with("mem_"));
+    assert_eq!(result["results"][0]["provenance"], "synaps:memory_store");
 
-    stdin
-        .write_all(&frame(&json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "hook.handle",
-            "params": {
-                "kind": "on_message_complete",
-                "message": msg,
-                "data": null
-            }
-        })))
-        .expect("write on_message_complete");
-    stdin.flush().expect("flush");
-    let _ = read_response(&mut reader); // discard continue
+    // Fetch by exact id.
+    let resp = ext.tool("memory_fetch", json!({ "id": id }));
+    assert_eq!(resp["result"]["found"], true);
+    assert!(resp["result"]["body"].as_str().unwrap().contains("roundtrip alpha needle"));
+    assert_eq!(resp["result"]["signature_verified"], true);
 
-    // Step 2: send before_message and expect inject.
-    stdin
-        .write_all(&frame(&json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "hook.handle",
-            "params": {
-                "kind": "before_message",
-                "message": "Tell me about Rust's ownership model"
-            }
-        })))
-        .expect("write before_message");
-    stdin.flush().expect("flush");
-    let resp = read_response(&mut reader);
+    // Forget: tombstone + excluded from subsequent search/fetch.
+    let resp = ext.tool("memory_forget", json!({ "id": id }));
+    assert_eq!(resp["result"]["forgotten"], true);
+    let resp = ext.tool("memory_search", json!({ "query": "needle" }));
+    assert_eq!(resp["result"]["count"], 0, "forgotten memory must not re-surface");
+    let resp = ext.tool("memory_fetch", json!({ "id": id }));
+    assert_eq!(resp["result"]["found"], false);
+    ext.shutdown();
+}
 
-    // Shutdown cleanly.
-    stdin
-        .write_all(&frame(&json!({
-            "jsonrpc": "2.0",
-            "id": 99,
-            "method": "shutdown",
-            "params": {}
-        })))
-        .expect("write shutdown");
-    stdin.flush().ok();
-    child.wait().ok();
+/// Without any trusted project source, every tool fails closed with an
+/// explicit host-surfaced error.
+#[test]
+fn tools_fail_closed_without_trusted_project_scope() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let mut ext = Ext::spawn(&tmp.path().join("b.r8"), cache.path(), None);
+    ext.initialize();
+    for (tool, input) in [
+        ("memory_search", json!({ "query": "x" })),
+        ("memory_fetch", json!({ "id": "mem_x" })),
+        ("memory_store", json!({ "content": long_content("x"), "project": "proj_x" })),
+        ("memory_forget", json!({ "id": "mem_x" })),
+    ] {
+        let resp = ext.tool(tool, input);
+        let msg = resp["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            msg.contains("no trusted project scope"),
+            "{tool} must fail closed; got {resp}"
+        );
+    }
+    ext.shutdown();
+}
 
-    let action = resp["result"]["action"]
-        .as_str()
-        .unwrap_or("missing");
-    assert_eq!(action, "inject",
-        "expected action:inject but got {action}; full response: {resp}");
+/// Memories stored under project A are invisible to a session scoped to
+/// project B, over the same .r8 file. Model-supplied keys can't cross over.
+#[test]
+fn cross_project_isolation_is_fail_closed() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let brain = tmp.path().join("b.r8");
+    let proj_a = TempDir::new().unwrap();
+    let proj_b = TempDir::new().unwrap();
 
-    let content = resp["result"]["content"].as_str().unwrap_or("");
-    assert!(!content.is_empty(), "inject content must be non-empty; response: {resp}");
+    let (key_a, id_a) = {
+        let mut ext = Ext::spawn(&brain, cache.path(), Some(proj_a.path()));
+        ext.initialize();
+        let key = store_and_get_key(&mut ext, &long_content("alpha isolation"));
+        let resp = ext.tool("memory_search", json!({ "query": "isolation" }));
+        let id = resp["result"]["results"][0]["id"].as_str().unwrap().to_string();
+        ext.shutdown();
+        (key, id)
+    };
+
+    let mut ext = Ext::spawn(&brain, cache.path(), Some(proj_b.path()));
+    ext.initialize();
+    // Search in B finds nothing.
+    let resp = ext.tool("memory_search", json!({ "query": "isolation" }));
+    assert_eq!(resp["result"]["count"], 0, "project B must not see project A rows");
+    // Fetch of A's id from B scope: not found.
+    let resp = ext.tool("memory_fetch", json!({ "id": id_a }));
+    assert_eq!(resp["result"]["found"], false);
+    // Supplying A's key from B's session is a hard error (model can't widen).
+    let resp = ext.tool("memory_search", json!({ "query": "isolation", "project": key_a }));
+    assert!(
+        resp["error"]["message"].as_str().unwrap().contains("project mismatch"),
+        "{resp}"
+    );
+    // Forget of A's id from B: refused (fail closed).
+    let resp = ext.tool("memory_forget", json!({ "id": id_a }));
+    assert_eq!(resp["result"]["forgotten"], false);
+    ext.shutdown();
+}
+
+/// Secret bodies never leak through search or fetch (sentinel check on the
+/// raw wire JSON), and never_persist bodies never reach the .r8 file.
+#[test]
+fn secret_and_never_persist_sentinels_never_leak() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    let brain = tmp.path().join("b.r8");
+    let mut ext = Ext::spawn(&brain, cache.path(), Some(project.path()));
+    ext.initialize();
+
+    let key = store_and_get_key(&mut ext, &long_content("prime the key"));
+
+    // Secret memory.
+    let secret_sentinel = "WIRE-SECRET-SENTINEL-4b5a69";
+    let resp = ext.tool(
+        "memory_store",
+        json!({
+            "content": long_content(secret_sentinel),
+            "title": "Secret credential note",
+            "sensitivity": "secret",
+            "project": key,
+        }),
+    );
+    assert_eq!(resp["result"]["stored"], true, "{resp}");
+
+    // never_persist is refused outright.
+    let np_sentinel = "WIRE-NEVERPERSIST-SENTINEL-77aa";
+    let resp = ext.tool(
+        "memory_store",
+        json!({
+            "content": long_content(np_sentinel),
+            "retention": "never_persist",
+            "project": key,
+        }),
+    );
+    assert!(resp["error"]["message"].as_str().unwrap().contains("never_persist"), "{resp}");
+
+    // Search + fetch: secret body must not appear anywhere on the wire.
+    let search = ext.tool("memory_search", json!({ "query": "Secret credential" }));
+    let raw = serde_json::to_string(&search).unwrap();
+    assert!(!raw.contains(secret_sentinel), "secret body leaked via search: {raw}");
+    let id = search["result"]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["title"].as_str().unwrap().contains("Secret"))
+        .and_then(|r| r["id"].as_str())
+        .expect("secret descriptor listed")
+        .to_string();
+    let fetch = ext.tool("memory_fetch", json!({ "id": id }));
+    let raw = serde_json::to_string(&fetch).unwrap();
+    assert!(!raw.contains(secret_sentinel), "secret body leaked via fetch: {raw}");
+    assert!(fetch["result"]["body"].is_null());
+    assert!(fetch["result"]["body_withheld_reason"].as_str().unwrap().contains("secret"));
+    ext.shutdown();
+
+    // File-level: the never_persist sentinel must not be in the .r8 bytes.
+    let bytes = std::fs::read(&brain).unwrap();
+    assert!(
+        !bytes.windows(np_sentinel.len()).any(|w| w == np_sentinel.as_bytes()),
+        "never_persist body reached the .r8 file"
+    );
+}
+
+/// Result counts respect the requested limit and the hard cap.
+#[test]
+fn search_results_are_bounded_by_limit_and_cap() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    let mut ext = Ext::spawn(&tmp.path().join("b.r8"), cache.path(), Some(project.path()));
+    ext.initialize();
+    let key = store_and_get_key(&mut ext, &long_content("bounded corpus entry 0"));
+    for i in 1..30 {
+        let resp = ext.tool(
+            "memory_store",
+            json!({ "content": long_content(&format!("bounded corpus entry {i}")), "project": key }),
+        );
+        assert_eq!(resp["result"]["stored"], true, "{resp}");
+    }
+    let resp = ext.tool("memory_search", json!({ "query": "bounded corpus", "limit": 5 }));
+    assert_eq!(resp["result"]["count"], 5);
+    // Oversized limit clamps to the hard cap (25).
+    let resp = ext.tool("memory_search", json!({ "query": "bounded corpus", "limit": 10000 }));
+    assert!(resp["result"]["count"].as_u64().unwrap() <= 25);
+    ext.shutdown();
+}
+
+/// Hooks are quiet by default (T36): before_message and on_session_start
+/// must return `continue` with no injected content out of the box.
+#[test]
+fn boot_and_recall_injection_are_off_by_default() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    let mut ext = Ext::spawn(&tmp.path().join("b.r8"), cache.path(), Some(project.path()));
+    ext.initialize();
+    let _ = store_and_get_key(&mut ext, &long_content("hook silence needle"));
+
+    for kind in ["on_session_start", "before_message"] {
+        let resp = ext.request(
+            "hook.handle",
+            json!({ "kind": kind, "message": "tell me about the hook silence needle", "data": null }),
+        );
+        assert_eq!(
+            resp["result"]["action"], "continue",
+            "{kind} must not inject by default: {resp}"
+        );
+        assert!(resp["result"].get("content").is_none());
+    }
+    ext.shutdown();
+}
+
+/// With auto_recall=on, before_message injects a bounded, project-scoped,
+/// lower-authority block (offline lexical — no model needed).
+#[test]
+fn opt_in_recall_injects_bounded_lower_authority_block() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    let brain = tmp.path().join("b.r8");
+    let settings_path = brain.with_extension("settings");
+    std::fs::write(&settings_path, "auto_recall = on\n").unwrap();
+
+    let mut ext = Ext::spawn(&brain, cache.path(), Some(project.path()));
+    ext.initialize();
+    let _ = store_and_get_key(&mut ext, &long_content("optin recall needle"));
+
+    let resp = ext.request(
+        "hook.handle",
+        json!({ "kind": "before_message", "message": "what do we know about the optin recall needle?", "data": null }),
+    );
+    assert_eq!(resp["result"]["action"], "inject", "{resp}");
+    let content = resp["result"]["content"].as_str().unwrap();
+    assert!(content.contains("lower authority"), "{content}");
+    assert!(content.contains("proj_"), "recall block must state the project scope");
+    ext.shutdown();
+}
+
+// ── durability ────────────────────────────────────────────────────────────────
+
+/// kill -9 right after a store: the memory must survive reopen (crash-safe
+/// transactional append).
+#[test]
+fn kill_nine_after_store_survives_reopen() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    let brain = tmp.path().join("b.r8");
+
+    let mut ext = Ext::spawn(&brain, cache.path(), Some(project.path()));
+    ext.initialize();
+    let _ = store_and_get_key(&mut ext, &long_content("crash durability needle"));
+    // Hard kill — no shutdown, no flush.
+    ext.child.kill().expect("kill -9");
+    let _ = ext.child.wait();
+
+    let mut ext = Ext::spawn(&brain, cache.path(), Some(project.path()));
+    ext.initialize();
+    let resp = ext.tool("memory_search", json!({ "query": "durability needle" }));
+    assert_eq!(resp["result"]["count"], 1, "stored memory lost after kill -9: {resp}");
+    ext.shutdown();
+}
+
+/// A legacy .r8 (created without the project-memory schema) opens, migrates,
+/// and its legacy rows never leak into the trusted project scope.
+#[test]
+fn legacy_r8_migrates_and_stays_out_of_scope() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    let brain = tmp.path().join("legacy.r8");
+
+    // Build a legacy-shaped brain directly with SQLite (pre-migration column
+    // set, as created by older axel releases).
+    {
+        let conn = rusqlite::Connection::open(&brain).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE brain_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE memories (
+                id TEXT PRIMARY KEY, category TEXT NOT NULL, topic TEXT NOT NULL,
+                title TEXT NOT NULL, abstract_text TEXT, content TEXT NOT NULL,
+                confidence TEXT DEFAULT 'medium', importance REAL DEFAULT 0.5,
+                source_sessions TEXT DEFAULT '[]', tags TEXT DEFAULT '[]',
+                related_topics TEXT DEFAULT '[]', created TEXT NOT NULL,
+                updated TEXT, trust_level REAL DEFAULT 1.0, signature TEXT
+            );
+            CREATE TABLE staged_memories (
+                id TEXT PRIMARY KEY, category TEXT NOT NULL, topic TEXT NOT NULL,
+                title TEXT NOT NULL, abstract_text TEXT, content TEXT NOT NULL,
+                confidence TEXT DEFAULT 'medium', importance REAL DEFAULT 0.5,
+                source_sessions TEXT DEFAULT '[]', tags TEXT DEFAULT '[]',
+                related_topics TEXT DEFAULT '[]', created TEXT NOT NULL,
+                updated TEXT, trust_level REAL DEFAULT 1.0, signature TEXT,
+                review_status TEXT DEFAULT 'pending', reviewer_notes TEXT,
+                staged_at TEXT NOT NULL
+            );
+            CREATE TABLE memory_access (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id TEXT NOT NULL,
+                access_type TEXT NOT NULL, timestamp TEXT NOT NULL
+            );
+            CREATE TABLE events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, event_type TEXT NOT NULL,
+                target_id TEXT, query TEXT, metadata TEXT, timestamp TEXT NOT NULL
+            );
+            CREATE TABLE context_data (
+                key TEXT NOT NULL, layer TEXT NOT NULL, value TEXT NOT NULL,
+                updated TEXT NOT NULL, PRIMARY KEY (key, layer)
+            );
+            CREATE TABLE sessions (
+                session_id TEXT PRIMARY KEY, processed_at TEXT NOT NULL,
+                memory_count INTEGER DEFAULT 0
+            );
+            CREATE TABLE patterns (
+                id TEXT PRIMARY KEY, pattern_type TEXT NOT NULL,
+                description TEXT, confidence REAL DEFAULT 0.5,
+                occurrences INTEGER DEFAULT 1, first_seen TEXT, last_seen TEXT
+            );
+            INSERT INTO memories (id, category, topic, title, content, created)
+            VALUES ('mem_legacy01', 'events', 'legacy', 'Legacy row title',
+                    'legacy content body from before project scoping existed',
+                    '2024-01-01T00:00:00+00:00');
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO brain_meta (key, value) VALUES ('meta', ?1)",
+            [format!(
+                r#"{{"schema_version":1,"embedder_model":"all-MiniLM-L6-v2","embedding_dim":384,"agent_name":"legacy","created":"2024-01-01T00:00:00+00:00","last_modified":"2024-01-01T00:00:00+00:00","document_count":0,"memory_count":1,"signing_key":"{}"}}"#,
+                "00".repeat(32)
+            )],
+        )
+        .unwrap();
+    }
+
+    let mut ext = Ext::spawn(&brain, cache.path(), Some(project.path()));
+    ext.initialize();
+    // Legacy row is invisible in the project scope.
+    let resp = ext.tool("memory_search", json!({ "query": "legacy" }));
+    assert_eq!(resp["result"]["count"], 0, "legacy rows must not enter project scope: {resp}");
+    let resp = ext.tool("memory_fetch", json!({ "id": "mem_legacy01" }));
+    assert_eq!(resp["result"]["found"], false);
+    // And new scoped writes work on the migrated file.
+    let _ = store_and_get_key(&mut ext, &long_content("post migration write"));
+    let resp = ext.tool("memory_search", json!({ "query": "migration" }));
+    assert_eq!(resp["result"]["count"], 1);
+    ext.shutdown();
 }

@@ -83,6 +83,9 @@ fn on_message_complete_enriches_via_remember_full() {
         .stderr(Stdio::inherit())
         .env("AXEL_BRAIN", &brain_path)
         .env("AXEL_SETTINGS_PATH", &cfg_path)
+        // Auto-capture requires a trusted project scope (T33); the temp dir
+        // stands in for the host-provided project root.
+        .env("AXEL_PROJECT_ROOT", tmp.path())
         .spawn()
         .expect("spawn");
 
@@ -141,6 +144,18 @@ fn on_message_complete_enriches_via_remember_full() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .expect("SELECT memories row");
+
+    // T33: the captured row must be project-scoped with provenance.
+    let (project_key, provenance): (Option<String>, String) = db
+        .query_row(
+            "SELECT project_key, provenance FROM memories LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("SELECT scope columns");
+    let pk = project_key.expect("auto-captured memory must carry a project_key");
+    assert!(pk.starts_with("proj_"), "bad project key: {pk}");
+    assert_eq!(provenance, "synaps:auto_capture");
 
     eprintln!("test: row category={category} tags={tags_json} title={title} importance={importance}");
 
