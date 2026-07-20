@@ -58,6 +58,23 @@ git push origin axel-memory-manager-v0.1.0
   `$SYNAPS_DATA_DIR/axel.r8` (first match wins).
 - Embedding cache: `~/.cache/velocirag/models/` and `~/.cache/axel/embeddings/`.
 
+### Building against a local axel checkout
+
+The extension pins axel to commit `562e6508f5de…` (branch
+`feat/project-memory-t32-t36`). Until that commit is pushed to
+`github.com/maha-media/axel`, build with a local patch:
+
+```bash
+AX=/path/to/axel-worktree
+cargo build --release \
+  --config "patch.\"https://github.com/maha-media/axel\".axel.path=\"$AX/crates/axel\"" \
+  --config "patch.\"https://github.com/maha-media/axel\".axel-memkoshi.path=\"$AX/crates/memkoshi\"" \
+  --config "patch.\"https://github.com/maha-media/axel\".velocirag.path=\"$AX/crates/velocirag\""
+```
+
+Once the axel branch lands on the remote, a plain `cargo build --release`
+resolves the pinned rev directly.
+
 ## How it works
 
 | Hook | Behaviour |
