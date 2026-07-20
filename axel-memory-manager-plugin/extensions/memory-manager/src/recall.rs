@@ -266,9 +266,9 @@ fn map_rank_reasons(reasons: &[RankReason]) -> Vec<RankReasonWire> {
     let mut out: Vec<RankReasonWire> = Vec::with_capacity(2);
     for reason in reasons {
         let mapped = match reason {
-            RankReason::LexicalMatch | RankReason::ExactTagMatch => {
-                Some(RankReasonWire::ExactTopic)
-            }
+            RankReason::LexicalMatch
+            | RankReason::SemanticMatch
+            | RankReason::ExactTagMatch => Some(RankReasonWire::ExactTopic),
             RankReason::RecentSession | RankReason::RecencyWindow => Some(RankReasonWire::Recency),
             RankReason::ExplicitPreference
             | RankReason::ExplicitDecision
