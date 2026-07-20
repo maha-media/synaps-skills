@@ -545,18 +545,23 @@ fn prepare_workspace_dir(dir: &Path, uid: u32) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(dir).map_err(|e| format!("create_dir_all: {e}"))?;
     // The runtime umask is hardened (077), so intermediate dirs materialized by
-    // `create_dir_all` above (e.g. `instances/<id>/work`) come out 0700 root —
-    // untraversable by the session user even though the leaf below is fixed up.
-    // Explicitly normalize the immediate parent to 0711 (traverse-only): no
-    // listing, no reads for non-root, while the enclosing `instances/<id>` dir
-    // (2770, inst_<id> group) remains the actual tenant-isolation gate.
-    // Setgid-marked parents are deliberate isolation dirs (the instance root
-    // itself) — never downgrade those.
+    // `create_dir_all` above (e.g. `instances/<id>/work`) come out with NO
+    // group/other access — and they inherit setgid + the inst_<id> group from
+    // the 2770 instance root, so mode ends up 2700 root:inst_gid: untraversable
+    // by the session user even though the leaf below is fixed up. Normalize by
+    // ADDING the two execute (traverse) bits when both are absent — a minimal,
+    // idempotent delta that never downgrades an already-traversable dir (the
+    // deliberate 2770 instance-root gate has group rwx and is left untouched),
+    // preserves setgid, and still denies listing/reads to non-members.
     if let Some(parent) = dir.parent() {
         if let Ok(meta) = std::fs::metadata(parent) {
-            if meta.permissions().mode() & 0o2000 == 0 {
-                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o711))
-                    .map_err(|e| format!("set_permissions parent: {e}"))?;
+            let mode = meta.permissions().mode();
+            if mode & 0o0011 == 0 {
+                std::fs::set_permissions(
+                    parent,
+                    std::fs::Permissions::from_mode((mode & 0o7777) | 0o0011),
+                )
+                .map_err(|e| format!("set_permissions parent: {e}"))?;
             }
         }
     }
