@@ -52,8 +52,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sessions = std::sync::Arc::new(pria_guest_agent::sessions::SessionStore::new(
         runtime.clone(),
     ));
+    // Substrate selection (bridge design T4): "aws-ecs" swaps the systemd- and
+    // fanotify-backed seams for container-native ones; any other mode keeps the
+    // local-virsh wiring byte-identical.
+    let container_mode = config.mode == "aws-ecs";
+    tracing::info!(
+        mode = %config.mode,
+        fsmon_backend = if container_mode { "noop-degraded" } else { "uds-fanotify" },
+        desktop_backend = if container_mode { "container-child" } else { "systemctl" },
+        unit_generator = if container_mode { "container-naming" } else { "systemd-file" },
+        "selected substrate backends"
+    );
     let fsmon: std::sync::Arc<dyn pria_guest_agent::fsmon::client::FsmonControl> =
-        if config.mode == "aws-ecs" {
+        if container_mode {
             // Fargate cannot grant fanotify's CAP_SYS_ADMIN. Keep the policy
             // contract alive but report explicit degraded enforcement.
             std::sync::Arc::new(pria_guest_agent::fsmon::client::NoopFsmonControl)
@@ -74,14 +85,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (desktop_backend, unit_generator): (
         Arc<dyn pria_guest_agent::desktop::kasmvnc::SystemctlBackend>,
         Arc<dyn pria_guest_agent::desktop::kasmvnc::UnitGenerator>,
-    ) = if config.mode == "aws-ecs" {
+    ) = if container_mode {
         (
             Arc::new(
                 pria_guest_agent::desktop::container::ContainerSystemctl::new(
                     config.paths.run_root.clone(),
                 ),
             ),
-            Arc::new(pria_guest_agent::desktop::kasmvnc::DefaultUnitNaming),
+            Arc::new(pria_guest_agent::desktop::container::ContainerUnitGenerator),
         )
     } else {
         (
