@@ -24,6 +24,9 @@ mod scope;
 mod settings;
 mod timer;
 mod tools;
+/// Task B1 — wire-compatible recall protocol types (no RPC dispatch until
+/// task B3).
+pub mod context;
 use gliner::GlinerSession;
 use settings::{GlinerEnabled, Settings};
 use timer::{spawn_consolidation_timer, TimerCmd};
