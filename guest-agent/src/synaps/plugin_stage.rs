@@ -89,6 +89,21 @@ pub fn stage_extensions(
             plugins_dir.display()
         ))
     })?;
+    // The hardened runtime umask (077) would leave plugins/ at 0700 root — the
+    // dropped-privilege synaps process could then neither list the staged
+    // symlinks nor resolve them. 0755: world-readable staging index; the
+    // bundles behind the symlinks live in the root-owned read-only store.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&plugins_dir, std::fs::Permissions::from_mode(0o755)).map_err(
+            |e| {
+                GuestAgentError::internal(format!(
+                    "failed to set mode on plugins dir {}: {e}",
+                    plugins_dir.display()
+                ))
+            },
+        )?;
+    }
 
     // Symlink each extension bundle.
     for ext in extensions {

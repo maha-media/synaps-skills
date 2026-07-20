@@ -139,8 +139,11 @@ pub async fn start(
         ));
     }
 
-    // Create the session directory (spec §6.4 step 2).
-    if let Err(e) = std::fs::create_dir_all(&req.session_dir) {
+    // Create the session directory (spec §6.4 step 2). Same treatment as the
+    // workspace dir: uid-owned, 2770 (inherited inst_<id> group), and a
+    // traverse-only (0711) `sessions/` intermediate — the hardened umask would
+    // otherwise leave both 0700 root and the session user locked out.
+    if let Err(e) = prepare_workspace_dir(&req.session_dir, req.uid) {
         return Err(err(
             ErrorCode::InternalError,
             &format!("failed to create session dir: {e}"),
@@ -541,6 +544,22 @@ pub fn is_abs(p: &Path) -> bool {
 fn prepare_workspace_dir(dir: &Path, uid: u32) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(dir).map_err(|e| format!("create_dir_all: {e}"))?;
+    // The runtime umask is hardened (077), so intermediate dirs materialized by
+    // `create_dir_all` above (e.g. `instances/<id>/work`) come out 0700 root —
+    // untraversable by the session user even though the leaf below is fixed up.
+    // Explicitly normalize the immediate parent to 0711 (traverse-only): no
+    // listing, no reads for non-root, while the enclosing `instances/<id>` dir
+    // (2770, inst_<id> group) remains the actual tenant-isolation gate.
+    // Setgid-marked parents are deliberate isolation dirs (the instance root
+    // itself) — never downgrade those.
+    if let Some(parent) = dir.parent() {
+        if let Ok(meta) = std::fs::metadata(parent) {
+            if meta.permissions().mode() & 0o2000 == 0 {
+                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o711))
+                    .map_err(|e| format!("set_permissions parent: {e}"))?;
+            }
+        }
+    }
     // 0o2770 — setgid + rwxrwx--- (owner + instance group only). This is what
     // actually enforces isolation: the dir's group is the inherited `inst_<id>`
     // group, group members get rwx, and there is NO "other" access.
