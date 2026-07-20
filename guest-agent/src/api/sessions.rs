@@ -264,7 +264,15 @@ pub async fn start(
     // without this the runtime crashes with "failed to save session: Permission
     // denied". Mirrors the inbox/run chown in plugin staging. plugins/ stays
     // root-owned (read-only staged) on purpose.
+    //
+    // The synaps-base DIR ITSELF must also be uid-owned (non-recursive — plugins/
+    // stays root): SYNAPS_BASE_DIR is synaps's active config dir and its rolling
+    // file appender creates synaps.log.<date> directly inside it at startup.
+    // Root-owned base ⇒ PermissionDenied ⇒ tracing-appender panic ⇒ the synaps
+    // process aborts within the 500ms smoke-check window (#212) and the session
+    // start 500s.
     if let Some(bd) = staged_base.as_deref() {
+        chown_dir_to_uid(bd, req.uid);
         chown_tree_to_uid(&bd.join("sessions"), req.uid);
     }
 
@@ -574,6 +582,18 @@ fn prepare_synaps_runtime_dir(uid: u32) -> Result<PathBuf, String> {
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
         .map_err(|e| format!("chmod runtime dir {}: {e}", dir.display()))?;
     Ok(dir)
+}
+
+/// Best-effort non-recursive chown of a single directory to `uid`, gid
+/// unchanged. Used for the synaps-base dir itself: synaps's rolling log
+/// appender writes synaps.log.<date> directly into its active config dir
+/// (SYNAPS_BASE_DIR), so the dropped-privilege process needs to own the dir —
+/// but its children (plugins/) must stay root-owned read-only staging.
+fn chown_dir_to_uid(dir: &Path, uid: u32) {
+    if let Ok(c_path) = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes()) {
+        // SAFETY: valid NUL-terminated path; gid u32::MAX == (gid_t)-1 = unchanged.
+        let _ = unsafe { libc::chown(c_path.as_ptr(), uid, u32::MAX) };
+    }
 }
 
 /// Best-effort recursive chown of `root` (dirs + files) to `uid`, gid unchanged.
