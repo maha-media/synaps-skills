@@ -143,6 +143,71 @@ fn long_content(tag: &str) -> String {
     )
 }
 
+// ── capture wire contract ─────────────────────────────────────────────────────
+
+#[test]
+fn duplicate_capture_id_stores_exactly_one_record_over_framed_rpc() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let brain = tmp.path().join("capture.r8");
+    let mut ext = Ext::spawn(&brain, cache.path(), None);
+    let params = json!({
+        "capture_id": "capture-stable-1",
+        "project_key": "proj_wire",
+        "content": long_content("CAPTURE-WIRE-SENTINEL"),
+        "source_session_id": "session-1",
+        "source_turn_id": "turn-1"
+    });
+    let first = ext.request("context_provider.capture", params.clone());
+    let second = ext.request("context_provider.capture", params);
+    assert_eq!(first["result"]["duplicate"], false, "{first}");
+    assert_eq!(second["result"]["duplicate"], true, "{second}");
+    ext.shutdown();
+
+    let conn = rusqlite::Connection::open(brain).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM memories WHERE project_key='proj_wire'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn malformed_capture_fails_closed_without_echoing_content() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let mut ext = Ext::spawn(&tmp.path().join("bad.r8"), cache.path(), None);
+    let sentinel = "PRIVATE-TURN-CONTENT-MUST-NOT-LEAK";
+    let response = ext.request(
+        "context_provider.capture",
+        json!({"capture_id":"bad", "content": sentinel}),
+    );
+    assert!(response.get("error").is_some(), "{response}");
+    assert!(!response.to_string().contains(sentinel), "{response}");
+
+    // Malformed JSON is discarded; a subsequent valid framed request proves
+    // the process failed closed without dispatching the malformed capture.
+    let bad = b"Content-Length: 1\r\n\r\n{";
+    ext.stdin.write_all(bad).unwrap();
+    ext.stdin.flush().unwrap();
+    let alive = ext.request("initialize", json!({}));
+    assert_eq!(alive["result"]["name"], "memory-manager");
+    ext.shutdown();
+}
+
+#[test]
+fn oversized_frame_fails_closed_before_body_allocation() {
+    let tmp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let mut ext = Ext::spawn(&tmp.path().join("large.r8"), cache.path(), None);
+    ext.stdin
+        .write_all(b"Content-Length: 999999999\r\n\r\n")
+        .unwrap();
+    ext.stdin.flush().unwrap();
+    drop(ext.stdin);
+    let status = ext.child.wait().unwrap();
+    assert!(status.success(), "oversized frame must close cleanly: {status}");
+}
+
 // ── initialize contract ───────────────────────────────────────────────────────
 
 /// The initialize response's capabilities.tools must match the manifest's

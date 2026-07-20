@@ -28,6 +28,8 @@ mod tools;
 pub mod context;
 /// Task B3 — `context_provider.recall` handler (bounded Axel retrieval).
 pub mod recall;
+/// Task C3 — durable, idempotent chat-turn capture.
+pub mod capture;
 use gliner::GlinerSession;
 use settings::{GlinerEnabled, Settings};
 use timer::{spawn_consolidation_timer, TimerCmd};
@@ -282,7 +284,8 @@ fn read_frame<R: BufRead>(reader: &mut R) -> io::Result<Option<Value>> {
     }
 
     let len = match content_length {
-        Some(n) => n,
+        Some(n) if n <= capture::MAX_CAPTURE_BYTES => n,
+        Some(_) => return Err(io::Error::new(io::ErrorKind::InvalidData, "frame exceeds size limit")),
         None => return Ok(Some(json!({}))), // malformed: skip
     };
 
@@ -382,6 +385,10 @@ fn dispatch(
         // against the SAME trusted derivation memory_search uses, and the
         // contribution is bounded by the request's engine-authored budget.
         "context_provider.recall" => recall::handle_recall(brain, settings, params)?,
+
+        // Host-leased terminal-turn capture (task C3). Validation and Axel
+        // persistence are bounded and diagnostics never contain turn text.
+        "context_provider.capture" => capture::handle_capture(brain, params)?,
 
         "shutdown" => json!({ "ok": true }),
 
