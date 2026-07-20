@@ -34,9 +34,11 @@ need a Rust toolchain for supported platforms. Current release assets are named:
 
 - Supported platform with a published prebuilt binary, or Rust/Cargo only for
   `./scripts/setup.sh --from-source` fallback builds.
-- An internet connection on first run — the embedding model (~86 MB
-  `model.onnx` for VolciRAG search) downloads on first use and is cached
-  under `~/.cache/velocirag/models/`.
+- **No network needed at runtime by default.** Memory search is lexical
+  (SQLite FTS5) and fully offline. The optional ~86 MB embedding model is
+  only downloaded when you explicitly run the `axel download-embeddings`
+  command AND turn the `embeddings` setting on. Nothing is fetched
+  implicitly.
 
 ### Maintainer: publishing prebuilts
 
@@ -60,11 +62,43 @@ git push origin axel-memory-manager-v0.1.0
 
 | Hook | Behaviour |
 |---|---|
-| `on_session_start`    | `boot_context()` → injects Tier-0 handoff + Tier-1 memories as a system preamble (≤700 token budget). |
-| `before_message`      | `contextual_recall(user_text, 5)` → VolciRAG search; modifies the user message with retrieved context. |
-| `on_message_complete` | `remember(text, "Events", 0.5)` → online consolidation of substantial assistant turns. |
+| `on_session_start`    | **OFF by default** (`boot_injection` setting). When on: bounded, project-scoped, lower-authority memory summary. |
+| `before_message`      | **OFF by default** (`auto_recall` setting). When on: bounded, project-scoped, lower-authority lexical recall block. |
+| `on_message_complete` | Auto-captures substantial assistant turns **into the trusted project scope** (provenance `synaps:auto_capture`). Skipped when no trusted project scope exists. |
 | `after_tool_call`     | Reserved for selective tool-output capture (currently a no-op). |
 | `on_session_end`      | `flush()` → persist the .r8. |
+
+## Memory tools (T32–T36)
+
+The extension registers four model-callable tools (declared passively in the
+manifest and identically in the live `initialize` response, so a
+deferred-activation host never has to spawn the process to advertise them):
+
+| Tool | Contract |
+|---|---|
+| `memory_search` | Project-scoped offline lexical search. Bounded descriptors + stable IDs + short snippets; hard cap 25 results; lower-authority banner + per-entry provenance. Secret bodies are never indexed or snippeted. |
+| `memory_fetch`  | Exact-ID fetch with project + sensitivity checks. Bodies are bounded; `secret` and restricted retention classes are withheld with a reason. |
+| `memory_store`  | Requires **explicit project confirmation** (`project` = the canonical key). Supports category, tags, sensitivity, retention class, and `expires_hours`. `retention=never_persist` is refused and never enters the `.r8`. |
+| `memory_forget` | Exact, project-scoped tombstone + delete. A forgotten id can never be re-inserted and never re-surfaces in search. |
+
+### Trusted project scope
+
+The **model never chooses the project.** The canonical project key
+(`proj_` + 16 hex of SHA-256 of the canonicalized root) is derived only from:
+
+1. `SYNAPS_PROJECT_ROOT` (set by the host), or
+2. `AXEL_PROJECT_ROOT` (local override), or
+3. the host-owned `project_root` plugin setting.
+
+Without any of these, every memory tool **fails closed** with an explicit
+error. A model-supplied `project` argument may only confirm the derived key.
+
+### Retention / disclosure classes
+
+`standard` (model-visible), `local_only`, `visible_after_consent`,
+`persist_never_transmit` (persisted, body withheld at the model-visibility
+boundary), `never_persist` (refused — never written). Expiry via
+`expires_hours`. Inspect counts per class with the `axel retention` command.
 
 The full multi-phase Consolidation pipeline (reindex → strengthen → reorganize
 → prune) lives upstream in the `axel` crate and isn't run per-message — it
@@ -80,6 +114,14 @@ operates over source directories and should be invoked on a schedule.
 - Crates: `axel` (brain handle), `axel-memkoshi` (memory storage), `velocirag` (4-layer RAG search)
 
 ## Status
+
+`0.2.0` — T32–T36: extension memory tools (`memory_search` / `memory_fetch`
+/ `memory_store` / `memory_forget`), trusted project scoping (fail closed),
+sensitivity + retention classes, tombstoned forget, offline-lexical default
+(no implicit model download), opt-in recall/boot injection.
+
+Requires axel with the project-memory layer (branch
+`feat/project-memory-t32-t36`, commit `562e6508f5de0cdc0bbc803b2448aeb7431a6bed`).
 
 `0.1.0` — initial release, 2026-05-03.
 

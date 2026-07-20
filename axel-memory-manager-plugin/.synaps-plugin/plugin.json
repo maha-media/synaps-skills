@@ -1,7 +1,7 @@
 {
   "name": "axel-memory-manager",
   "version": "0.2.0",
-  "description": "Axel — portable agent intelligence (search, memory, self-organizing knowledge) backed by VolciRAG, Memkoshi, and Consolidation. One .r8 file is the agent's entire brain.",
+  "description": "Axel — portable agent intelligence: project-scoped memory tools (memory_search/fetch/store/forget), offline lexical FTS, sensitivity + retention classes, one .r8 file as the agent's entire brain.",
   "author": {
     "name": "J.R. Morton",
     "url": "https://github.com/maha-media"
