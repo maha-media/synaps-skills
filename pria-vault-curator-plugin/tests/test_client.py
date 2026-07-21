@@ -32,6 +32,11 @@ class Tests(unittest.TestCase):
   self.assertEqual(c.exception.as_dict()["status"],403);self.assertNotIn("secret",str(c.exception))
   with self.assertRaises(GatewayError):PriaGatewayClient("https://x.test",opener=lambda *a,**kw:Response(b"x"*(MAX_RESPONSE_BYTES+1),True)).call("VAULT_AUDIT",{})
  @patch.dict(os.environ,{"PRIA_API_KEY":"raw"},clear=True)
+ def test_private_runtime_http_origin_is_allowed_but_public_http_is_denied(self):
+  with patch.dict(os.environ,{"PRIA_AGENT_TOOL_TOKEN":"token"},clear=True):
+   PriaGatewayClient("http://host.libvirt.internal:3080")
+   PriaGatewayClient("http://127.0.0.1:3080")
+   with self.assertRaisesRegex(ValueError,"restricted"): PriaGatewayClient("http://pria.example")
  def test_token_required(self):
   with self.assertRaises(ValueError):PriaGatewayClient("https://x.test")
  def test_subjects_and_schemas(self):
