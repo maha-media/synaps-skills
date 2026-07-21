@@ -1,0 +1,25 @@
+{
+  "name": "pria-vault-curator",
+  "version": "0.1.0",
+  "description": "Thin Synaps gateway for audited Pria vault inspection and patch workflows.",
+  "author": {"name": "Pria", "url": "https://github.com/maha-media"},
+  "repository": "https://github.com/maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "productivity",
+  "compatibility": {"synaps": ">=0.1.0", "extension_protocol": "2"},
+  "extension": {
+    "protocol_version": 2,
+    "runtime": "process",
+    "command": "python3",
+    "args": ["extensions/main.py"],
+    "permissions": ["tools.register"],
+    "config": [
+      {
+        "key": "pria_base_url",
+        "type": "string",
+        "description": "Base URL for the Pria API.",
+        "required": true
+      }
+    ]
+  }
+}
