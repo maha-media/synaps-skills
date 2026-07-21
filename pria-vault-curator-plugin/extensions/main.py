@@ -38,7 +38,7 @@ def main():
             method, params = req.get("method"), req.get("params") or {}
             if method == "initialize":
                 client = PriaGatewayClient((params.get("config") or {}).get("pria_base_url"))
-                result = {"protocol_version": 2, "capabilities": {"tools": TOOL_SPECS}}
+                result = {"protocol_version": 1, "capabilities": {"tools": TOOL_SPECS}}
             elif method == "tool.call":
                 name = params.get("name")
                 if name not in TOOL_SUBJECTS: raise ValueError(f"unknown tool: {name}")
