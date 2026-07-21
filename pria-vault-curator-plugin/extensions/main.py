@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from vault_curator.client import GatewayError, PriaGatewayClient
-from vault_curator.tools import TOOL_ROUTES, TOOL_SPECS, ValidationError, validate_input
+from vault_curator.tools import TOOL_SUBJECTS, TOOL_SPECS, ValidationError, validate_input
 
 
 def read_frame(stream):
@@ -41,11 +41,11 @@ def main():
                 result = {"protocol_version": 2, "capabilities": {"tools": TOOL_SPECS}}
             elif method == "tool.call":
                 name = params.get("name")
-                if name not in TOOL_ROUTES: raise ValueError(f"unknown tool: {name}")
+                if name not in TOOL_SUBJECTS: raise ValueError(f"unknown tool: {name}")
                 if client is None: raise RuntimeError("extension is not initialized")
                 arguments = params.get("input", {})
                 validate_input(name, arguments)
-                result = client.call(TOOL_ROUTES[name], arguments)
+                result = client.call(TOOL_SUBJECTS[name], arguments)
             elif method == "shutdown":
                 write_frame(sys.stdout.buffer, req["id"], result=None); break
             else: raise ValueError(f"unknown method: {method}")
