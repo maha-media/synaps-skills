@@ -3,7 +3,7 @@ TOOL_SUBJECTS={"audit_vault":"VAULT_AUDIT","inspect_vault_gap":"VAULT_GAP_INSPEC
 def S(n=500):return {"type":"string","minLength":1,"maxLength":n}
 def A(item,n=20):return {"type":"array","items":item,"minItems":1,"maxItems":n}
 def O(props,required):return {"type":"object","additionalProperties":False,"properties":props,"required":required}
-Q={"query":S(),"uploadIds":A(S(256)),"vault":{"type":"object"},"minScore":{"type":"number"},"limit":{"type":"integer"}}
+Q={"query":S(),"uploadIds":A(S(256)),"vault":{"type":"string","enum":["personal","instance","account"]},"minScore":{"type":"number"},"limit":{"type":"integer"}}
 TOOL_SCHEMAS={
 "audit_vault":O(Q,["query"]),
 "inspect_vault_gap":O({**Q,"recurrenceCount":{"type":"integer"},"sources":A({"type":"object"}),"safetySensitive":{"type":"boolean"},"conflictingSources":{"type":"boolean"}},["query"]),
@@ -20,7 +20,9 @@ def validate_input(name,value):
  if missing:raise ValidationError("missing required argument(s): "+", ".join(missing))
  def check(k,v,p):
   t=p["type"]
-  if t=="string" and (not isinstance(v,str) or not v.strip() or len(v)>p["maxLength"]):raise ValidationError(f"{k} must be a bounded non-empty string")
+  if t=="string":
+   if not isinstance(v,str) or not v.strip() or ("maxLength" in p and len(v)>p["maxLength"]):raise ValidationError(f"{k} must be a bounded non-empty string")
+   if "enum" in p and v not in p["enum"]:raise ValidationError(f"{k} must be one of: {', '.join(p['enum'])}")
   if t=="object" and not isinstance(v,dict):raise ValidationError(f"{k} must be an object")
   if t=="array":
    if not isinstance(v,list) or not p["minItems"]<=len(v)<=p["maxItems"]:raise ValidationError(f"{k} must be a bounded non-empty array")
