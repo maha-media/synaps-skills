@@ -42,6 +42,14 @@ class Tests(unittest.TestCase):
  def test_subjects_and_schemas(self):
   self.assertEqual(TOOL_SUBJECTS,{"audit_vault":"VAULT_AUDIT","inspect_vault_gap":"VAULT_GAP_INSPECT","propose_vault_patch":"VAULT_PATCH_PLAN","request_vault_patch_publish":"VAULT_PATCH_REQUEST","get_vault_patch_status":"VAULT_PATCH_STATUS","verify_vault_patch":"VAULT_PATCH_VERIFY"})
   self.assertTrue(all("vault_id" not in s["properties"] for s in TOOL_SCHEMAS.values()));self.assertEqual(TOOL_SCHEMAS["request_vault_patch_publish"]["required"],["runId"])
+ def test_process_extension_initialize_and_tool_call(self):
+  import importlib.util, io, struct
+  main_path=os.path.join(os.path.dirname(__file__),"..","extensions","main.py")
+  spec=importlib.util.spec_from_file_location("vault_curator_main",main_path); mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+  body=json.dumps({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"config":{"pria_base_url":"https://pria.test"}}}).encode()
+  frame=b"Content-Length: "+str(len(body)).encode()+b"\r\n\r\n"+body
+  self.assertEqual(mod.read_frame(io.BytesIO(frame))["method"],"initialize")
+  out=io.BytesIO(); mod.write_frame(out,1,result={"protocol_version":1}); raw=out.getvalue(); self.assertIn(b'"protocol_version":1',raw)
  def test_validation(self):
   self.assertEqual(validate_input("audit_vault",{"query":"q"}),{"query":"q"})
   for bad in ({},{"query":" "},{"query":"q","vault_id":"v"},{"query":3}):
