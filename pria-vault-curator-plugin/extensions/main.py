@@ -5,8 +5,8 @@ import struct
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from vault_curator.client import PriaGatewayClient
-from vault_curator.tools import TOOL_ROUTES, TOOL_SPECS
+from vault_curator.client import GatewayError, PriaGatewayClient
+from vault_curator.tools import TOOL_ROUTES, TOOL_SPECS, ValidationError, validate_input
 
 
 def read_frame(stream):
@@ -43,12 +43,20 @@ def main():
                 name = params.get("name")
                 if name not in TOOL_ROUTES: raise ValueError(f"unknown tool: {name}")
                 if client is None: raise RuntimeError("extension is not initialized")
-                result = client.call(TOOL_ROUTES[name], params.get("input") or {})
+                arguments = params.get("input", {})
+                validate_input(name, arguments)
+                result = client.call(TOOL_ROUTES[name], arguments)
             elif method == "shutdown":
                 write_frame(sys.stdout.buffer, req["id"], result=None); break
             else: raise ValueError(f"unknown method: {method}")
             write_frame(sys.stdout.buffer, req["id"], result=result)
-        except Exception as exc:
-            write_frame(sys.stdout.buffer, req["id"], error={"code": -32000, "message": str(exc)})
+        except ValidationError as exc:
+            write_frame(sys.stdout.buffer, req["id"], error={"code": -32602, "message": str(exc)})
+        except GatewayError as exc:
+            write_frame(sys.stdout.buffer, req["id"], error={"code": -32010, "message": "gateway request failed", "data": exc.as_dict()})
+        except (ValueError, RuntimeError) as exc:
+            write_frame(sys.stdout.buffer, req["id"], error={"code": -32602, "message": str(exc)})
+        except Exception:
+            write_frame(sys.stdout.buffer, req["id"], error={"code": -32603, "message": "internal extension error"})
 
 if __name__ == "__main__": main()

@@ -2,23 +2,40 @@
   "name": "pria-vault-curator",
   "version": "0.1.0",
   "description": "Thin Synaps gateway for audited Pria vault inspection and patch workflows.",
-  "author": {"name": "Pria", "url": "https://github.com/maha-media"},
+  "author": {
+    "name": "Pria",
+    "url": "https://github.com/maha-media"
+  },
   "repository": "https://github.com/maha-media/synaps-skills",
   "license": "MIT",
   "category": "productivity",
-  "compatibility": {"synaps": ">=0.1.0", "extension_protocol": "2"},
+  "compatibility": {
+    "synaps": ">=0.1.0",
+    "extension_protocol": "2"
+  },
   "extension": {
     "protocol_version": 2,
     "runtime": "process",
     "command": "python3",
-    "args": ["extensions/main.py"],
-    "permissions": ["tools.register"],
+    "args": [
+      "extensions/main.py"
+    ],
+    "permissions": [
+      "tools.register"
+    ],
     "config": [
       {
         "key": "pria_base_url",
         "type": "string",
-        "description": "Base URL for the Pria API.",
+        "description": "HTTPS origin for the Pria API gateway. Requests cannot override this origin.",
         "required": true
+      },
+      {
+        "key": "agent_tool_token",
+        "type": "string",
+        "description": "Scoped Pria agent-tool bearer token. Raw Pria API keys are not accepted.",
+        "required": true,
+        "secret_env": "PRIA_AGENT_TOOL_TOKEN"
       }
     ]
   }
