@@ -41,7 +41,7 @@ class Tests(unittest.TestCase):
   with self.assertRaises(ValueError):PriaGatewayClient("https://x.test")
  def test_subjects_and_schemas(self):
   self.assertEqual(TOOL_SUBJECTS,{"audit_vault":"VAULT_AUDIT","inspect_vault_gap":"VAULT_GAP_INSPECT","propose_vault_patch":"VAULT_PATCH_PLAN","request_vault_patch_publish":"VAULT_PATCH_REQUEST","get_vault_patch_status":"VAULT_PATCH_STATUS","verify_vault_patch":"VAULT_PATCH_VERIFY"})
-  self.assertTrue(all("vault_id" not in s["properties"] for s in TOOL_SCHEMAS.values()));self.assertEqual(TOOL_SCHEMAS["request_vault_patch_publish"]["required"],["runId"])
+  self.assertTrue(all("vault_id" not in s["properties"] for s in TOOL_SCHEMAS.values()));self.assertEqual(TOOL_SCHEMAS["request_vault_patch_publish"]["required"],["runId","planHash"])
  def test_process_extension_initialize_and_tool_call(self):
   import importlib.util, io, struct
   main_path=os.path.join(os.path.dirname(__file__),"..","extensions","main.py")

@@ -8,7 +8,7 @@ TOOL_SCHEMAS={
 "audit_vault":O(Q,["query"]),
 "inspect_vault_gap":O({**Q,"recurrenceCount":{"type":"integer"},"sources":A({"type":"object"}),"safetySensitive":{"type":"boolean"},"conflictingSources":{"type":"boolean"}},["query"]),
 "propose_vault_patch":O({"title":S(),"summary":S(10000),"facts":A(S(10000)),"aliases":A(S()),"sources":A({"type":"object"}),"target":{"type":"object"},"probeQueries":A(S(),10),"preconditions":A(S(),20)},["title","summary","facts","aliases","sources","target","probeQueries","preconditions"]),
-"request_vault_patch_publish":O({"runId":S(256)},["runId"]),"get_vault_patch_status":O({"runId":S(256),"limit":{"type":"integer"}},["runId"]),"verify_vault_patch":O({**Q,"minimumScore":{"type":"number"},"maximumRank":{"type":"integer"}},["query"])}
+"request_vault_patch_publish":O({"runId":S(128),"planHash":S(64)},["runId","planHash"]),"get_vault_patch_status":O({"runId":S(128),"limit":{"type":"integer"}},["runId"]),"verify_vault_patch":O({**Q,"minimumScore":{"type":"number"},"maximumRank":{"type":"integer"}},["query"])}
 D={"audit_vault":"Audit retrieval coverage for a query.","inspect_vault_gap":"Inspect a query-based vault gap.","propose_vault_patch":"Create a read-only patch plan.","request_vault_patch_publish":"Request publication (currently expected to be denied).","get_vault_patch_status":"Get a curation run status.","verify_vault_patch":"Verify retrieval using a query."}
 TOOL_SPECS=[{"name":n,"description":D[n],"input_schema":TOOL_SCHEMAS[n]} for n in TOOL_SUBJECTS]
 class ValidationError(ValueError):pass
