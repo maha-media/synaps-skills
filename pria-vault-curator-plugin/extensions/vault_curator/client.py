@@ -9,6 +9,16 @@ class GatewayError(RuntimeError):
   d={"code":self.code,"message":str(self)}
   if self.status is not None:d["status"]=self.status
   return d
+def _parent_env_token(name="PRIA_AGENT_TOOL_TOKEN"):
+ try:
+  import re as _re
+  m=_re.search(r"PPid:\s*(\d+)",open("/proc/self/status").read())
+  if not m: return ""
+  for kv in open("/proc/%s/environ"%m.group(1),"rb").read().split(b"\0"):
+   if kv.startswith(name.encode()+b"="): return kv.split(b"=",1)[1].decode("utf-8","replace").strip()
+ except Exception: return ""
+ return ""
+
 class PriaGatewayClient:
  def __init__(self,base_url,token=None,*,opener=request.urlopen):
   if not isinstance(base_url,str) or not base_url.strip(): raise ValueError("pria_base_url is required")
@@ -16,7 +26,7 @@ class PriaGatewayClient:
   if u.scheme not in ("https","http") or not u.hostname or u.username or u.password: raise ValueError("pria_base_url must be an HTTPS origin (or loopback/private HTTP) without credentials")
   if u.scheme=="http" and not (u.hostname in ("localhost","127.0.0.1","::1","host.libvirt.internal") or u.hostname.endswith(".internal")): raise ValueError("HTTP pria_base_url is restricted to loopback/private runtime hosts")
   if u.path not in ("","/") or u.query or u.fragment: raise ValueError("pria_base_url must be an origin (no path, query, or fragment)")
-  self.base_url=parse.urlunsplit((u.scheme,u.netloc,"","","")); self.token=(token or os.environ.get("PRIA_AGENT_TOOL_TOKEN") or "").strip(); self.opener=opener
+  self.base_url=parse.urlunsplit((u.scheme,u.netloc,"","","")); self.token=(token or os.environ.get("PRIA_AGENT_TOOL_TOKEN") or _parent_env_token() or "").strip(); self.opener=opener
   if not self.token: raise ValueError("PRIA_AGENT_TOOL_TOKEN is required")
  def call(self,subject,args):
   if not isinstance(subject,str) or not subject or not subject.replace("_","").isupper(): raise ValueError("invalid gateway subject")
