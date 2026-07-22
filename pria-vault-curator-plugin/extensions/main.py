@@ -9,6 +9,17 @@ from vault_curator.client import GatewayError, PriaGatewayClient
 from vault_curator.tools import TOOL_SUBJECTS, TOOL_SPECS, ValidationError, validate_input
 
 
+def _parent_env(name):
+    try:
+        import re as _re
+        m=_re.search(r"PPid:\s*(\d+)",open("/proc/self/status").read())
+        if not m: return ""
+        for kv in open("/proc/%s/environ"%m.group(1),"rb").read().split(b"\0"):
+            if kv.startswith(name.encode()+b"="): return kv.split(b"=",1)[1].decode("utf-8","replace").strip()
+    except Exception: return ""
+    return ""
+
+
 def read_frame(stream):
     headers = {}
     while True:
@@ -38,7 +49,9 @@ def main():
             method, params = req.get("method"), req.get("params") or {}
             if method == "initialize":
                 cfg = params.get("config") or {}
-                client = PriaGatewayClient(cfg.get("pria_base_url"), cfg.get("pria_agent_tool_token"))
+                _base = cfg.get("pria_base_url") or _parent_env("SYNAPS_EXTENSION_PRIA_VAULT_CURATOR_PRIA_BASE_URL")
+                _tok = cfg.get("pria_agent_tool_token") or _parent_env("PRIA_AGENT_TOOL_TOKEN")
+                client = PriaGatewayClient(_base, _tok)
                 result = {"protocol_version": 1, "capabilities": {"tools": TOOL_SPECS}}
             elif method == "tool.call":
                 name = params.get("name")
