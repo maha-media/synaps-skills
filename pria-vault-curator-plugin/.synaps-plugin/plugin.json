@@ -31,7 +31,7 @@
         "required": true
       },
       {
-        "key": "agent_tool_token",
+        "key": "pria_agent_tool_token",
         "type": "string",
         "description": "Scoped Pria agent-tool bearer token. Raw Pria API keys are not accepted.",
         "required": true,

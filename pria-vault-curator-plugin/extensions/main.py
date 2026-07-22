@@ -37,7 +37,8 @@ def main():
         try:
             method, params = req.get("method"), req.get("params") or {}
             if method == "initialize":
-                client = PriaGatewayClient((params.get("config") or {}).get("pria_base_url"))
+                cfg = params.get("config") or {}
+                client = PriaGatewayClient(cfg.get("pria_base_url"), cfg.get("pria_agent_tool_token"))
                 result = {"protocol_version": 1, "capabilities": {"tools": TOOL_SPECS}}
             elif method == "tool.call":
                 name = params.get("name")

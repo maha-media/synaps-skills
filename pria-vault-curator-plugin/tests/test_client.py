@@ -37,6 +37,19 @@ class Tests(unittest.TestCase):
    PriaGatewayClient("http://host.libvirt.internal:3080")
    PriaGatewayClient("http://127.0.0.1:3080")
    with self.assertRaisesRegex(ValueError,"restricted"): PriaGatewayClient("http://pria.example")
+ def test_token_from_config_channel_without_env(self):
+  with patch.dict(os.environ,{},clear=True):
+   seen={}
+   def opener(req,timeout):
+    seen["auth"]=dict(req.header_items()).get("Authorization")
+    class R:
+     def __enter__(s):return s
+     def __exit__(s,*a):pass
+     def read(s,n):return json.dumps({"success":True,"callId":json.loads(req.data)["callId"],"result":{"ok":True}}).encode()
+    return R()
+   client=PriaGatewayClient("https://pria.test","cfg-token",opener=opener)
+   client.call("VAULT_AUDIT",{"query":"x"})
+   self.assertEqual(seen["auth"],"Bearer cfg-token")
  def test_token_required(self):
   with self.assertRaises(ValueError):PriaGatewayClient("https://x.test")
  def test_subjects_and_schemas(self):

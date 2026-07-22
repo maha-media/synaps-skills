@@ -10,13 +10,13 @@ class GatewayError(RuntimeError):
   if self.status is not None:d["status"]=self.status
   return d
 class PriaGatewayClient:
- def __init__(self,base_url,*,opener=request.urlopen):
+ def __init__(self,base_url,token=None,*,opener=request.urlopen):
   if not isinstance(base_url,str) or not base_url.strip(): raise ValueError("pria_base_url is required")
   u=parse.urlsplit(base_url.strip())
   if u.scheme not in ("https","http") or not u.hostname or u.username or u.password: raise ValueError("pria_base_url must be an HTTPS origin (or loopback/private HTTP) without credentials")
   if u.scheme=="http" and not (u.hostname in ("localhost","127.0.0.1","::1","host.libvirt.internal") or u.hostname.endswith(".internal")): raise ValueError("HTTP pria_base_url is restricted to loopback/private runtime hosts")
   if u.path not in ("","/") or u.query or u.fragment: raise ValueError("pria_base_url must be an origin (no path, query, or fragment)")
-  self.base_url=parse.urlunsplit((u.scheme,u.netloc,"","","")); self.token=os.environ.get("PRIA_AGENT_TOOL_TOKEN",""); self.opener=opener
+  self.base_url=parse.urlunsplit((u.scheme,u.netloc,"","","")); self.token=(token or os.environ.get("PRIA_AGENT_TOOL_TOKEN") or "").strip(); self.opener=opener
   if not self.token: raise ValueError("PRIA_AGENT_TOOL_TOKEN is required")
  def call(self,subject,args):
   if not isinstance(subject,str) or not subject or not subject.replace("_","").isupper(): raise ValueError("invalid gateway subject")
