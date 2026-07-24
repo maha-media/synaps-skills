@@ -30,6 +30,13 @@ pub struct TransportSpec {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ExtensionRef {
+    pub name: String,
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct StartSessionRequest {
     pub account_id: String,
     pub instance_id: String,
@@ -57,6 +64,10 @@ pub struct StartSessionRequest {
     pub environment: HashMap<String, String>,
     #[serde(default)]
     pub request_id: Option<String>,
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub extensions: Vec<ExtensionRef>,
 }
 
 #[derive(Debug, Serialize)]
@@ -191,19 +202,81 @@ pub async fn start(
         expires_at: expires,
         created_at: created.clone(),
     };
-    let written = write_context(&ctx, state.config.paths.run_root.as_path())
+    // Build args: base is always `rpc`; add `--system <file>` when a non-empty
+    // system prompt is provided (spec §Q1 — agent-runtime resolves file paths).
+    let mut args = vec!["rpc".to_string()];
+    if let Some(ref prompt) = req.system_prompt {
+        if !prompt.trim().is_empty() {
+            let prompt_path = crate::synaps::system_prompt::write_system_prompt(
+                prompt,
+                &req.session_dir,
+                req.uid,
+            )
+            .map_err(|e| e.with_request_id(rid.clone()))?;
+            args.push("--system".into());
+            args.push(prompt_path.display().to_string());
+        }
+    }
+
+    // Build env. Persistent configuration/plugin discovery stays at SYNAPS_BASE_DIR,
+    // but Unix RPC sockets cannot live under the long EFS session path: Linux
+    // sockaddr_un.sun_path is limited to 108 bytes. Give the runtime a short,
+    // per-UID 0700 directory instead.
+    let mut env = req.environment.clone();
+    let runtime_dir = prepare_synaps_runtime_dir(req.uid)
+        .map_err(|e| GuestAgentError::internal(e).with_request_id(rid.clone()))?;
+    env.insert("SYNAPS_RUNTIME_DIR".into(), runtime_dir.display().to_string());
+    let staged_base: Option<PathBuf> = if !req.extensions.is_empty() {
+        let plugin_store = state.config.synaps.plugin_dir.as_deref().ok_or_else(|| {
+            GuestAgentError::new(
+                ErrorCode::InvalidRequest,
+                "extensions requested but synaps.plugin_dir is not configured",
+            )
+            .with_request_id(rid.clone())
+        })?;
+        let base = crate::synaps::plugin_stage::stage_extensions(
+            &req.extensions,
+            &req.session_dir,
+            plugin_store,
+            req.uid,
+        )
         .map_err(|e| e.with_request_id(rid.clone()))?;
+        env.insert("SYNAPS_BASE_DIR".into(), base.display().to_string());
+        Some(base)
+    } else {
+        None
+    };
+
+    // Re-write the context with the optional base-dir mirror so the
+    // pria-session-context plugin can find it via its third lookup path
+    // ($SYNAPS_BASE_DIR/sessions/<id>/context.json).
+    let written = write_context(
+        &ctx,
+        state.config.paths.run_root.as_path(),
+        staged_base.as_deref(),
+    )
+    .map_err(|e| e.with_request_id(rid.clone()))?;
     let context_path = written.path.to_string_lossy().to_string();
+
+    // chown the synaps-base session-state tree to the session uid. write_context
+    // (running as root) creates <base>/sessions/<id>/context.json owned by root,
+    // but synaps runs dropped to `req.uid` and must persist turn state there —
+    // without this the runtime crashes with "failed to save session: Permission
+    // denied". Mirrors the inbox/run chown in plugin staging. plugins/ stays
+    // root-owned (read-only staged) on purpose.
+    if let Some(bd) = staged_base.as_deref() {
+        chown_tree_to_uid(&bd.join("sessions"), req.uid);
+    }
 
     // Launch synaps dropped to uid/gid (spec §6.4 step 4, §16.3).
     let spec = LaunchSpec {
         binary: state.config.synaps.binary.clone(),
-        args: vec!["rpc".to_string()],
+        args,
         uid: req.uid,
         gid: req.gid,
         groups,
         cwd: Some(req.workspace_dir.clone()),
-        env: req.environment.clone(),
+        env,
         context_path: written.path.clone(),
         session_id: req.session_id.clone(),
     };
@@ -231,6 +304,38 @@ pub async fn start(
         tokio::spawn(relay_agent_end_usage(stdout, identity, pria));
     }
 
+    // #212 smoke-check: if synaps rpc crashes on startup (bad env, missing HOME,
+    // permission crash, etc), catch it here as a LOUD failure instead of returning
+    // 200 to a caller who then discovers the corpse via a mislabeled 404 on /send.
+    // 500ms is enough for the runtime to init logging + fail on config issues but
+    // short enough not to add noticeable latency.
+    //
+    // Clone the Arc before the timeout so `process` is still available to move
+    // into SessionEntry afterwards (same pattern Case used for reaper_proc).
+    let smoke_proc = process.clone();
+    let smoke = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        smoke_proc.wait_for_exit(),
+    )
+    .await;
+    if smoke.is_ok() {
+        // Process exited within 500ms — it was DOA. Report loud.
+        tracing::error!(
+            session_id = %req.session_id,
+            pid,
+            "smoke-check: synaps rpc exited within 500ms of spawn — check spec.env and HOME",
+        );
+        return Err(GuestAgentError::new(
+            ErrorCode::SynapsLaunchFailed,
+            "synaps rpc exited within 500ms of spawn — check spec.env and HOME",
+        )
+        .with_request_id(rid));
+    }
+    // Timeout elapsed → child survived → proceed.
+
+    // Clone the process Arc BEFORE moving it into SessionEntry so the reaper
+    // task can await process exit without holding the session table lock.
+    let reaper_proc = process.clone();
     state.sessions.insert(SessionEntry {
         session_id: req.session_id.clone(),
         account_id: req.account_id.clone(),
@@ -242,6 +347,21 @@ pub async fn start(
         context_path: context_path.clone(),
         process,
     });
+
+    // Zombie reaper: background task that awaits natural child exit and
+    // removes the session from the store so status/send return 404 (not lies).
+    // Keeps launcher pure — session lifecycle is owned here, not in the launcher.
+    {
+        let sessions = state.sessions.clone();
+        let sid = req.session_id.clone();
+        tokio::spawn(async move {
+            reaper_proc.wait_for_exit().await;
+            // Only remove if still present — explicit close/cancel may have
+            // already removed it, and remove() is idempotent on absent keys.
+            sessions.remove(&sid);
+            tracing::info!(session_id = %sid, "reaper: session removed after child exit");
+        });
+    }
 
     // Emit session.started audit (spec §6.4 step 6).
     let ev = AuditEventBuilder::new(kinds::SESSION_STARTED)
@@ -428,4 +548,54 @@ fn prepare_workspace_dir(dir: &Path, uid: u32) -> Result<(), String> {
     // SAFETY: valid NUL-terminated path; gid u32::MAX == (gid_t)-1 = unchanged.
     let _ = unsafe { libc::chown(c_path.as_ptr(), uid, u32::MAX) };
     Ok(())
+}
+
+/// Create the short, per-UID socket root used by Synaps RPC.
+///
+/// This intentionally is not under EFS or SYNAPS_BASE_DIR: socket paths have a
+/// kernel-imposed 108-byte limit.  `/run/user/<uid>` is tmpfs-backed and its
+/// UID-specific child is 0700, so equal session IDs from separate principals
+/// cannot collide or be read by another UID.
+fn prepare_synaps_runtime_dir(uid: u32) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = PathBuf::from(format!("/run/user/{uid}/synaps"));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create runtime dir {}: {e}", dir.display()))?;
+    let meta = std::fs::symlink_metadata(&dir)
+        .map_err(|e| format!("stat runtime dir {}: {e}", dir.display()))?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err(format!("unsafe runtime dir {}", dir.display()));
+    }
+    let c_path = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes())
+        .map_err(|e| format!("runtime dir NUL: {e}"))?;
+    // Guest agent is root; explicitly make this UID's ephemeral socket root private.
+    if unsafe { libc::chown(c_path.as_ptr(), uid, u32::MAX) } != 0 {
+        return Err(format!("chown runtime dir {}: {}", dir.display(), std::io::Error::last_os_error()));
+    }
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| format!("chmod runtime dir {}: {e}", dir.display()))?;
+    Ok(dir)
+}
+
+/// Best-effort recursive chown of `root` (dirs + files) to `uid`, gid unchanged.
+/// Used for the synaps-base/sessions state tree that write_context creates as
+/// root but the dropped-privilege synaps process must write to.
+fn chown_tree_to_uid(root: &Path, uid: u32) {
+    fn chown_one(p: &Path, uid: u32) {
+        if let Ok(c_path) = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()) {
+            // SAFETY: valid NUL-terminated path; gid u32::MAX == (gid_t)-1 = unchanged.
+            let _ = unsafe { libc::chown(c_path.as_ptr(), uid, u32::MAX) };
+        }
+    }
+    chown_one(root, uid);
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            chown_tree_to_uid(&p, uid);
+        } else {
+            chown_one(&p, uid);
+        }
+    }
 }

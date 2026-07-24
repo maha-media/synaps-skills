@@ -1,0 +1,27 @@
+{
+  "name": "weather-lens",
+  "version": "0.1.0",
+  "description": "Current weather for any place by name via the free open-meteo API. Python stdlib only — no API key, no dependencies, no venv. One tool: get_weather(location).",
+  "author": {
+    "name": "Jawz",
+    "url": "https://github.com/maha-media"
+  },
+  "repository": "maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "utility",
+  "compatibility": {
+    "synaps": ">=0.1.0",
+    "extension_protocol": "1"
+  },
+  "extension": {
+    "protocol_version": 1,
+    "runtime": "process",
+    "command": "python3",
+    "args": [
+      "extensions/main.py"
+    ],
+    "permissions": [
+      "tools.register"
+    ]
+  }
+}
