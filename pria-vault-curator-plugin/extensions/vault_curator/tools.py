@@ -1,5 +1,5 @@
 """Vault-curator contracts and exact gateway subjects."""
-TOOL_SUBJECTS={"audit_vault":"VAULT_AUDIT","inspect_vault_gap":"VAULT_GAP_INSPECT","propose_vault_patch":"VAULT_PATCH_PLAN","request_vault_patch_publish":"VAULT_PATCH_REQUEST","get_vault_patch_status":"VAULT_PATCH_STATUS","verify_vault_patch":"VAULT_PATCH_VERIFY"}
+TOOL_SUBJECTS={"audit_vault":"VAULT_AUDIT","inspect_vault_gap":"VAULT_GAP_INSPECT","propose_vault_patch":"VAULT_PATCH_PLAN","request_vault_patch_publish":"VAULT_PATCH_REQUEST","get_vault_patch_status":"VAULT_PATCH_STATUS","verify_vault_patch":"VAULT_PATCH_VERIFY","list_collections":"LIST_COLLECTIONS","list_uploads":"LIST_UPLOADS","read_upload":"READ_UPLOAD"}
 def S(n=500):return {"type":"string","minLength":1,"maxLength":n}
 def A(item,n=20):return {"type":"array","items":item,"minItems":1,"maxItems":n}
 def O(props,required):return {"type":"object","additionalProperties":False,"properties":props,"required":required}
@@ -8,8 +8,11 @@ TOOL_SCHEMAS={
 "audit_vault":O(Q,["query"]),
 "inspect_vault_gap":O({**Q,"recurrenceCount":{"type":"integer"},"sources":A({"type":"object"}),"safetySensitive":{"type":"boolean"},"conflictingSources":{"type":"boolean"}},["query"]),
 "propose_vault_patch":O({"title":S(),"summary":S(10000),"facts":A(S(10000)),"aliases":A(S()),"sources":A({"type":"object"}),"target":{"type":"object"},"probeQueries":A(S(),10),"preconditions":A(S(),20)},["title","summary","facts","aliases","sources","target","probeQueries","preconditions"]),
-"request_vault_patch_publish":O({"runId":S(128),"planHash":S(64)},["runId","planHash"]),"get_vault_patch_status":O({"runId":S(128),"limit":{"type":"integer"}},["runId"]),"verify_vault_patch":O({**Q,"minimumScore":{"type":"number"},"maximumRank":{"type":"integer"}},["query"])}
-D={"audit_vault":"Audit retrieval coverage for a query.","inspect_vault_gap":"Inspect a query-based vault gap.","propose_vault_patch":"Create a read-only patch plan.","request_vault_patch_publish":"Request publication (currently expected to be denied).","get_vault_patch_status":"Get a curation run status.","verify_vault_patch":"Verify retrieval using a query."}
+"request_vault_patch_publish":O({"runId":S(128),"planHash":S(64)},["runId","planHash"]),"get_vault_patch_status":O({"runId":S(128),"limit":{"type":"integer"}},["runId"]),"verify_vault_patch":O({**Q,"minimumScore":{"type":"number"},"maximumRank":{"type":"integer"}},["query"]),
+"list_collections":O({"vault":{"type":"string","enum":["personal","instance","account"]},"limit":{"type":"integer"},"cursor":S()},[]),
+"list_uploads":O({"collectionId":S(),"status":{"type":"string","enum":["selected","inactive","active","error"]},"limit":{"type":"integer"},"cursor":S()},[]),
+"read_upload":O({"uploadId":S()},["uploadId"])}
+D={"audit_vault":"Audit retrieval coverage for a query.","inspect_vault_gap":"Inspect a query-based vault gap.","propose_vault_patch":"Create a read-only patch plan.","request_vault_patch_publish":"Request publication (currently expected to be denied).","get_vault_patch_status":"Get a curation run status.","verify_vault_patch":"Verify retrieval using a query.","list_collections":"List knowledge vault collections for this institution.","list_uploads":"List uploaded documents, optionally filtered by collection or status.","read_upload":"Get detailed metadata for a specific upload including ingestion status."}
 TOOL_SPECS=[{"name":n,"description":D[n],"input_schema":TOOL_SCHEMAS[n]} for n in TOOL_SUBJECTS]
 class ValidationError(ValueError):pass
 def validate_input(name,value):

@@ -53,7 +53,7 @@ class Tests(unittest.TestCase):
  def test_token_required(self):
   with self.assertRaises(ValueError):PriaGatewayClient("https://x.test")
  def test_subjects_and_schemas(self):
-  self.assertEqual(TOOL_SUBJECTS,{"audit_vault":"VAULT_AUDIT","inspect_vault_gap":"VAULT_GAP_INSPECT","propose_vault_patch":"VAULT_PATCH_PLAN","request_vault_patch_publish":"VAULT_PATCH_REQUEST","get_vault_patch_status":"VAULT_PATCH_STATUS","verify_vault_patch":"VAULT_PATCH_VERIFY"})
+  self.assertEqual(TOOL_SUBJECTS,{"audit_vault":"VAULT_AUDIT","inspect_vault_gap":"VAULT_GAP_INSPECT","propose_vault_patch":"VAULT_PATCH_PLAN","request_vault_patch_publish":"VAULT_PATCH_REQUEST","get_vault_patch_status":"VAULT_PATCH_STATUS","verify_vault_patch":"VAULT_PATCH_VERIFY","list_collections":"LIST_COLLECTIONS","list_uploads":"LIST_UPLOADS","read_upload":"READ_UPLOAD"})
   self.assertTrue(all("vault_id" not in s["properties"] for s in TOOL_SCHEMAS.values()));self.assertEqual(TOOL_SCHEMAS["request_vault_patch_publish"]["required"],["runId","planHash"])
  def test_process_extension_initialize_and_tool_call(self):
   import importlib.util, io, struct
@@ -67,4 +67,12 @@ class Tests(unittest.TestCase):
   self.assertEqual(validate_input("audit_vault",{"query":"q"}),{"query":"q"})
   for bad in ({},{"query":" "},{"query":"q","vault_id":"v"},{"query":3}):
    with self.assertRaises(ValidationError):validate_input("audit_vault",bad)
+  self.assertEqual(validate_input("list_collections",{}),{})
+  self.assertEqual(validate_input("list_collections",{"vault":"instance"}),{"vault":"instance"})
+  with self.assertRaises(ValidationError):validate_input("list_collections",{"vault":"invalid"})
+  self.assertEqual(validate_input("list_uploads",{"collectionId":"c1"}),{"collectionId":"c1"})
+  self.assertEqual(validate_input("list_uploads",{"status":"selected"}),{"status":"selected"})
+  with self.assertRaises(ValidationError):validate_input("list_uploads",{"status":"deleted"})
+  with self.assertRaises(ValidationError):validate_input("read_upload",{})
+  self.assertEqual(validate_input("read_upload",{"uploadId":"u1"}),{"uploadId":"u1"})
 if __name__=="__main__":unittest.main()
