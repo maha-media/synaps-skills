@@ -1,0 +1,44 @@
+{
+  "name": "pria-vault-medic",
+  "version": "0.1.0",
+  "description": "Pria Vault Medic — self-healing IP Vault triage loop for in-VM agents. Grades vault health, classifies broken/unhealthy files by issue type, offers non-destructive repair verbs (requeue|reload|reingest), and re-grades to verify improvement. Interfaces with Praxis's public REST API via API-key authentication.",
+  "author": {
+    "name": "Pria",
+    "url": "https://github.com/maha-media"
+  },
+  "repository": "https://github.com/maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "tools",
+  "compatibility": {
+    "synaps": ">=0.1.0",
+    "extension_protocol": "1"
+  },
+  "extension": {
+    "protocol_version": 1,
+    "runtime": "process",
+    "command": "python3",
+    "args": [
+      "extensions/pria_vault_medic.py"
+    ],
+    "permissions": [
+      "tools.register"
+    ],
+    "hooks": [],
+    "config": [
+      {
+        "key": "pria_api_base",
+        "type": "string",
+        "description": "Pria API base URL. Defaults to https://pria.praxislxp.com.",
+        "required": false,
+        "default": "https://pria.praxislxp.com"
+      },
+      {
+        "key": "pria_api_key",
+        "type": "string",
+        "description": "Pria API key (pria_<40 hex chars>). Prefer PRIA_API_KEY env var.",
+        "required": false,
+        "secret_env": "PRIA_API_KEY"
+      }
+    ]
+  }
+}

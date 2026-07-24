@@ -1,0 +1,44 @@
+{
+  "name": "pria-black-box",
+  "version": "0.1.0",
+  "description": "Pria Black Box — observability API for Pria answers. Reconstructs any Pria history turn as an auditable execution trace: answering twin, RAG/KAG evidence chunks + scores, confidentiality flags, optional reasoning telemetry, and live source-health warnings. Turns Pria's history flags + lazy RAG/KAG + thinking endpoints into a provenance instrument for agents.",
+  "author": {
+    "name": "Pria",
+    "url": "https://github.com/maha-media"
+  },
+  "repository": "https://github.com/maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "tools",
+  "compatibility": {
+    "synaps": ">=0.1.0",
+    "extension_protocol": "2"
+  },
+  "extension": {
+    "protocol_version": 2,
+    "runtime": "process",
+    "command": "python3",
+    "args": [
+      "extensions/pria_black_box.py"
+    ],
+    "permissions": [
+      "tools.register"
+    ],
+    "hooks": [],
+    "config": [
+      {
+        "key": "pria_api_base",
+        "type": "string",
+        "description": "Pria API base URL. Defaults to https://pria.praxislxp.com.",
+        "required": false,
+        "default": "https://pria.praxislxp.com"
+      },
+      {
+        "key": "pria_api_key",
+        "type": "string",
+        "description": "Pria API key (pria_<40 hex chars>). Prefer PRIA_API_KEY env var.",
+        "required": false,
+        "secret_env": "PRIA_API_KEY"
+      }
+    ]
+  }
+}

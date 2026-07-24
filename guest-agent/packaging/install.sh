@@ -34,6 +34,29 @@ done
 install -m 0755 "${SCRIPT_DIR}/bin/pria-kasm-setpw" "${SBIN_DIR}/pria-kasm-setpw"
 echo "[pria]   sbin  pria-kasm-setpw"
 
+# Install the versioned Pria extension bundles into the base image.  These must
+# be baked during image construction: a session only stages links to this path,
+# so patching a running VM cannot repair a process that already rejected a
+# manifest.  Refuse a mismatched protocol rather than baking a latent failure.
+PLUGIN_SOURCE="${PRIA_EXTENSION_BUNDLE_DIR:-/tmp/pria-extension-bundles}"
+PLUGIN_DEST="${DESTDIR}/opt/synaps/plugins"
+if [ "${PRIA_SKIP_EXTENSION_BUNDLES:-0}" != "1" ]; then
+for plugin in pria-tools-plugin pria-vault-medic-plugin; do
+  src="${PLUGIN_SOURCE}/${plugin}"
+  dest_name="${plugin%-plugin}"
+  manifest="${src}/.synaps-plugin/plugin.json"
+  [ -f "${manifest}" ] || { echo "[pria] missing extension manifest: ${manifest}" >&2; exit 1; }
+  protocol="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["extension"]["protocol_version"])' "${manifest}")"
+  [ "${protocol}" = "1" ] || { echo "[pria] refusing extension ${plugin}: protocol_version=${protocol}, Synaps supports 1" >&2; exit 1; }
+  rm -rf "${PLUGIN_DEST:?}/${dest_name}"
+  install -d -m 0755 "${PLUGIN_DEST}"
+  cp -a "${src}" "${PLUGIN_DEST}/${dest_name}"
+  echo "[pria]   extension ${dest_name} protocol=v${protocol}"
+done
+else
+  echo "[pria]   extension bundles installed by image builder"
+fi
+
 # The guest-agent binary itself is built by the image build and copied to
 # /usr/local/sbin/pria-guest-agent; we only assert the destination dir exists.
 # /run/pria is a tmpfs path created at boot by the units' RuntimeDirectory or by
