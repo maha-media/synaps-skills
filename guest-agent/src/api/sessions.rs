@@ -228,7 +228,10 @@ pub async fn start(
     let mut env = req.environment.clone();
     let runtime_dir = prepare_synaps_runtime_dir(req.uid)
         .map_err(|e| GuestAgentError::internal(e).with_request_id(rid.clone()))?;
-    env.insert("SYNAPS_RUNTIME_DIR".into(), runtime_dir.display().to_string());
+    env.insert(
+        "SYNAPS_RUNTIME_DIR".into(),
+        runtime_dir.display().to_string(),
+    );
     let staged_base: Option<PathBuf> = if !req.extensions.is_empty() {
         let plugin_store = state.config.synaps.plugin_dir.as_deref().ok_or_else(|| {
             GuestAgentError::new(
@@ -585,44 +588,148 @@ fn prepare_workspace_dir(dir: &Path, uid: u32) -> Result<(), String> {
 /// Create the short, per-UID socket root used by Synaps RPC.
 ///
 /// This intentionally is not under EFS or SYNAPS_BASE_DIR: socket paths have a
-/// kernel-imposed 108-byte limit.  `/run/user/<uid>` is tmpfs-backed and its
-/// UID-specific child is 0700, so equal session IDs from separate principals
-/// cannot collide or be read by another UID.
+/// kernel-imposed 108-byte limit. `/run/user/<uid>` is tmpfs-backed and both it
+/// and its `synaps` child are private to the launching principal.
 fn prepare_synaps_runtime_dir(uid: u32) -> Result<PathBuf, String> {
-    use std::os::unix::fs::PermissionsExt;
-    let dir = PathBuf::from(format!("/run/user/{uid}/synaps"));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create runtime dir {}: {e}", dir.display()))?;
-    // The hardened runtime umask (077) leaves the /run/user and /run/user/<uid>
-    // intermediates created above at 0700 root — the dropped-privilege synaps
-    // process then cannot traverse to its own runtime dir and dies at startup
-    // ("failed to register session: write error: Permission denied").
-    // Normalize: /run/user 0711 (traverse-only), /run/user/<uid> uid-owned 0700
-    // (systemd-logind convention).
-    std::fs::set_permissions(Path::new("/run/user"), std::fs::Permissions::from_mode(0o711))
-        .map_err(|e| format!("chmod /run/user: {e}"))?;
-    let user_dir = PathBuf::from(format!("/run/user/{uid}"));
-    let c_user = std::ffi::CString::new(user_dir.as_os_str().as_encoded_bytes())
-        .map_err(|e| format!("user runtime dir NUL: {e}"))?;
-    // SAFETY: valid NUL-terminated path; gid u32::MAX == (gid_t)-1 = unchanged.
-    if unsafe { libc::chown(c_user.as_ptr(), uid, u32::MAX) } != 0 {
-        return Err(format!("chown {}: {}", user_dir.display(), std::io::Error::last_os_error()));
+    prepare_synaps_runtime_dir_at(Path::new("/run/user"), uid)
+}
+
+/// Prepare a private Synaps runtime directory below `runtime_root`.
+///
+/// Kept separate from [`prepare_synaps_runtime_dir`] so the ownership and
+/// traversal invariant can be regression-tested in a temporary directory rather
+/// than mutating the host's `/run/user` during tests.
+fn prepare_synaps_runtime_dir_at(runtime_root: &Path, uid: u32) -> Result<PathBuf, String> {
+    use std::io::ErrorKind;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    fn ensure_real_dir(path: &Path, label: &str) -> Result<(), String> {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|e| format!("stat {label} {}: {e}", path.display()))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(format!("unsafe {label} {}", path.display()));
+        }
+        Ok(())
     }
+
+    fn create_dir_if_missing(path: &Path, label: &str) -> Result<(), String> {
+        match std::fs::create_dir(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(()),
+            Err(e) => Err(format!("create {label} {}: {e}", path.display())),
+        }
+    }
+
+    // `/run` is root-controlled in production. Do not follow a pre-existing
+    // symlink for either user-controlled component before chowning it.
+    create_dir_if_missing(runtime_root, "runtime root")?;
+    ensure_real_dir(runtime_root, "runtime root")?;
+    std::fs::set_permissions(runtime_root, std::fs::Permissions::from_mode(0o711))
+        .map_err(|e| format!("chmod runtime root {}: {e}", runtime_root.display()))?;
+
+    let user_dir = runtime_root.join(uid.to_string());
+    create_dir_if_missing(&user_dir, "user runtime dir")?;
+    ensure_real_dir(&user_dir, "user runtime dir")?;
+    chown_private_dir(&user_dir, uid, "user runtime dir")?;
     std::fs::set_permissions(&user_dir, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| format!("chmod {}: {e}", user_dir.display()))?;
-    let meta = std::fs::symlink_metadata(&dir)
-        .map_err(|e| format!("stat runtime dir {}: {e}", dir.display()))?;
-    if meta.file_type().is_symlink() || !meta.is_dir() {
-        return Err(format!("unsafe runtime dir {}", dir.display()));
-    }
-    let c_path = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes())
-        .map_err(|e| format!("runtime dir NUL: {e}"))?;
-    // Guest agent is root; explicitly make this UID's ephemeral socket root private.
-    if unsafe { libc::chown(c_path.as_ptr(), uid, u32::MAX) } != 0 {
-        return Err(format!("chown runtime dir {}: {}", dir.display(), std::io::Error::last_os_error()));
-    }
+        .map_err(|e| format!("chmod user runtime dir {}: {e}", user_dir.display()))?;
+
+    let dir = user_dir.join("synaps");
+    create_dir_if_missing(&dir, "synaps runtime dir")?;
+    ensure_real_dir(&dir, "synaps runtime dir")?;
+    chown_private_dir(&dir, uid, "synaps runtime dir")?;
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| format!("chmod runtime dir {}: {e}", dir.display()))?;
+        .map_err(|e| format!("chmod synaps runtime dir {}: {e}", dir.display()))?;
+
+    // Re-read after mutation: callers rely on both components being directly
+    // traversable by the dropped-privilege Synaps process.
+    for (path, label) in [
+        (&user_dir, "user runtime dir"),
+        (&dir, "synaps runtime dir"),
+    ] {
+        ensure_real_dir(path, label)?;
+        let metadata =
+            std::fs::metadata(path).map_err(|e| format!("stat {label} {}: {e}", path.display()))?;
+        if metadata.uid() != uid || metadata.mode() & 0o7777 != 0o700 {
+            return Err(format!(
+                "{label} {} did not retain uid {uid} and mode 0700",
+                path.display()
+            ));
+        }
+    }
     Ok(dir)
+}
+
+fn chown_private_dir(path: &Path, uid: u32, label: &str) -> Result<(), String> {
+    let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+        .map_err(|e| format!("{label} path NUL: {e}"))?;
+    // SAFETY: valid NUL-terminated path; gid u32::MAX == (gid_t)-1 = unchanged.
+    if unsafe { libc::chown(c_path.as_ptr(), uid, u32::MAX) } != 0 {
+        return Err(format!(
+            "chown {label} {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod runtime_dir_tests {
+    use super::prepare_synaps_runtime_dir_at;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::process::CommandExt;
+
+    #[test]
+    fn runtime_parent_and_child_are_owned_private_and_traversable_by_launch_uid() {
+        let current_uid = unsafe { libc::geteuid() };
+        // When tests are root, deliberately drop the probe to nobody. This
+        // reproduces the production failure mode: root creates the directory,
+        // then Synaps starts as another principal. Otherwise, use the test user.
+        let launch_uid = if current_uid == 0 {
+            65_534
+        } else {
+            current_uid
+        };
+        let root = std::env::temp_dir().join(format!(
+            "pria-guest-agent-runtime-dir-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let child = prepare_synaps_runtime_dir_at(&root, launch_uid).unwrap();
+        let parent = child.parent().unwrap();
+        for path in [parent, child.as_path()] {
+            let metadata = std::fs::metadata(path).unwrap();
+            assert_eq!(metadata.uid(), launch_uid, "{} owner", path.display());
+            assert_eq!(metadata.mode() & 0o7777, 0o700, "{} mode", path.display());
+        }
+
+        // This is the regression probe: a process with the launch UID must be
+        // able to traverse the parent and create runtime state in the child.
+        // The former implementation left `parent` root:0700, causing exactly
+        // this operation to fail before Synaps could initialize its RPC server.
+        let probe = child.join("dropped-privilege-probe");
+        let status = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("test -x \"$1\" && : > \"$1/dropped-privilege-probe\"")
+            .arg("sh")
+            .arg(&child)
+            .gid(launch_uid)
+            .uid(launch_uid)
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "launch UID could not use {}",
+            child.display()
+        );
+        assert!(probe.is_file(), "launch UID did not create runtime state");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 /// Best-effort non-recursive chown of a single directory to `uid`, gid
