@@ -222,6 +222,16 @@ fn ensure_instance_dir(efs_root: &std::path::Path, instance_id: &str, gid: u32) 
         return Err("path escapes efs_root".to_string());
     }
     std::fs::create_dir_all(&dir).map_err(|e| format!("create_dir_all: {e}"))?;
+    // The hardened runtime umask (077) leaves the `instances/` parent created
+    // by create_dir_all at 0700 root — members of an instance group then cannot
+    // traverse INTO their own 2770 instance dir. Normalize the parent to 0711
+    // (traverse-only, root-owned): no listing/reads for non-root, and each
+    // `instances/<id>` below stays fully gated by its inst_<id> group.
+    std::fs::set_permissions(
+        &efs_root.join("instances"),
+        std::fs::Permissions::from_mode(0o711),
+    )
+    .map_err(|e| format!("set_permissions instances parent: {e}"))?;
     let c_path = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes())
         .map_err(|e| format!("path nul: {e}"))?;
     // SAFETY: valid NUL-terminated path; owner root (0), group → instance gid.
