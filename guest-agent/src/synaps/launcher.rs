@@ -153,6 +153,18 @@ pub struct UsageIdentity {
     pub ephemeral_task_id: Option<String>,
 }
 
+/// Validated startup receipt from Synaps RPC's first lifecycle frame.
+///
+/// `session_id` emitted by Synaps is its own runtime-session identifier, not
+/// Pria's control-plane session id. The guest binds the process to the Pria id
+/// at launch, so readiness validates the event type/protocol and returns only
+/// the model + protocol receipt for that bound process.
+#[derive(Debug, Clone)]
+pub struct RpcReadyReceipt {
+    pub model: String,
+    pub protocol_version: u32,
+}
+
 /// Meter a raw SynapsCLI `RpcEvent::AgentEnd { usage }` (untagged JSON) into a
 /// Pria [`UsagePayload`]. This is the **no-core-change fallback** (spec §0.2,
 /// HS-U6): SynapsCLI emits `agent_end` with a `usage` object but no account /
@@ -231,8 +243,10 @@ pub async fn relay_agent_end_usage(
     stdout: tokio::process::ChildStdout,
     identity: UsageIdentity,
     pria: std::sync::Arc<dyn crate::pria_client::PriaCallbackClient>,
+    ready_tx: Option<tokio::sync::oneshot::Sender<RpcReadyReceipt>>,
 ) {
     use tokio::io::{AsyncBufReadExt, BufReader};
+    let mut ready_tx = ready_tx;
     let mut lines = BufReader::new(stdout).lines();
     loop {
         match lines.next_line().await {
@@ -244,6 +258,36 @@ pub async fn relay_agent_end_usage(
                 let Ok(val) = serde_json::from_str::<Value>(trimmed) else {
                     continue;
                 };
+                // Readiness is a guest-owned process handshake, not an eventual
+                // Pria callback. The first valid RPC `ready` lets `/sessions/start`
+                // return a truthful receipt for EVERY preset/plugin set.
+                if let Some(tx) = ready_tx.take() {
+                    if val.get("type").and_then(Value::as_str) == Some("ready") {
+                        let model = val
+                            .get("model")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        let protocol_version = val
+                            .get("protocol_version")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0) as u32;
+                        if !model.is_empty() && protocol_version > 0 {
+                            let _ = tx.send(RpcReadyReceipt {
+                                model,
+                                protocol_version,
+                            });
+                        } else {
+                            // Sender is consumed deliberately: malformed ready is
+                            // not readiness and startup will fail closed on timeout.
+                            tracing::warn!(session_id = %identity.session_id, "malformed synaps ready frame");
+                        }
+                    } else {
+                        // Synaps contract says ready is first. Do not accept a
+                        // later arbitrary frame as proof the process is promptable.
+                        tracing::warn!(session_id = %identity.session_id, event_type = ?val.get("type"), "expected synaps ready as first RPC frame");
+                    }
+                }
                 // Seam #3: forward every reply frame to Pria so the user-facing
                 // SSE chat stream can surface it. Best-effort — never blocks the
                 // usage metering below.
@@ -424,8 +468,7 @@ mod real {
             use std::os::unix::process::CommandExt as StdCommandExt;
             let uid = spec.uid as libc::uid_t;
             let gid = spec.gid as libc::gid_t;
-            let groups: Vec<libc::gid_t> =
-                spec.groups.iter().map(|g| *g as libc::gid_t).collect();
+            let groups: Vec<libc::gid_t> = spec.groups.iter().map(|g| *g as libc::gid_t).collect();
             // SAFETY: pre_exec runs in the forked child before exec. We only call
             // async-signal-safe syscalls (setgroups/setgid/setuid) over an owned,
             // pre-allocated gid slice — no allocation, no locks.
@@ -530,7 +573,9 @@ mod real {
             // Send SIGKILL directly via pid — no child-mutex needed, so this
             // never blocks even while the background wait task holds the lock.
             // SAFETY: kill(2) is always safe; ESRCH means already dead — ok.
-            unsafe { libc::kill(self.pid as libc::pid_t, libc::SIGKILL); }
+            unsafe {
+                libc::kill(self.pid as libc::pid_t, libc::SIGKILL);
+            }
             *self.status.lock().unwrap() = SessionStatus::Cancelled;
             Ok(())
         }
@@ -540,14 +585,20 @@ mod real {
             // Synaps writes its final agent_end frame on SIGTERM's shutdown path;
             // SIGKILL alone drops that frame and the turn's usage goes unmetered.
             // SAFETY: kill(2) with ESRCH (already dead) is harmless.
-            unsafe { libc::kill(self.pid as libc::pid_t, libc::SIGTERM); }
+            unsafe {
+                libc::kill(self.pid as libc::pid_t, libc::SIGTERM);
+            }
 
             let grace = std::time::Duration::from_millis(grace_ms);
-            let exited = tokio::time::timeout(grace, self.wait_for_exit()).await.is_ok();
+            let exited = tokio::time::timeout(grace, self.wait_for_exit())
+                .await
+                .is_ok();
 
             if !exited {
                 // Grace period expired -- force termination.
-                unsafe { libc::kill(self.pid as libc::pid_t, libc::SIGKILL); }
+                unsafe {
+                    libc::kill(self.pid as libc::pid_t, libc::SIGKILL);
+                }
             }
 
             *self.status.lock().unwrap() = SessionStatus::Closed;
@@ -736,7 +787,7 @@ mod tests {
             .expect("spawn test child");
         let stdout = child.stdout.take().expect("child stdout");
         let pria = Arc::new(FakePriaClient::default());
-        relay_agent_end_usage(stdout, identity(), pria.clone()).await;
+        relay_agent_end_usage(stdout, identity(), pria.clone(), None).await;
         let usages = pria.usages.lock().unwrap();
         assert_eq!(usages.len(), 1, "exactly one billable agent_end metered");
         assert_eq!(usages[0].session_id, "sess_5");
@@ -759,8 +810,11 @@ mod tests {
             .expect("spawn test child");
         let stdout = child.stdout.take().expect("child stdout");
         let pria = Arc::new(FakePriaClient::default());
-        relay_agent_end_usage(stdout, identity(), pria.clone()).await;
-        assert!(pria.usages.lock().unwrap().is_empty(), "empty turn not billed");
+        relay_agent_end_usage(stdout, identity(), pria.clone(), None).await;
+        assert!(
+            pria.usages.lock().unwrap().is_empty(),
+            "empty turn not billed"
+        );
     }
 
     #[test]

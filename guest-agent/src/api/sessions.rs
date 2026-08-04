@@ -15,7 +15,7 @@ use crate::paths::ensure_under;
 use crate::pria_client::{kinds, AuditEventBuilder};
 use crate::sessions::SessionEntry;
 use crate::synaps::launcher::LaunchSpec;
-use crate::synaps::launcher::{relay_agent_end_usage, UsageIdentity};
+use crate::synaps::launcher::{relay_agent_end_usage, RpcReadyReceipt, UsageIdentity};
 use crate::synaps::session_context::{now_timestamps, write_context, SessionContext};
 
 #[derive(Debug, Deserialize)]
@@ -78,6 +78,12 @@ pub struct StartSessionResponse {
     pub pid: u32,
     pub context_path: String,
     pub started_at: String,
+    /// Synaps emitted a validated RPC-ready frame before this response.
+    pub ready: bool,
+    /// UTC receipt time assigned by the guest after it validated Synaps RPC Ready.
+    pub ready_at: String,
+    pub ready_model: String,
+    pub ready_protocol_version: u32,
 }
 
 pub async fn start(
@@ -304,6 +310,7 @@ pub async fn start(
     // billable `agent_end` frame into Pria's signed usage callback (spec §5.5,
     // HS-U6). The guest agent stamps trusted account/vm/user/session identity
     // that SynapsCLI core cannot know.
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<RpcReadyReceipt>();
     if let Some(stdout) = process.take_stdout() {
         let identity = UsageIdentity {
             account_id: req.account_id.clone(),
@@ -315,7 +322,18 @@ pub async fn start(
             ephemeral_task_id: None,
         };
         let pria = state.pria.clone();
-        tokio::spawn(relay_agent_end_usage(stdout, identity, pria));
+        tokio::spawn(relay_agent_end_usage(
+            stdout,
+            identity,
+            pria,
+            Some(ready_tx),
+        ));
+    } else {
+        return Err(GuestAgentError::new(
+            ErrorCode::SynapsLaunchFailed,
+            "synaps stdout unavailable; cannot verify RPC readiness",
+        )
+        .with_request_id(rid));
     }
 
     // #212 smoke-check: if synaps rpc crashes on startup (bad env, missing HOME,
@@ -345,7 +363,28 @@ pub async fn start(
         )
         .with_request_id(rid));
     }
-    // Timeout elapsed → child survived → proceed.
+    // Timeout elapsed → child survived. Now require the runtime's own
+    // protocol-level ready handshake. This makes `/sessions/start` truthful for
+    // all presets: a live PID alone never proves Synaps can accept a prompt.
+    let ready = match tokio::time::timeout(std::time::Duration::from_secs(15), ready_rx).await {
+        Ok(Ok(receipt)) => receipt,
+        Ok(Err(_)) => {
+            let _ = process.close(0).await;
+            return Err(GuestAgentError::new(
+                ErrorCode::SynapsLaunchFailed,
+                "synaps exited before emitting its RPC ready frame",
+            )
+            .with_request_id(rid));
+        }
+        Err(_) => {
+            let _ = process.close(0).await;
+            return Err(GuestAgentError::new(
+                ErrorCode::SynapsLaunchFailed,
+                "synaps did not emit its RPC ready frame before startup timeout",
+            )
+            .with_request_id(rid));
+        }
+    };
 
     // Clone the process Arc BEFORE moving it into SessionEntry so the reaper
     // task can await process exit without holding the session table lock.
@@ -390,13 +429,18 @@ pub async fn start(
         .build();
     let _ = state.pria.audit(vec![ev]).await;
 
+    let ready_at = chrono::Utc::now().to_rfc3339();
     Ok(Json(StartSessionResponse {
         request_id: req.request_id,
         session_id: req.session_id,
-        status: "starting".to_string(),
+        status: "ready".to_string(),
         pid,
         context_path,
         started_at: created,
+        ready: true,
+        ready_at,
+        ready_model: ready.model,
+        ready_protocol_version: ready.protocol_version,
     }))
 }
 
