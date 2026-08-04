@@ -11,6 +11,19 @@
 //!    and is skipped in default CI (spec §13.3/§13.4).
 
 use std::sync::Arc;
+
+/// Caller's uid. `/sessions/start` chowns the per-UID Synaps socket dir and then
+/// verifies the owner stuck — only root may do that for a foreign uid, so the
+/// session-start leg of this e2e runs as whoever is executing the suite. The
+/// desktop legs keep their fixed fixture uids (they never chown a runtime dir).
+fn e2e_uid() -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata("/proc/self").map(|m| m.uid()).unwrap()
+}
+
+fn e2e_session_user() -> String {
+    format!("pria_u_{}", e2e_uid())
+}
 use std::sync::Mutex;
 
 use axum::body::Bytes;
@@ -106,6 +119,7 @@ pria:
 paths:
   efs_root: {efs}
   run_root: {run}
+  synaps_runtime_root: {run}/synaps-runtime
   policy_dir: {efs}/policy
   audit_spool_dir: {efs}/spool
 synaps:
@@ -116,10 +130,17 @@ fsmon:
         efs = efs.display(),
         run = run.display(),
     );
+    std::fs::create_dir_all(run.join("synaps-runtime")).unwrap();
     let config = Config::from_yaml(&yaml).unwrap();
 
     let os = Arc::new(
         FakeUserManager::default()
+            .with_user(UserRecord {
+                username: e2e_session_user(),
+                uid: e2e_uid(),
+                gid: e2e_uid(),
+                active: true,
+            })
             .with_user(UserRecord {
                 username: "pria_u_55001".into(),
                 uid: 55001,
@@ -214,8 +235,8 @@ async fn e2e_signed_loop() {
         serde_json::json!({
             "account_id": ACCOUNT,
             "desired": [{
-                "user_id": "user_e2e", "linux_username": "pria_u_55001",
-                "uid": 55001, "gid": 55001, "state": "active"
+                "user_id": "user_e2e", "linux_username": e2e_session_user(),
+                "uid": e2e_uid(), "gid": e2e_uid(), "state": "active"
             }]
         }),
         None,
@@ -254,15 +275,16 @@ async fn e2e_signed_loop() {
         "/guest/v1/sessions/start",
         serde_json::json!({
             "account_id": ACCOUNT, "instance_id": "inst_e2e", "user_id": "user_e2e",
-            "session_id": "sess_e2e", "vm_id": VM, "linux_username": "pria_u_55001",
-            "uid": 55001, "gid": 55001, "policy_hash": "sha256:e2e",
+            "session_id": "sess_e2e", "vm_id": VM, "linux_username": e2e_session_user(),
+            "uid": e2e_uid(), "gid": e2e_uid(), "policy_hash": "sha256:e2e",
             "workspace_dir": ws, "session_dir": sd, "roles": ["agent_operator"]
         }),
         Some("sess_e2e"),
     )
     .await;
     assert_eq!(st, StatusCode::OK, "session start failed: {v}");
-    assert_eq!(v["status"], "starting");
+    assert_eq!(v["status"], "ready");
+    assert_eq!(v["ready"], true);
     assert!(v["pid"].as_u64().unwrap() > 0);
 
     // §9.7 step 9 — fsmon status healthy (unauthenticated read).

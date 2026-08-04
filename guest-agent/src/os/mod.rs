@@ -402,9 +402,15 @@ mod tests {
             active: true,
         });
         // Join two instance groups; re-joining one is a no-op.
-        mgr.ensure_group_membership("u", 60001, "inst_a").await.unwrap();
-        mgr.ensure_group_membership("u", 60002, "inst_b").await.unwrap();
-        mgr.ensure_group_membership("u", 60001, "inst_a").await.unwrap();
+        mgr.ensure_group_membership("u", 60001, "inst_a")
+            .await
+            .unwrap();
+        mgr.ensure_group_membership("u", 60002, "inst_b")
+            .await
+            .unwrap();
+        mgr.ensure_group_membership("u", 60001, "inst_a")
+            .await
+            .unwrap();
         let m = mgr.memberships_of("u");
         assert_eq!(m.len(), 2, "duplicate membership must not double-add");
         assert!(m.iter().any(|(g, n)| *g == 60001 && n == "inst_a"));
@@ -428,8 +434,12 @@ mod tests {
             gid: 14952,
             active: true,
         });
-        mgr.ensure_group_membership("u", 60001, "inst_a").await.unwrap();
-        mgr.ensure_group_membership("u", 60002, "inst_b").await.unwrap();
+        mgr.ensure_group_membership("u", 60001, "inst_a")
+            .await
+            .unwrap();
+        mgr.ensure_group_membership("u", 60002, "inst_b")
+            .await
+            .unwrap();
         let gids = mgr.resolve_group_gids("u").await.unwrap();
         // Primary gid first, then the joined instance gids — the exact set the
         // launcher hands to setgroups (drops root's groups).
@@ -447,14 +457,21 @@ mod tests {
             gid: 14952,
             active: true,
         });
-        mgr.ensure_group_membership("u", 60001, "inst_a").await.unwrap();
-        mgr.ensure_group_membership("u", 60002, "inst_b").await.unwrap();
+        mgr.ensure_group_membership("u", 60001, "inst_a")
+            .await
+            .unwrap();
+        mgr.ensure_group_membership("u", 60002, "inst_b")
+            .await
+            .unwrap();
         // Revoke ONLY inst_a — inst_b membership (other instance) must survive.
         mgr.revoke_group_membership("u", "inst_a").await.unwrap();
         let m = mgr.memberships_of("u");
         assert_eq!(m.len(), 1, "only the revoked group is removed");
         assert!(m.iter().all(|(_, n)| n != "inst_a"), "inst_a removed");
-        assert!(m.iter().any(|(g, n)| *g == 60002 && n == "inst_b"), "inst_b retained");
+        assert!(
+            m.iter().any(|(g, n)| *g == 60002 && n == "inst_b"),
+            "inst_b retained"
+        );
         // Re-revoking is an idempotent no-op (not an error).
         mgr.revoke_group_membership("u", "inst_a").await.unwrap();
         // The user is still active — per-instance revoke never disables the account.

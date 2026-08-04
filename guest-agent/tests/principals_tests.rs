@@ -236,7 +236,8 @@ async fn reconcile_with_instance_groups_grants_membership_and_isolates_dir() {
     // add the user to the per-instance group BEFORE attempting the dir.
     let m = os.memberships_of("pria_u_104251");
     assert!(
-        m.iter().any(|(g, n)| *g == 60001 && n == "inst_507f1f77bcf86cd799439011"),
+        m.iter()
+            .any(|(g, n)| *g == 60001 && n == "inst_507f1f77bcf86cd799439011"),
         "user must be added to the instance group"
     );
 
@@ -309,7 +310,10 @@ async fn revoke_instance_removes_only_that_group_and_keeps_account() {
 
     // inst_a removed; inst_b (other instance) retained; account still active.
     let m = os.memberships_of("pria_u_104251");
-    assert!(m.iter().all(|(_, n)| n != "inst_a"), "revoked group removed");
+    assert!(
+        m.iter().all(|(_, n)| n != "inst_a"),
+        "revoked group removed"
+    );
     assert!(
         m.iter().any(|(g, n)| *g == 60002 && n == "inst_b"),
         "other instance retained"

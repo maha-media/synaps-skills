@@ -232,8 +232,9 @@ pub async fn start(
     // sockaddr_un.sun_path is limited to 108 bytes. Give the runtime a short,
     // per-UID 0700 directory instead.
     let mut env = req.environment.clone();
-    let runtime_dir = prepare_synaps_runtime_dir(req.uid)
-        .map_err(|e| GuestAgentError::internal(e).with_request_id(rid.clone()))?;
+    let runtime_dir =
+        prepare_synaps_runtime_dir_at(state.config.paths.synaps_runtime_root.as_path(), req.uid)
+            .map_err(|e| GuestAgentError::internal(e).with_request_id(rid.clone()))?;
     env.insert(
         "SYNAPS_RUNTIME_DIR".into(),
         runtime_dir.display().to_string(),
@@ -634,20 +635,14 @@ fn prepare_workspace_dir(dir: &Path, uid: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// Create the short, per-UID socket root used by Synaps RPC.
+/// Prepare the short, per-UID socket root used by Synaps RPC.
 ///
 /// This intentionally is not under EFS or SYNAPS_BASE_DIR: socket paths have a
 /// kernel-imposed 108-byte limit. `/run/user/<uid>` is tmpfs-backed and both it
-/// and its `synaps` child are private to the launching principal.
-fn prepare_synaps_runtime_dir(uid: u32) -> Result<PathBuf, String> {
-    prepare_synaps_runtime_dir_at(Path::new("/run/user"), uid)
-}
-
-/// Prepare a private Synaps runtime directory below `runtime_root`.
-///
-/// Kept separate from [`prepare_synaps_runtime_dir`] so the ownership and
-/// traversal invariant can be regression-tested in a temporary directory rather
-/// than mutating the host's `/run/user` during tests.
+/// and its `synaps` child are private to the launching principal. The root is
+/// passed in (from `paths.synaps_runtime_root`, default `/run/user`) so the
+/// ownership and traversal invariants can be regression-tested in a temp dir
+/// rather than mutating the host during tests.
 fn prepare_synaps_runtime_dir_at(runtime_root: &Path, uid: u32) -> Result<PathBuf, String> {
     use std::io::ErrorKind;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};

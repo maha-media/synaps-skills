@@ -85,10 +85,16 @@ pub trait SessionProcess: Send + Sync {
     async fn cancel(&self) -> Result<(), LaunchError>;
     async fn close(&self, grace_ms: u64) -> Result<(), LaunchError>;
     fn status(&self) -> SessionStatus;
-    /// Take the child's stdout stream exactly once, for the usage-relay reader
+    /// Take the child's output stream exactly once, for the usage-relay reader
     /// task (spec §5.5 / HS-U6). Returns `None` when unavailable — already taken,
-    /// or a non-process backend (fake / non-unix). Default: `None`.
-    fn take_stdout(&self) -> Option<tokio::process::ChildStdout> {
+    /// or a backend with no output channel. Default: `None`.
+    ///
+    /// Typed as an opaque `AsyncRead` rather than `tokio::process::ChildStdout`
+    /// because the relay only ever reads lines from it. Keeping the concrete
+    /// process type here made readiness untestable: a fake process cannot
+    /// manufacture a `ChildStdout` without spawning a real OS process, so every
+    /// fake-launcher test of `/sessions/start` failed the ready handshake.
+    fn take_stdout(&self) -> Option<Box<dyn tokio::io::AsyncRead + Send + Unpin>> {
         None
     }
     /// Await the child process's natural exit. Used by the zombie reaper task
@@ -239,8 +245,8 @@ pub fn tag_agent_end_usage(raw_event: &Value, identity: &UsageIdentity) -> Optio
 /// are ignored. The guest agent owns trusted attribution: SynapsCLI core only
 /// emits raw token counts, and [`tag_agent_end_usage`] stamps the
 /// account/vm/user/session identity the core cannot know.
-pub async fn relay_agent_end_usage(
-    stdout: tokio::process::ChildStdout,
+pub async fn relay_agent_end_usage<R: tokio::io::AsyncRead + Unpin + Send>(
+    stdout: R,
     identity: UsageIdentity,
     pria: std::sync::Arc<dyn crate::pria_client::PriaCallbackClient>,
     ready_tx: Option<tokio::sync::oneshot::Sender<RpcReadyReceipt>>,
@@ -549,8 +555,12 @@ mod real {
             self.pid
         }
 
-        fn take_stdout(&self) -> Option<tokio::process::ChildStdout> {
-            self.stdout.lock().unwrap().take()
+        fn take_stdout(&self) -> Option<Box<dyn tokio::io::AsyncRead + Send + Unpin>> {
+            self.stdout
+                .lock()
+                .unwrap()
+                .take()
+                .map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Send + Unpin>)
         }
 
         async fn send(&self, message: &str) -> Result<(), LaunchError> {
@@ -631,25 +641,83 @@ mod real {
 // ── test fake ────────────────────────────────────────────────────────────────
 
 #[cfg(any(test, feature = "test-fakes"))]
-pub use fake::{FakeLauncher, FakeProcess};
+pub use fake::{FakeLauncher, FakeProcess, FakeStdout, READY_FRAME};
 
 #[cfg(any(test, feature = "test-fakes"))]
 mod fake {
     use super::*;
     use std::sync::Mutex;
 
+    /// What a [`FakeProcess`] hands to the usage relay.
+    #[derive(Clone, Debug)]
+    pub enum FakeStdout {
+        /// Emit exactly these bytes, then EOF. `Script(String::new())` is a
+        /// child that closed stdout without ever speaking.
+        Script(String),
+        /// Hold stdout open and emit nothing, forever.
+        Silent,
+    }
+
+    /// The canonical first frame a healthy `synaps rpc` emits. Fakes default to
+    /// this so existing tests exercise the happy path unchanged.
+    pub const READY_FRAME: &str =
+        r#"{"type":"ready","model":"claude-sonnet-4-6","protocol_version":1}"#;
+
     /// Records launches and returns a controllable fake process.
-    #[derive(Default)]
+    ///
+    /// `stdout_script` is the byte stream the produced [`FakeProcess`] hands to
+    /// the usage relay. It defaults to a valid ready frame; tests override it to
+    /// drive the readiness failure paths (malformed frame, wrong first frame,
+    /// EOF before ready, or silence until timeout).
     pub struct FakeLauncher {
         pub launches: Mutex<Vec<LaunchSpec>>,
         pub fail: Mutex<bool>,
         pub next_pid: Mutex<u32>,
+        pub stdout_script: Mutex<Option<FakeStdout>>,
+    }
+
+    impl Default for FakeLauncher {
+        fn default() -> Self {
+            Self {
+                launches: Mutex::new(Vec::new()),
+                fail: Mutex::new(false),
+                next_pid: Mutex::new(0),
+                stdout_script: Mutex::new(Some(FakeStdout::Script(format!("{READY_FRAME}\n")))),
+            }
+        }
     }
 
     impl FakeLauncher {
         pub fn failing() -> Self {
             Self {
                 fail: Mutex::new(true),
+                ..Default::default()
+            }
+        }
+
+        /// Emit exactly these bytes on the launched child's stdout, then EOF.
+        pub fn with_stdout(script: impl Into<String>) -> Self {
+            Self {
+                stdout_script: Mutex::new(Some(FakeStdout::Script(script.into()))),
+                ..Default::default()
+            }
+        }
+
+        /// A child that holds stdout open and never speaks — drives the
+        /// readiness TIMEOUT path (distinct from exiting, and from having no
+        /// stdout at all).
+        pub fn silent() -> Self {
+            Self {
+                stdout_script: Mutex::new(Some(FakeStdout::Silent)),
+                ..Default::default()
+            }
+        }
+
+        /// A child with no stdout channel whatsoever — drives the
+        /// "cannot verify readiness" guard.
+        pub fn no_stdout() -> Self {
+            Self {
+                stdout_script: Mutex::new(None),
                 ..Default::default()
             }
         }
@@ -668,9 +736,10 @@ mod fake {
                 return Err(LaunchError("synthetic launch failure".into()));
             }
             self.launches.lock().unwrap().push(spec.clone());
+            let script = self.stdout_script.lock().unwrap().clone();
             let mut pid = self.next_pid.lock().unwrap();
             *pid = if *pid == 0 { 12345 } else { *pid + 1 };
-            Ok(std::sync::Arc::new(FakeProcess::new(*pid)))
+            Ok(std::sync::Arc::new(FakeProcess::with_stdout(*pid, script)))
         }
     }
 
@@ -678,28 +747,39 @@ mod fake {
         pid: u32,
         pub sent: Mutex<Vec<String>>,
         status: Mutex<SessionStatus>,
-        /// Sender half: drop it (or call `trigger_exit()`) to signal exit.
-        exit_tx: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-        /// Receiver half: `wait_for_exit()` awaits this.
-        exit_rx: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+        /// Exit signal. A `watch` (not a oneshot) so `wait_for_exit()` is
+        /// IDEMPOTENT, exactly like `real::ChildProcess`. With a oneshot the
+        /// receiver was consumed by the first caller and every later caller
+        /// returned instantly — so the start handler's smoke-check would take
+        /// it and the zombie reaper would then conclude a live child had died
+        /// and evict the session (close/send later 404'd on a running process).
+        exit_tx: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
+        exit_rx: tokio::sync::watch::Receiver<bool>,
+        /// What the relay will read from this child.
+        stdout: Mutex<Option<FakeStdout>>,
     }
 
     impl FakeProcess {
         pub fn new(pid: u32) -> Self {
-            let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+            Self::with_stdout(pid, Some(FakeStdout::Script(format!("{READY_FRAME}\n"))))
+        }
+
+        pub fn with_stdout(pid: u32, stdout: Option<FakeStdout>) -> Self {
+            let (tx, rx) = tokio::sync::watch::channel(false);
             Self {
                 pid,
                 sent: Mutex::new(Vec::new()),
                 status: Mutex::new(SessionStatus::Running),
                 exit_tx: Mutex::new(Some(tx)),
-                exit_rx: tokio::sync::Mutex::new(Some(rx)),
+                exit_rx: rx,
+                stdout: Mutex::new(stdout),
             }
         }
 
         /// Fire the exit signal (simulates child process death).
         pub fn trigger_exit(&self) {
             if let Some(tx) = self.exit_tx.lock().unwrap().take() {
-                let _ = tx.send(());
+                let _ = tx.send(true);
             }
         }
     }
@@ -709,6 +789,22 @@ mod fake {
         fn pid(&self) -> u32 {
             self.pid
         }
+
+        fn take_stdout(&self) -> Option<Box<dyn tokio::io::AsyncRead + Send + Unpin>> {
+            match self.stdout.lock().unwrap().take()? {
+                // Frames, then EOF — the normal shape.
+                FakeStdout::Script(text) => Some(Box::new(std::io::Cursor::new(text.into_bytes()))),
+                // Alive but saying nothing. A cursor would hit EOF immediately
+                // and look like a dead child; a duplex whose writer is held
+                // open pends forever, which is what a silent process does.
+                FakeStdout::Silent => {
+                    let (reader, writer) = tokio::io::duplex(64);
+                    std::mem::forget(writer);
+                    Some(Box::new(reader))
+                }
+            }
+        }
+
         async fn send(&self, message: &str) -> Result<(), LaunchError> {
             self.sent.lock().unwrap().push(message.to_string());
             Ok(())
@@ -729,13 +825,10 @@ mod fake {
         }
 
         async fn wait_for_exit(&self) {
-            // Take the oneshot receiver and await it. A dropped sender
-            // (trigger_exit or process drop) resolves immediately.
-            let rx = self.exit_rx.lock().await.take();
-            if let Some(rx) = rx {
-                let _ = rx.await;
-            }
-            // If already taken (second call), resolve immediately.
+            // Idempotent: every caller gets its own clone of the watch and
+            // waits for the same edge. Mirrors real::ChildProcess.
+            let mut rx = self.exit_rx.clone();
+            let _ = rx.wait_for(|&exited| exited).await;
         }
     }
 }

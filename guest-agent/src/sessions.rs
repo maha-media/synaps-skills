@@ -153,8 +153,15 @@ mod tests {
         store.insert(entry);
 
         // Sanity: session is present and counter is 1.
-        assert!(store.contains("sess_reaper_test"), "session must be in store after insert");
-        assert_eq!(runtime.active_sessions(), 1, "counter must be 1 after insert");
+        assert!(
+            store.contains("sess_reaper_test"),
+            "session must be in store after insert"
+        );
+        assert_eq!(
+            runtime.active_sessions(),
+            1,
+            "counter must be 1 after insert"
+        );
 
         // Spawn the reaper — this is the exact pattern that api/sessions.rs start
         // will use. The reaper waits for the process to exit, then removes it.
@@ -182,8 +189,15 @@ mod tests {
         })
         .await;
 
-        assert!(result.is_ok(), "timed out: reaper did not remove session within 1s");
-        assert_eq!(runtime.active_sessions(), 0, "counter must be 0 after reaper fires");
+        assert!(
+            result.is_ok(),
+            "timed out: reaper did not remove session within 1s"
+        );
+        assert_eq!(
+            runtime.active_sessions(),
+            0,
+            "counter must be 0 after reaper fires"
+        );
     }
 
     /// RED → GREEN test for #212 smoke-check.
@@ -279,7 +293,10 @@ mod tests {
         let store = SessionStore::new(runtime);
         store.insert(make_entry("sess_uid_2", 2002));
         store.remove("sess_uid_2");
-        assert!(store.find_by_uid(2002).is_none(), "must be None after remove");
+        assert!(
+            store.find_by_uid(2002).is_none(),
+            "must be None after remove"
+        );
         // uid_index must no longer hold the entry
         assert!(
             !store.uid_index.lock().unwrap().contains_key(&2002),
@@ -304,5 +321,4 @@ mod tests {
         let idx = store.uid_index.lock().unwrap();
         assert_eq!(idx.get(&2003).map(|s| s.as_str()), Some("sess_uid_3"));
     }
-
 }

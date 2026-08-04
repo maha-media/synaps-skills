@@ -133,13 +133,14 @@ pub fn stage_extensions(
     // SAFETY: valid NUL-terminated path; gid u32::MAX == (gid_t)-1 = unchanged.
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&synaps_base, std::fs::Permissions::from_mode(0o700))
-            .map_err(|e| {
+        std::fs::set_permissions(&synaps_base, std::fs::Permissions::from_mode(0o700)).map_err(
+            |e| {
                 GuestAgentError::internal(format!(
                     "failed to set mode on synaps-base {}: {e}",
                     synaps_base.display()
                 ))
-            })?;
+            },
+        )?;
         let c_path =
             std::ffi::CString::new(synaps_base.as_os_str().as_encoded_bytes()).map_err(|e| {
                 GuestAgentError::internal(format!("synaps-base path contains NUL byte: {e}"))

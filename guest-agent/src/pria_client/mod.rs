@@ -203,9 +203,11 @@ impl PriaCallbackClient for HttpPriaClient {
     }
 
     async fn session_output(&self, session_id: &str, event: &Value) -> Result<(), CallbackError> {
-        let body = serde_json::to_vec(&serde_json::json!({ "session_id": session_id, "event": event }))
-            .map_err(|e| CallbackError::Network(e.to_string()))?;
-        self.post_signed(SESSION_OUTPUT_PATH, &body, Some(session_id)).await?;
+        let body =
+            serde_json::to_vec(&serde_json::json!({ "session_id": session_id, "event": event }))
+                .map_err(|e| CallbackError::Network(e.to_string()))?;
+        self.post_signed(SESSION_OUTPUT_PATH, &body, Some(session_id))
+            .await?;
         Ok(())
     }
 
