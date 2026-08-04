@@ -329,6 +329,11 @@ pub async fn start(
             Some(ready_tx),
         ));
     } else {
+        // We launched a child but cannot observe its readiness handshake. Kill
+        // it rather than leaking an unsupervised synaps process: every other
+        // failure path below reaps the child, and this one must not be the
+        // exception that leaves an orphan holding the session's uid.
+        let _ = process.close(0).await;
         return Err(GuestAgentError::new(
             ErrorCode::SynapsLaunchFailed,
             "synaps stdout unavailable; cannot verify RPC readiness",
