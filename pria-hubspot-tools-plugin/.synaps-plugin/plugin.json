@@ -1,0 +1,20 @@
+{
+  "name": "pria-hubspot-tools",
+  "version": "0.1.0",
+  "description": "Read-only HubSpot CRM access for Pria agents through the Capability Gateway: search, list, get, pipelines and owners. The HubSpot credential is applied server-side and never enters the agent VM.",
+  "author": { "name": "Maha Media" },
+  "license": "MIT",
+  "category": "tools",
+  "compatibility": { "synaps": ">=0.7.0", "extension_protocol": "1" },
+  "extension": {
+    "protocol_version": 1,
+    "runtime": "process",
+    "command": "python3",
+    "args": ["main.py"],
+    "permissions": ["tools.register"],
+    "config": [
+      { "key": "pria_api_base", "type": "string", "required": false, "default": "https://pria.praxislxp.com" },
+      { "key": "pria_agent_tool_token", "type": "string", "required": false, "secret_env": "PRIA_AGENT_TOOL_TOKEN" }
+    ]
+  }
+}
