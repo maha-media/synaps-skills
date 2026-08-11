@@ -26,10 +26,7 @@ pub fn write_system_prompt(
     if bytes.len() > MAX_PROMPT_BYTES {
         return Err(GuestAgentError::new(
             ErrorCode::InvalidRequest,
-            format!(
-                "system_prompt exceeds 64 KiB limit ({} bytes)",
-                bytes.len()
-            ),
+            format!("system_prompt exceeds 64 KiB limit ({} bytes)", bytes.len()),
         ));
     }
 

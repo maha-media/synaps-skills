@@ -55,6 +55,19 @@ pub struct PathsConfig {
     pub run_root: PathBuf,
     pub policy_dir: PathBuf,
     pub audit_spool_dir: PathBuf,
+    /// Root of the short, per-UID socket dir handed to Synaps RPC.
+    ///
+    /// Defaults to `/run/user`, which is what production uses and what the
+    /// 108-byte AF_UNIX path limit demands. It is overridable ONLY so tests can
+    /// exercise `/sessions/start` against a temp dir: chmod/chown on the real
+    /// `/run/user` needs root, which made the whole start handler — including
+    /// the RPC readiness handshake — unreachable in CI.
+    #[serde(default = "default_synaps_runtime_root")]
+    pub synaps_runtime_root: PathBuf,
+}
+
+fn default_synaps_runtime_root() -> PathBuf {
+    PathBuf::from("/run/user")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

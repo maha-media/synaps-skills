@@ -15,7 +15,7 @@ use crate::paths::ensure_under;
 use crate::pria_client::{kinds, AuditEventBuilder};
 use crate::sessions::SessionEntry;
 use crate::synaps::launcher::LaunchSpec;
-use crate::synaps::launcher::{relay_agent_end_usage, UsageIdentity};
+use crate::synaps::launcher::{relay_agent_end_usage, RpcReadyReceipt, UsageIdentity};
 use crate::synaps::session_context::{now_timestamps, write_context, SessionContext};
 
 #[derive(Debug, Deserialize)]
@@ -78,6 +78,12 @@ pub struct StartSessionResponse {
     pub pid: u32,
     pub context_path: String,
     pub started_at: String,
+    /// Synaps emitted a validated RPC-ready frame before this response.
+    pub ready: bool,
+    /// UTC receipt time assigned by the guest after it validated Synaps RPC Ready.
+    pub ready_at: String,
+    pub ready_model: String,
+    pub ready_protocol_version: u32,
 }
 
 pub async fn start(
@@ -226,8 +232,9 @@ pub async fn start(
     // sockaddr_un.sun_path is limited to 108 bytes. Give the runtime a short,
     // per-UID 0700 directory instead.
     let mut env = req.environment.clone();
-    let runtime_dir = prepare_synaps_runtime_dir(req.uid)
-        .map_err(|e| GuestAgentError::internal(e).with_request_id(rid.clone()))?;
+    let runtime_dir =
+        prepare_synaps_runtime_dir_at(state.config.paths.synaps_runtime_root.as_path(), req.uid)
+            .map_err(|e| GuestAgentError::internal(e).with_request_id(rid.clone()))?;
     env.insert(
         "SYNAPS_RUNTIME_DIR".into(),
         runtime_dir.display().to_string(),
@@ -304,6 +311,7 @@ pub async fn start(
     // billable `agent_end` frame into Pria's signed usage callback (spec §5.5,
     // HS-U6). The guest agent stamps trusted account/vm/user/session identity
     // that SynapsCLI core cannot know.
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<RpcReadyReceipt>();
     if let Some(stdout) = process.take_stdout() {
         let identity = UsageIdentity {
             account_id: req.account_id.clone(),
@@ -315,7 +323,23 @@ pub async fn start(
             ephemeral_task_id: None,
         };
         let pria = state.pria.clone();
-        tokio::spawn(relay_agent_end_usage(stdout, identity, pria));
+        tokio::spawn(relay_agent_end_usage(
+            stdout,
+            identity,
+            pria,
+            Some(ready_tx),
+        ));
+    } else {
+        // We launched a child but cannot observe its readiness handshake. Kill
+        // it rather than leaking an unsupervised synaps process: every other
+        // failure path below reaps the child, and this one must not be the
+        // exception that leaves an orphan holding the session's uid.
+        let _ = process.close(0).await;
+        return Err(GuestAgentError::new(
+            ErrorCode::SynapsLaunchFailed,
+            "synaps stdout unavailable; cannot verify RPC readiness",
+        )
+        .with_request_id(rid));
     }
 
     // #212 smoke-check: if synaps rpc crashes on startup (bad env, missing HOME,
@@ -345,7 +369,28 @@ pub async fn start(
         )
         .with_request_id(rid));
     }
-    // Timeout elapsed → child survived → proceed.
+    // Timeout elapsed → child survived. Now require the runtime's own
+    // protocol-level ready handshake. This makes `/sessions/start` truthful for
+    // all presets: a live PID alone never proves Synaps can accept a prompt.
+    let ready = match tokio::time::timeout(std::time::Duration::from_secs(15), ready_rx).await {
+        Ok(Ok(receipt)) => receipt,
+        Ok(Err(_)) => {
+            let _ = process.close(0).await;
+            return Err(GuestAgentError::new(
+                ErrorCode::SynapsLaunchFailed,
+                "synaps exited before emitting its RPC ready frame",
+            )
+            .with_request_id(rid));
+        }
+        Err(_) => {
+            let _ = process.close(0).await;
+            return Err(GuestAgentError::new(
+                ErrorCode::SynapsLaunchFailed,
+                "synaps did not emit its RPC ready frame before startup timeout",
+            )
+            .with_request_id(rid));
+        }
+    };
 
     // Clone the process Arc BEFORE moving it into SessionEntry so the reaper
     // task can await process exit without holding the session table lock.
@@ -390,13 +435,18 @@ pub async fn start(
         .build();
     let _ = state.pria.audit(vec![ev]).await;
 
+    let ready_at = chrono::Utc::now().to_rfc3339();
     Ok(Json(StartSessionResponse {
         request_id: req.request_id,
         session_id: req.session_id,
-        status: "starting".to_string(),
+        status: "ready".to_string(),
         pid,
         context_path,
         started_at: created,
+        ready: true,
+        ready_at,
+        ready_model: ready.model,
+        ready_protocol_version: ready.protocol_version,
     }))
 }
 
@@ -585,20 +635,14 @@ fn prepare_workspace_dir(dir: &Path, uid: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// Create the short, per-UID socket root used by Synaps RPC.
+/// Prepare the short, per-UID socket root used by Synaps RPC.
 ///
 /// This intentionally is not under EFS or SYNAPS_BASE_DIR: socket paths have a
 /// kernel-imposed 108-byte limit. `/run/user/<uid>` is tmpfs-backed and both it
-/// and its `synaps` child are private to the launching principal.
-fn prepare_synaps_runtime_dir(uid: u32) -> Result<PathBuf, String> {
-    prepare_synaps_runtime_dir_at(Path::new("/run/user"), uid)
-}
-
-/// Prepare a private Synaps runtime directory below `runtime_root`.
-///
-/// Kept separate from [`prepare_synaps_runtime_dir`] so the ownership and
-/// traversal invariant can be regression-tested in a temporary directory rather
-/// than mutating the host's `/run/user` during tests.
+/// and its `synaps` child are private to the launching principal. The root is
+/// passed in (from `paths.synaps_runtime_root`, default `/run/user`) so the
+/// ownership and traversal invariants can be regression-tested in a temp dir
+/// rather than mutating the host during tests.
 fn prepare_synaps_runtime_dir_at(runtime_root: &Path, uid: u32) -> Result<PathBuf, String> {
     use std::io::ErrorKind;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};

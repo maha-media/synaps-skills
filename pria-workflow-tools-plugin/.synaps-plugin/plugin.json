@@ -1,0 +1,20 @@
+{
+  "name": "pria-workflow-tools",
+  "version": "0.1.0",
+  "description": "Workflow control for Pria agents: list, inspect, create, update, delete and run saved agent jobs through the Capability Gateway.",
+  "author": { "name": "Maha Media" },
+  "license": "MIT",
+  "category": "tools",
+  "compatibility": { "synaps": ">=0.7.0", "extension_protocol": "1" },
+  "extension": {
+    "protocol_version": 1,
+    "runtime": "process",
+    "command": "python3",
+    "args": ["main.py"],
+    "permissions": ["tools.register"],
+    "config": [
+      { "key": "pria_api_base", "type": "string", "required": false, "default": "https://pria.praxislxp.com" },
+      { "key": "pria_agent_tool_token", "type": "string", "required": false, "secret_env": "PRIA_AGENT_TOOL_TOKEN" }
+    ]
+  }
+}

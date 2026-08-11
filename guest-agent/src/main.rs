@@ -63,23 +63,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         unit_generator = if container_mode { "container-naming" } else { "systemd-file" },
         "selected substrate backends"
     );
-    let fsmon: std::sync::Arc<dyn pria_guest_agent::fsmon::client::FsmonControl> =
-        if container_mode {
-            // Fargate cannot grant fanotify's CAP_SYS_ADMIN. Keep the policy
-            // contract alive but report explicit degraded enforcement.
-            std::sync::Arc::new(pria_guest_agent::fsmon::client::NoopFsmonControl)
-        } else {
-            std::sync::Arc::new(
-                pria_guest_agent::fsmon::client::UdsFsmonControl::new(config.fsmon.socket.clone())
-                    .with_daemon(
-                        std::path::PathBuf::from("/usr/local/sbin/synaps_fsmon"),
-                        config.fsmon.forward_socket.clone(),
-                    )
-                    // Narrow the fanotify mark to the account EFS mount instead
-                    // of the whole root filesystem.
-                    .with_mount(config.paths.efs_root.clone()),
-            )
-        };
+    let fsmon: std::sync::Arc<dyn pria_guest_agent::fsmon::client::FsmonControl> = if container_mode
+    {
+        // Fargate cannot grant fanotify's CAP_SYS_ADMIN. Keep the policy
+        // contract alive but report explicit degraded enforcement.
+        std::sync::Arc::new(pria_guest_agent::fsmon::client::NoopFsmonControl)
+    } else {
+        std::sync::Arc::new(
+            pria_guest_agent::fsmon::client::UdsFsmonControl::new(config.fsmon.socket.clone())
+                .with_daemon(
+                    std::path::PathBuf::from("/usr/local/sbin/synaps_fsmon"),
+                    config.fsmon.forward_socket.clone(),
+                )
+                // Narrow the fanotify mark to the account EFS mount instead
+                // of the whole root filesystem.
+                .with_mount(config.paths.efs_root.clone()),
+        )
+    };
     // Desktop lifecycle is systemd-backed on VMs and child-process-backed in
     // Fargate. Both implement the frozen SystemctlBackend/UnitGenerator seams.
     let (desktop_backend, unit_generator): (

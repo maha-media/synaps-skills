@@ -203,11 +203,9 @@ impl OsUserManager for LinuxUserManager {
                             // Ensure a login shell + unlocked password on adopt
                             // (the holder may have been left disabled). Symmetric
                             // with disable_user().
-                            let (ok, out) = Self::run(
-                                "usermod",
-                                &["-U", "-s", LOGIN_SHELL, &spec.username],
-                            )
-                            .await?;
+                            let (ok, out) =
+                                Self::run("usermod", &["-U", "-s", LOGIN_SHELL, &spec.username])
+                                    .await?;
                             if !ok {
                                 return Err(OsError(format!("usermod -U failed: {out}")));
                             }
@@ -419,7 +417,9 @@ mod tests {
     #[tokio::test]
     async fn ensure_user_disable_enable_round_trip() {
         if std::env::var("PRIA_GA_ROOT_TESTS").ok().as_deref() != Some("1") {
-            eprintln!("skipping ensure_user_disable_enable_round_trip (set PRIA_GA_ROOT_TESTS=1 as root)");
+            eprintln!(
+                "skipping ensure_user_disable_enable_round_trip (set PRIA_GA_ROOT_TESTS=1 as root)"
+            );
             return;
         }
         let mgr = LinuxUserManager::new();
@@ -438,18 +438,30 @@ mod tests {
             state: PrincipalState::Active,
             home_dir: None,
         };
-        let disabled_spec = UserSpec { state: PrincipalState::Disabled, ..active_spec.clone() };
+        let disabled_spec = UserSpec {
+            state: PrincipalState::Disabled,
+            ..active_spec.clone()
+        };
 
         // create → active
-        assert_eq!(mgr.ensure_user(&active_spec).await.unwrap(), PrincipalAction::Created);
+        assert_eq!(
+            mgr.ensure_user(&active_spec).await.unwrap(),
+            PrincipalAction::Created
+        );
         assert!(mgr.lookup(username).await.unwrap().unwrap().active);
 
         // disable → inactive (nologin shell)
-        assert_eq!(mgr.ensure_user(&disabled_spec).await.unwrap(), PrincipalAction::Disabled);
+        assert_eq!(
+            mgr.ensure_user(&disabled_spec).await.unwrap(),
+            PrincipalAction::Disabled
+        );
         assert!(!mgr.lookup(username).await.unwrap().unwrap().active);
 
         // re-enable → active again (shell restored — the regression this guards)
-        assert_eq!(mgr.ensure_user(&active_spec).await.unwrap(), PrincipalAction::Updated);
+        assert_eq!(
+            mgr.ensure_user(&active_spec).await.unwrap(),
+            PrincipalAction::Updated
+        );
         assert!(
             mgr.lookup(username).await.unwrap().unwrap().active,
             "re-enable must restore a login shell so the principal is active"
@@ -469,7 +481,9 @@ mod tests {
     #[tokio::test]
     async fn ensure_user_adopts_existing_uid() {
         if std::env::var("PRIA_GA_ROOT_TESTS").ok().as_deref() != Some("1") {
-            eprintln!("skipping ensure_user_adopts_existing_uid (set PRIA_GA_ROOT_TESTS=1 as root)");
+            eprintln!(
+                "skipping ensure_user_adopts_existing_uid (set PRIA_GA_ROOT_TESTS=1 as root)"
+            );
             return;
         }
         let mgr = LinuxUserManager::new();
@@ -493,23 +507,38 @@ mod tests {
             home_dir: None,
         };
         // create the original login at the uid
-        assert_eq!(mgr.ensure_user(&base).await.unwrap(), PrincipalAction::Created);
-        assert_eq!(mgr.lookup_by_uid(uid).await.unwrap().unwrap().username, old_name);
+        assert_eq!(
+            mgr.ensure_user(&base).await.unwrap(),
+            PrincipalAction::Created
+        );
+        assert_eq!(
+            mgr.lookup_by_uid(uid).await.unwrap().unwrap().username,
+            old_name
+        );
 
         // reconcile arrives with the SAME uid but a DRIFTED username
-        let drifted = UserSpec { username: new_name.to_string(), ..base.clone() };
+        let drifted = UserSpec {
+            username: new_name.to_string(),
+            ..base.clone()
+        };
         assert_eq!(
             mgr.ensure_user(&drifted).await.unwrap(),
             PrincipalAction::Adopted,
             "uid collision under a new name must adopt (rename), not fail"
         );
         // the uid is now owned by the new name; the old name is gone
-        assert_eq!(mgr.lookup_by_uid(uid).await.unwrap().unwrap().username, new_name);
+        assert_eq!(
+            mgr.lookup_by_uid(uid).await.unwrap().unwrap().username,
+            new_name
+        );
         assert!(mgr.lookup(old_name).await.unwrap().is_none());
         assert!(mgr.lookup(new_name).await.unwrap().unwrap().active);
 
         // re-running with the canonical name is now idempotent
-        assert_eq!(mgr.ensure_user(&drifted).await.unwrap(), PrincipalAction::Unchanged);
+        assert_eq!(
+            mgr.ensure_user(&drifted).await.unwrap(),
+            PrincipalAction::Unchanged
+        );
 
         // cleanup
         let _ = LinuxUserManager::run("userdel", &["-r", new_name]).await;
