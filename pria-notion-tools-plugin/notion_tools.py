@@ -23,6 +23,9 @@ TOOL_SUBJECTS = {
     "notion_search": "NOTION_SEARCH",
     "notion_get_page": "NOTION_GET_PAGE",
     "notion_get_blocks": "NOTION_GET_BLOCKS",
+    "notion_append_blocks": "NOTION_APPEND_BLOCKS",
+    "notion_create_page": "NOTION_CREATE_PAGE",
+    "notion_update_page": "NOTION_UPDATE_PAGE",
 }
 
 # Public input key -> gateway arg key. The Pria handler validates a Notion UUID
@@ -32,6 +35,8 @@ TOOL_SUBJECTS = {
 ARG_REMAP = {
     "notion_get_page": {"page_id": "id"},
     "notion_get_blocks": {"block_id": "id"},
+    "notion_append_blocks": {"page_id": "id"},
+    "notion_update_page": {"page_id": "id"},
 }
 
 TOOL_SPECS = [
@@ -80,6 +85,56 @@ TOOL_SPECS = [
                 "page_size": {"type": "integer", "description": "Max child blocks (1-100, default 100)."},
             },
             "required": ["block_id"],
+        },
+    },
+    {
+        "name": "notion_append_blocks",
+        "description": ("Append content blocks to a Notion page (the way to ADD text to a page). "
+                        "DRY-RUN FIRST: call it without dry_run (it defaults to a preview) and it "
+                        "returns the EXACT change it WOULD make without writing anything; show that "
+                        "to the user and get explicit approval, THEN call again with dry_run=false to "
+                        "actually write. Get the page id from notion_search."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "page_id": {"type": "string", "description": "Notion page or block id to append under (UUID)."},
+                "blocks": {"type": "array", "description": "Blocks to append, in order.", "items": {"type": "object", "properties": {"type": {"type": "string", "enum": ["paragraph","heading_1","heading_2","heading_3","bulleted_list_item","numbered_list_item","to_do","quote"]}, "text": {"type": "string"}}, "required": ["type","text"]}},
+                "dry_run": {"type": "boolean", "description": "Defaults true (preview only). Pass false to actually write, only after the user approves the previewed change."},
+            },
+            "required": ["page_id", "blocks"],
+        },
+    },
+    {
+        "name": "notion_create_page",
+        "description": ("Create ONE new page under an existing parent page. DRY-RUN FIRST: defaults to "
+                        "a preview that returns the exact payload without creating anything; show it, "
+                        "get approval, then call with dry_run=false. Get the parent page id from "
+                        "notion_search."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "parent_id": {"type": "string", "description": "Id of the parent PAGE the new page goes under (UUID)."},
+                "title": {"type": "string", "description": "Title of the new page."},
+                "blocks": {"type": "array", "description": "Optional initial content blocks.", "items": {"type": "object", "properties": {"type": {"type": "string", "enum": ["paragraph","heading_1","heading_2","heading_3","bulleted_list_item","numbered_list_item","to_do","quote"]}, "text": {"type": "string"}}, "required": ["type","text"]}},
+                "dry_run": {"type": "boolean", "description": "Defaults true (preview only). Pass false to actually create, only after the user approves."},
+            },
+            "required": ["parent_id", "title"],
+        },
+    },
+    {
+        "name": "notion_update_page",
+        "description": ("Update a page's TITLE. DRY-RUN FIRST: defaults to a preview returning the exact "
+                        "change without applying it; the real apply also captures the previous title as "
+                        "a before-image. Show the preview, get approval, then call with dry_run=false. "
+                        "Get the page id from notion_search."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "page_id": {"type": "string", "description": "Id of the page to update (UUID)."},
+                "title": {"type": "string", "description": "New page title."},
+                "dry_run": {"type": "boolean", "description": "Defaults true (preview only). Pass false to actually update, only after the user approves."},
+            },
+            "required": ["page_id", "title"],
         },
     },
 ]
