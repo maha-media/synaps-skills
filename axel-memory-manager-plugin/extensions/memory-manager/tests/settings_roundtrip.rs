@@ -93,6 +93,8 @@ fn min_consolidate_len_live_reload_lets_short_message_through() {
         .stderr(Stdio::inherit())
         .env("AXEL_BRAIN", &brain_path)
         .env("SYNAPS_BASE_DIR", synaps_base.path())
+        // Auto-capture requires a trusted project scope (T33).
+        .env("AXEL_PROJECT_ROOT", tmp_brain.path())
         .spawn()
         .expect("spawn memory-manager");
 

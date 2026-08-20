@@ -1,6 +1,6 @@
 [package]
 name = "pria-guest-agent"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Pria in-VM trusted supervisor / control endpoint for Account Agentic VMs. Narrow typed HTTP API (/guest/v1/*), HMAC-authenticated, drives Linux principals, Synaps sessions, policy + fsmon, and signed Pria callbacks. Never modifies SynapsCLI core."
 license = "MIT"

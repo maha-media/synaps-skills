@@ -115,6 +115,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .with_unit_generator(unit_generator),
     );
+    let fleet = Arc::new(pria_guest_agent::fleet::FleetBindings::new(
+        pria.clone(),
+        std::time::Duration::from_secs(config.fleet.heartbeat_interval_seconds.max(1)),
+    ));
     let state = AppState {
         config: Arc::new(config),
         hmac: Arc::new(hmac),
@@ -126,6 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         sessions,
         fsmon,
         desktops,
+        fleet,
     };
 
     let _heartbeat = pria_guest_agent::supervisor::spawn_heartbeat_loop(state.clone());

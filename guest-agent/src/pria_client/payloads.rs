@@ -76,6 +76,19 @@ pub struct SessionEventPayload {
     pub timestamp: String,
 }
 
+/// Fleet callback payload (W3.7-G, guest half of F6) — POSTed to
+/// `/internal/agentic-vm/fleet-callback`, mirroring [`SessionEventPayload`].
+/// The session identity rides the signed request headers (`post_signed`'s
+/// `session_id`), not the body.
+#[derive(Debug, Clone, Serialize)]
+pub struct FleetCallbackPayload {
+    pub handle_id: String,
+    pub generation: u64,
+    /// `ack` / `heartbeat` / `result`.
+    pub kind: String,
+    pub payload: Value,
+}
+
 /// Credential request payload (spec §7.4).
 #[derive(Debug, Clone, Serialize)]
 pub struct CredentialRequestPayload {

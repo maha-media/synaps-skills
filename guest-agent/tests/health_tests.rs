@@ -66,6 +66,10 @@ async fn health_returns_section_6_1_payload() {
         sessions,
         fsmon: Arc::new(pria_guest_agent::fsmon::client::FakeFsmonControl::healthy()),
         desktops: pria_guest_agent::test_support::fake_desktop_store(),
+        fleet: Arc::new(pria_guest_agent::fleet::FleetBindings::new(
+            Arc::new(pria_guest_agent::pria_client::fake::FakePriaClient::default()),
+            std::time::Duration::from_secs(30),
+        )),
     };
 
     let resp = build_router(state)

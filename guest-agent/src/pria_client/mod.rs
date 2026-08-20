@@ -16,8 +16,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 pub use payloads::{
-    kinds, AuditEventBuilder, CredentialRequestPayload, HeartbeatPayload, HeartbeatVnc,
-    SessionEventPayload, UsageEvent, UsagePayload, VncSessionEntry,
+    kinds, AuditEventBuilder, CredentialRequestPayload, FleetCallbackPayload, HeartbeatPayload,
+    HeartbeatVnc, SessionEventPayload, UsageEvent, UsagePayload, VncSessionEntry,
 };
 pub use signer::OutboundSigner;
 
@@ -50,6 +50,17 @@ pub trait PriaCallbackClient: Send + Sync {
     /// the hot path for the HTTP impl).
     async fn audit(&self, events: Vec<Value>) -> Result<(), CallbackError>;
     async fn session_event(&self, p: &SessionEventPayload) -> Result<(), CallbackError>;
+    /// Report a fleet task lifecycle event (W3.7-G, guest half of F6). Signed +
+    /// POSTed to `/internal/agentic-vm/fleet-callback`, mirroring
+    /// `session_event`; `kind` is `ack` / `heartbeat` / `result`.
+    async fn fleet_callback(
+        &self,
+        session_id: &str,
+        handle_id: &str,
+        generation: u64,
+        kind: &str,
+        payload: Value,
+    ) -> Result<(), CallbackError>;
     /// Forward a batch of raw-usage events (spec §6.2). Signed + POSTed to
     /// `/internal/agentic-vm/usage`; spools on failure (never crashes the hot
     /// path for the HTTP impl). This is the RPC-boundary fallback/cross-check
@@ -71,6 +82,7 @@ pub trait PriaCallbackClient: Send + Sync {
 const HEARTBEAT_PATH: &str = "/internal/agentic-vm/heartbeat";
 const AUDIT_PATH: &str = "/internal/agentic-vm/audit";
 const SESSION_EVENT_PATH: &str = "/internal/agentic-vm/session-event";
+const FLEET_CALLBACK_PATH: &str = "/internal/agentic-vm/fleet-callback";
 const USAGE_PATH: &str = "/internal/agentic-vm/usage";
 const CREDENTIAL_PATH: &str = "/internal/agentic-vm/credential-request";
 const SESSION_OUTPUT_PATH: &str = "/internal/agentic-vm/session-output";
@@ -211,6 +223,26 @@ impl PriaCallbackClient for HttpPriaClient {
         Ok(())
     }
 
+    async fn fleet_callback(
+        &self,
+        session_id: &str,
+        handle_id: &str,
+        generation: u64,
+        kind: &str,
+        payload: Value,
+    ) -> Result<(), CallbackError> {
+        let p = FleetCallbackPayload {
+            handle_id: handle_id.to_string(),
+            generation,
+            kind: kind.to_string(),
+            payload,
+        };
+        let body = serde_json::to_vec(&p).map_err(|e| CallbackError::Network(e.to_string()))?;
+        self.post_signed(FLEET_CALLBACK_PATH, &body, Some(session_id))
+            .await?;
+        Ok(())
+    }
+
     async fn usage(&self, p: &UsagePayload) -> Result<(), CallbackError> {
         if p.events.is_empty() {
             return Ok(());
@@ -263,6 +295,16 @@ pub mod fake {
         pub usages: Mutex<Vec<UsagePayload>>,
         pub credential_requests: Mutex<Vec<CredentialRequestPayload>>,
         pub credential_response: Mutex<Value>,
+        /// W3.7-G fence recorder (fleet callback protocol, guest half of F6).
+        ///
+        /// Contract: the (not-yet-existing) `PriaCallbackClient::fleet_callback
+        /// (session_id, handle_id, generation, kind, payload)` trait method —
+        /// mirroring `session_event` above — must push one JSON object per call:
+        /// `{"session_id", "handle_id", "generation", "kind", "payload"}`.
+        /// Recorded as `Value` so the fence does not pin a payload struct that
+        /// does not exist yet. Until the trait method lands, nothing writes
+        /// here — that emptiness IS the born-RED for the detection rows.
+        pub fleet_callbacks: Mutex<Vec<Value>>,
     }
 
     #[async_trait]
@@ -277,6 +319,23 @@ pub mod fake {
         }
         async fn session_event(&self, p: &SessionEventPayload) -> Result<(), CallbackError> {
             self.session_events.lock().unwrap().push(p.clone());
+            Ok(())
+        }
+        async fn fleet_callback(
+            &self,
+            session_id: &str,
+            handle_id: &str,
+            generation: u64,
+            kind: &str,
+            payload: Value,
+        ) -> Result<(), CallbackError> {
+            self.fleet_callbacks.lock().unwrap().push(serde_json::json!({
+                "session_id": session_id,
+                "handle_id": handle_id,
+                "generation": generation,
+                "kind": kind,
+                "payload": payload,
+            }));
             Ok(())
         }
         async fn usage(&self, p: &UsagePayload) -> Result<(), CallbackError> {

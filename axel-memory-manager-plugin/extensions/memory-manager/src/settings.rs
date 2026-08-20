@@ -47,6 +47,45 @@ pub struct Settings {
     pub gliner_model: GlinerModelVariant,
     /// "off" | "on_complete" | "on_session_end" — when to run enrichment.
     pub enrichment_trigger: EnrichmentTrigger,
+    /// "off" | "on" — inject before_message memory recall (T36: OFF by
+    /// default; explicit opt-in only).
+    pub auto_recall: Toggle,
+    /// "off" | "on" — inject boot context at session start (T36: OFF by
+    /// default; explicit opt-in only).
+    pub boot_injection: Toggle,
+    /// "off" | "on" — allow the local embedding model to be used (T35:
+    /// OFF by default; even when on, the model is never downloaded
+    /// implicitly — only used if already cached).
+    pub embeddings: Toggle,
+    /// Trusted project root written by the host-owned config store (or the
+    /// SYNAPS_PROJECT_ROOT env var from a newer host). Empty = no trusted
+    /// project scope: memory tools fail closed.
+    pub project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Toggle {
+    Off,
+    On,
+}
+
+impl Toggle {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::On => "on",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "off" => Some(Self::Off),
+            "on" => Some(Self::On),
+            _ => None,
+        }
+    }
+    pub fn is_on(self) -> bool {
+        matches!(self, Self::On)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,9 +162,21 @@ impl Default for Settings {
         Self {
             min_consolidate_len: 40,
             consolidate_interval_secs: 0,
-            gliner_enabled: GlinerEnabled::On,
+            // OFF by default (0.2 hardening): the optional local GLiNER
+            // model is explicit opt-in AND explicit download only (`axel
+            // download`). Nothing model-related runs or is fetched
+            // implicitly.
+            gliner_enabled: GlinerEnabled::Off,
             gliner_model: GlinerModelVariant::Small,
-            enrichment_trigger: EnrichmentTrigger::OnComplete,
+            // OFF by default (0.2 hardening): hook-driven enrichment
+            // triggers are legacy compatibility only — the tool-only 0.2
+            // manifest subscribes to no hooks, so they can never fire
+            // unless a legacy eager host is explicitly configured.
+            enrichment_trigger: EnrichmentTrigger::Off,
+            auto_recall: Toggle::Off,
+            boot_injection: Toggle::Off,
+            embeddings: Toggle::Off,
+            project_root: None,
         }
     }
 }
@@ -198,6 +249,32 @@ impl Settings {
         }
     }
 
+    /// Apply host-resolved `initialize` `params.config` values (hardened
+    /// 0.2 path). The Synaps host resolves manifest-declared config —
+    /// including the reserved `host_context: "project_root"` entry — and
+    /// sends it at initialize; this MUST be applied before any project
+    /// scope is resolved. Values are JSON (string/number/bool); each is
+    /// stringified and routed through [`Self::apply_kv`] so the exact
+    /// same validation as the on-disk config file applies. Unknown keys
+    /// are ignored (host tolerance), nested values are skipped.
+    pub fn apply_config_object(&mut self, config: &serde_json::Map<String, serde_json::Value>) {
+        for (key, value) in config {
+            let rendered = match value {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                other => {
+                    eprintln!(
+                        "axel: WARN initialize config key {key:?} has unsupported shape {other}; skipping"
+                    );
+                    continue;
+                }
+            };
+            eprintln!("axel: initialize config applied: {key}");
+            self.apply_kv(key, &rendered);
+        }
+    }
+
     /// Apply one `(key, value)` pair. Public so the dispatch loop can also
     /// route a hypothetical `config.update` JSON-RPC notification through it
     /// (currently unused — the host stub does not emit such notifications).
@@ -249,6 +326,35 @@ impl Settings {
                         self.enrichment_trigger.as_str()
                     ),
                 },
+                "auto_recall" => match Toggle::parse(value) {
+                    Some(v) => self.auto_recall = v,
+                    None => eprintln!(
+                        "axel: WARN auto_recall={value:?} not in [off,on]; keeping {}",
+                        self.auto_recall.as_str()
+                    ),
+                },
+                "boot_injection" => match Toggle::parse(value) {
+                    Some(v) => self.boot_injection = v,
+                    None => eprintln!(
+                        "axel: WARN boot_injection={value:?} not in [off,on]; keeping {}",
+                        self.boot_injection.as_str()
+                    ),
+                },
+                "embeddings" => match Toggle::parse(value) {
+                    Some(v) => self.embeddings = v,
+                    None => eprintln!(
+                        "axel: WARN embeddings={value:?} not in [off,on]; keeping {}",
+                        self.embeddings.as_str()
+                    ),
+                },
+                "project_root" => {
+                    let trimmed = value.trim();
+                    self.project_root = if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    };
+                }
                 _ => {
                     // Unknown keys are tolerated (forward-compat with future
                     // settings written by a newer host). Log at debug verbosity.
@@ -407,9 +513,26 @@ mod tests {
         let s = Settings::default();
         assert_eq!(s.min_consolidate_len, 40);
         assert_eq!(s.consolidate_interval_secs, 0);
-        assert_eq!(s.gliner_enabled, GlinerEnabled::On);
+        // 0.2 hardening: GLiNER + enrichment are OFF by default (optional
+        // local model is explicit opt-in, explicit download only).
+        assert_eq!(s.gliner_enabled, GlinerEnabled::Off);
         assert_eq!(s.gliner_model, GlinerModelVariant::Small);
-        assert_eq!(s.enrichment_trigger, EnrichmentTrigger::OnComplete);
+        assert_eq!(s.enrichment_trigger, EnrichmentTrigger::Off);
+    }
+
+    #[test]
+    fn apply_config_object_applies_initialize_values_with_validation() {
+        let mut s = Settings::default();
+        let config = serde_json::json!({
+            "project_root": "/tmp/some/project",
+            "min_consolidate_len": 25,
+            "gliner_enabled": "bogus",
+            "nested": {"ignored": true}
+        });
+        s.apply_config_object(config.as_object().unwrap());
+        assert_eq!(s.project_root.as_deref(), Some("/tmp/some/project"));
+        assert_eq!(s.min_consolidate_len, 25, "numbers stringify through apply_kv");
+        assert_eq!(s.gliner_enabled, GlinerEnabled::Off, "invalid value keeps default");
     }
 
     #[test]
@@ -424,6 +547,7 @@ mod tests {
     #[test]
     fn apply_toml_str_rejects_invalid_gliner_enabled() {
         let mut s = Settings::default();
+        s.apply_toml_str("gliner_enabled = on\n");
         s.apply_toml_str("gliner_enabled = \"yes\"\n");
         assert_eq!(
             s.gliner_enabled,

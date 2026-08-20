@@ -1,6 +1,6 @@
 [package]
 name = "memory-manager"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 description = "Axel memory manager — Synaps CLI extension (JSON-RPC 2.0 over stdio)"
 license = "MIT"
@@ -19,12 +19,20 @@ notify = "6"
 
 # Upstream Axel — portable agent intelligence (.r8 brain file).
 # https://github.com/maha-media/axel
-axel = { git = "https://github.com/maha-media/axel", branch = "main" }
-axel-memkoshi = { git = "https://github.com/maha-media/axel", branch = "main" }
-velocirag = { git = "https://github.com/maha-media/axel", branch = "main" }
+# Pinned to the exact axel commit carrying the T32–T36 project-memory layer
+# (branch feat/project-memory-t32-t36). Until that commit is pushed to the
+# remote, build with the local worktree patch (see README "Building against
+# a local axel checkout").
+axel = { git = "https://github.com/maha-media/axel", rev = "562e6508f5de0cdc0bbc803b2448aeb7431a6bed" }
+axel-memkoshi = { git = "https://github.com/maha-media/axel", rev = "562e6508f5de0cdc0bbc803b2448aeb7431a6bed" }
+velocirag = { git = "https://github.com/maha-media/axel", rev = "562e6508f5de0cdc0bbc803b2448aeb7431a6bed" }
 ort = { version = "2.0.0-rc.12", features = ["download-binaries"] }
 tokenizers = "0.21"
 ndarray = "0.17"
+# Trusted project-scope derivation (canonical key = sha256 of project root).
+sha2 = "0.10"
+hex = "0.4"
+chrono = "0.4"
 
 [profile.release]
 opt-level = 3

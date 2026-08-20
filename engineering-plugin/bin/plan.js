@@ -289,7 +289,8 @@ async function main(argv) {
       const r = planNew(repoRoot, kind, slug, { title: titleParts.join(" ") || slug });
       console.log("created " + path.relative(repoRoot, r.file));
       // reuse a live repo server; else host in-process (foreground, parent-bound).
-      const o = await planOpen(repoRoot, slug);
+      // Specs route by their kind-qualified id (`<slug>.spec`) — see discovery.
+      const o = await planOpen(repoRoot, kind === "spec" ? slug + ".spec" : slug);
       console.log((o.reused ? "serving (reused): " : "serving: ") + o.url);
       console.log("open:    " + o.openUrl);
       if (o.reused) return;            // a live server already hosts it — exit

@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 use crate::api::AppState;
 use crate::error::{ErrorCode, GuestAgentError};
+use crate::fleet::parse_fleet_directive;
 use crate::hmac::SignedJson;
 use crate::paths::ensure_under;
 use crate::pria_client::{kinds, AuditEventBuilder};
@@ -327,6 +328,7 @@ pub async fn start(
             stdout,
             identity,
             pria,
+            state.fleet.clone(),
             Some(ready_tx),
         ));
     } else {
@@ -334,6 +336,10 @@ pub async fn start(
         // it rather than leaking an unsupervised synaps process: every other
         // failure path below reaps the child, and this one must not be the
         // exception that leaves an orphan holding the session's uid.
+        //
+        // Fleet note: no on_session_closed here — a binding can only be created
+        // by a later /send (set_task sniff), and this path fails the start
+        // before the session ever becomes sendable, so nothing can be bound.
         let _ = process.close(0).await;
         return Err(GuestAgentError::new(
             ErrorCode::SynapsLaunchFailed,
@@ -476,6 +482,14 @@ pub async fn send(
         .sessions
         .process(&session_id)
         .ok_or_else(|| GuestAgentError::new(ErrorCode::SessionNotFound, "session not found"))?;
+    // Fleet detection (W3.7-G): observe the wire text at the choke point. A
+    // valid `fleet <handle> <gen>` line in a set_task message binds + acks; any
+    // other send moves an Acked binding to Running (the task's brief). Either
+    // way the input is forwarded unchanged — detection never blocks or rewrites.
+    match parse_fleet_directive(&req.input) {
+        Some(directive) => state.fleet.bind(&session_id, directive).await,
+        None => state.fleet.mark_running(&session_id),
+    }
     proc.send(&req.input)
         .await
         .map_err(|e| GuestAgentError::new(ErrorCode::SessionNotFound, e.to_string()))?;
@@ -505,6 +519,9 @@ pub async fn cancel(
     proc.cancel()
         .await
         .map_err(|e| GuestAgentError::internal(e.to_string()))?;
+    // Teardown clears any fleet binding: exactly-once session_closed result +
+    // heartbeat abort (review 9 finding 1); silent when unbound.
+    state.fleet.on_session_closed(&session_id).await;
     let ev = AuditEventBuilder::new(kinds::SESSION_CANCELLED)
         .str_field("account_id", state.config.account_id.to_string())
         .str_field("vm_id", state.config.vm_id.to_string())
@@ -541,6 +558,9 @@ pub async fn close(
         .await
         .map_err(|e| GuestAgentError::internal(e.to_string()))?;
     state.sessions.remove(&session_id);
+    // Teardown clears any fleet binding: exactly-once session_closed result +
+    // heartbeat abort (review 9 finding 1); silent when unbound.
+    state.fleet.on_session_closed(&session_id).await;
     let ev = AuditEventBuilder::new(kinds::SESSION_EXITED)
         .str_field("account_id", state.config.account_id.to_string())
         .str_field("vm_id", state.config.vm_id.to_string())

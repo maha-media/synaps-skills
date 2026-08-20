@@ -7,6 +7,7 @@ use axum::Router;
 
 use crate::config::Config;
 use crate::desktop::kasmvnc::DesktopStore;
+use crate::fleet::FleetBindings;
 use crate::fsmon::client::FsmonControl;
 use crate::hmac::HmacVerifier;
 use crate::os::OsUserManager;
@@ -39,6 +40,8 @@ pub struct AppState {
     pub fsmon: Arc<dyn FsmonControl>,
     /// Desktop session store (KasmVNC lifecycle, spec §5.4).
     pub desktops: Arc<DesktopStore>,
+    /// Fleet task bindings (W3.7-G): session → {handle_id, generation}.
+    pub fleet: Arc<FleetBindings>,
 }
 
 /// Build the axum router for the configured route prefix.

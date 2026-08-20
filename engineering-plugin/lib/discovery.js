@@ -46,16 +46,21 @@ function discover(repoRoot, opts) {
           let plan;
           try { plan = EngPlan.parseEngPlan(json); } catch (_) { continue; } // skip malformed
           const rel = path.relative(repoRoot, full);
+          // Kind-qualified id: `plan` keeps the bare slug (backward compatible
+          // with every single-artifact repo); `spec` gets `<slug>.spec` so a
+          // spec+plan pair sharing one slug (spec-driven-development's
+          // documented layout) yields two distinct, routable ids.
+          const id = plan.kind === "spec" ? plan.slug + ".spec" : plan.slug;
           let attention = { blocking: 0, unresolved: 0, needs_review: 0 };
           try {
-            const { events } = store.readNotes(repoRoot, plan.slug);
+            const { events } = store.readNotes(repoRoot, id);
             const a = inbox.computeAttention(events, plan);
             attention = { blocking: a.blocking, unresolved: a.unresolved, needs_review: a.needs_review };
           } catch (_) {}
           let mtime = null;
           try { mtime = fs.statSync(full).mtime.toISOString(); } catch (_) {}
           results.push({
-            id: plan.slug,
+            id,
             title: plan.title,
             kind: plan.kind,
             status: plan.status,

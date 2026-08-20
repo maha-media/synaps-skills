@@ -5,7 +5,7 @@
 
 **Drop-in skills for [Synaps CLI](https://github.com/maha-media/synaps-cli)** — also works with Claude Code, Codex CLI, Amp, and Droid.
 
-Give your coding agent web search, YouTube downloads, speech-to-text, browser automation, persistent memory, tmux orchestration, and battle-tested engineering disciplines — all in one repo.
+Give your coding agent web search, YouTube downloads, speech-to-text, browser automation, persistent memory, tmux orchestration, terminal-code integration, and battle-tested engineering disciplines — all in one repo.
 
 ## ⚡ Quick Start
 
@@ -78,6 +78,12 @@ Skills are bundled into plugins. Each plugin lives in its own directory and decl
 | **[verification-before-completion](engineering-plugin/skills/verification-before-completion/SKILL.md)** | Evidence-based verification — run checks, confirm output before claiming done | — |
 | **[worktrees-by-default](engineering-plugin/skills/worktrees-by-default/SKILL.md)** | Isolate every implementation in a dedicated git worktree; primary clone stays clean | git ≥2.5 |
 | **[convergence-loop](engineering-plugin/skills/convergence-loop/SKILL.md)** | Multi-agent convergence pattern — designer/builder/tester/judge with information walls and bounded fix loops | — |
+
+### 🖥️ tode-plugin
+
+| Skill | What it does | Requires |
+|-------|-------------|----------|
+| **[tode](tode-plugin/skills/tode/SKILL.md)** | Keeps Synaps work visible in terminal-code: opens files, locations, diffs, and Source Control in the current workbench and diagnoses the shared runtime safely | [terminal-code](https://terminal-code.com) |
 
 ## 🔧 Install Script
 

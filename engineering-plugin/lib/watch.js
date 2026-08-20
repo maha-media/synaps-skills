@@ -42,7 +42,10 @@ function watchPlans(plansDir, onChange, opts) {
 
   function fileToSlug(file) {
     const m = file.match(/^(.*)\.(plan|spec)\.html$/);
-    return m ? m[1] : null;
+    if (!m) return null;
+    // Match discovery's kind-qualified ids: specs broadcast on `<slug>.spec`
+    // so the SPA's SSE subscription (keyed by route id) receives spec changes.
+    return m[2] === "spec" ? m[1] + ".spec" : m[1];
   }
 
   function process(file) {
