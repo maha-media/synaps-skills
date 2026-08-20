@@ -95,6 +95,17 @@
       },
       "source": "./tode-plugin",
       "category": "developer-tools"
+    },
+    {
+      "name": "pria-vault-curator",
+      "description": "Thin Synaps gateway for audited Pria vault inspection and patch workflows.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Pria",
+        "url": "https://github.com/maha-media"
+      },
+      "source": "./pria-vault-curator-plugin",
+      "category": "productivity"
     }
   ]
 }

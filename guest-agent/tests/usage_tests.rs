@@ -145,11 +145,25 @@ fn post(uri: &str, body: serde_json::Value) -> axum::http::Request<axum::body::B
         .unwrap()
 }
 
+/// The uid these tests run as (mirrors tests/sessions_tests.rs): the start
+/// handler chowns the per-UID Synaps socket dir and VERIFIES it retained that
+/// owner, so a fictional fixture uid is unreachable without root.
+fn test_uid() -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata("/proc/self")
+        .map(|m| m.uid())
+        .expect("read /proc/self for caller uid")
+}
+
+fn test_username() -> String {
+    format!("pria_u_{}", test_uid())
+}
+
 fn started_env(pria: Arc<FakePriaClient>) -> TestEnv {
     let os = Arc::new(FakeUserManager::default().with_user(UserRecord {
-        username: "pria_u_104251".into(),
-        uid: 104251,
-        gid: 104251,
+        username: test_username(),
+        uid: test_uid(),
+        gid: test_uid(),
         active: true,
     }));
     test_env(pria, os, Arc::new(FakeLauncher::default()))
@@ -161,7 +175,7 @@ fn start_body(env: &TestEnv) -> serde_json::Value {
     json!({
         "account_id": "acct_123", "instance_id": "inst_456", "user_id": "user_789",
         "session_id": "sess_abc", "vm_id": "vm_456",
-        "linux_username": "pria_u_104251", "uid": 104251, "gid": 104251,
+        "linux_username": test_username(), "uid": test_uid(), "gid": test_uid(),
         "workspace_dir": ws.to_string_lossy(), "session_dir": sd.to_string_lossy(),
         "roles": ["agent_operator"], "transport": {"kind": "pria-agent-websocket"},
         "request_id": "req_1"

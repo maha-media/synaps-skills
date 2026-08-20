@@ -80,6 +80,10 @@ pub fn test_env(
     let mut cfg = Config::from_yaml(TEST_CONFIG).unwrap();
     cfg.paths.efs_root = efs_root.clone();
     cfg.paths.run_root = run_root.clone();
+    // Point the Synaps socket root at the temp tree too: the real /run/user
+    // needs root to chmod, which is what kept /sessions/start untestable.
+    cfg.paths.synaps_runtime_root = run_root.join("synaps-runtime");
+    std::fs::create_dir_all(cfg.paths.synaps_runtime_root.as_path()).unwrap();
     cfg.paths.audit_spool_dir = spool;
     cfg.paths.policy_dir = efs_root.join("policy");
     let state = assemble(cfg, pria, os, synaps);

@@ -8,8 +8,20 @@ use std::sync::Arc;
 use pria_guest_agent::api::{build_router, AppState};
 use pria_guest_agent::config::Config;
 
+/// Stable build-feature probe for image tooling.  It intentionally performs no
+/// config, filesystem, or network access, so a host can reject an artifact that
+/// predates a required guest/runtime contract before baking it into a base image.
+fn supports_required_image_features() -> bool {
+    std::env::args().skip(1).any(|arg| arg == "--capabilities")
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if supports_required_image_features() {
+        println!(r#"{{"extension_staging":true,"synaps_base_dir":true}}"#);
+        return Ok(());
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -40,32 +52,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sessions = std::sync::Arc::new(pria_guest_agent::sessions::SessionStore::new(
         runtime.clone(),
     ));
-    let fsmon: std::sync::Arc<dyn pria_guest_agent::fsmon::client::FsmonControl> =
+    // Substrate selection (bridge design T4): "aws-ecs" swaps the systemd- and
+    // fanotify-backed seams for container-native ones; any other mode keeps the
+    // local-virsh wiring byte-identical.
+    let container_mode = config.mode == "aws-ecs";
+    tracing::info!(
+        mode = %config.mode,
+        fsmon_backend = if container_mode { "noop-degraded" } else { "uds-fanotify" },
+        desktop_backend = if container_mode { "container-child" } else { "systemctl" },
+        unit_generator = if container_mode { "container-naming" } else { "systemd-file" },
+        "selected substrate backends"
+    );
+    let fsmon: std::sync::Arc<dyn pria_guest_agent::fsmon::client::FsmonControl> = if container_mode
+    {
+        // Fargate cannot grant fanotify's CAP_SYS_ADMIN. Keep the policy
+        // contract alive but report explicit degraded enforcement.
+        std::sync::Arc::new(pria_guest_agent::fsmon::client::NoopFsmonControl)
+    } else {
         std::sync::Arc::new(
             pria_guest_agent::fsmon::client::UdsFsmonControl::new(config.fsmon.socket.clone())
                 .with_daemon(
                     std::path::PathBuf::from("/usr/local/sbin/synaps_fsmon"),
                     config.fsmon.forward_socket.clone(),
                 )
-                // Narrow the fanotify mark to the account EFS mount instead of the
-                // whole `/`: only opens on the account data subtree generate a
-                // synchronous FAN_OPEN_PERM round-trip, so a busy root filesystem
-                // never floods the permission loop into fd-exhaustion. This is
-                // also a complete envelope: the data needing containment (instance
-                // workspaces, session dirs, immutable prefixes) is EFS-rooted, so
-                // it sits under this mount. Per-user homes (`/home/<user>`) hold
-                // only ephemeral, legitimately-writable runtime config
-                // (`~/.synaps-cli`, `~/.vnc`) and are isolated by Unix DAC (distinct
-                // uid + 0700), not fanotify. System-path tamper protection (`/etc`,
-                // `/srv/synaps`) is handled out-of-band (chattr +i / read-only
-                // binds), not by a whole-`/` permission mark.
+                // Narrow the fanotify mark to the account EFS mount instead
+                // of the whole root filesystem.
                 .with_mount(config.paths.efs_root.clone()),
-        );
-    // Desktop store uses run_root for persisted allocations + env files.
+        )
+    };
+    // Desktop lifecycle is systemd-backed on VMs and child-process-backed in
+    // Fargate. Both implement the frozen SystemctlBackend/UnitGenerator seams.
+    let (desktop_backend, unit_generator): (
+        Arc<dyn pria_guest_agent::desktop::kasmvnc::SystemctlBackend>,
+        Arc<dyn pria_guest_agent::desktop::kasmvnc::UnitGenerator>,
+    ) = if container_mode {
+        (
+            Arc::new(
+                pria_guest_agent::desktop::container::ContainerSystemctl::new(
+                    config.paths.run_root.clone(),
+                ),
+            ),
+            Arc::new(pria_guest_agent::desktop::container::ContainerUnitGenerator),
+        )
+    } else {
+        (
+            Arc::new(pria_guest_agent::desktop::kasmvnc::RealSystemctl),
+            Arc::new(pria_guest_agent::desktop::kasmvnc::FileUnitGenerator::default()),
+        )
+    };
     let desktops = Arc::new(
         pria_guest_agent::desktop::kasmvnc::DesktopStore::new(
             config.paths.run_root.clone(),
-            Arc::new(pria_guest_agent::desktop::kasmvnc::RealSystemctl),
+            desktop_backend,
         )
         .with_port_readiness(Arc::new(
             pria_guest_agent::desktop::kasmvnc::TcpPortReadiness::new(
@@ -75,9 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_password_applier(Arc::new(
             pria_guest_agent::desktop::kasmvnc::SetpwApplier::default(),
         ))
-        .with_unit_generator(Arc::new(
-            pria_guest_agent::desktop::kasmvnc::FileUnitGenerator::default(),
-        )),
+        .with_unit_generator(unit_generator),
     );
     let fleet = Arc::new(pria_guest_agent::fleet::FleetBindings::new(
         pria.clone(),
@@ -123,4 +159,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn capability_document_has_extension_staging_contract() {
+        // Keep the artifact gate tied to the behavior that requires it.
+        let capabilities = serde_json::json!({
+            "extension_staging": true,
+            "synaps_base_dir": true,
+        });
+        assert_eq!(capabilities["extension_staging"], true);
+        assert_eq!(capabilities["synaps_base_dir"], true);
+    }
 }

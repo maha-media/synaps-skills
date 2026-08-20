@@ -1,0 +1,16 @@
+{
+  "name": "brand-scout",
+  "version": "1.0.0",
+  "description": "SSRF-safe static HTML/CSS colour source evidence for LLM brand interpretation.",
+  "author": { "name": "Maha Media" },
+  "license": "MIT",
+  "category": "web",
+  "compatibility": { "synaps": ">=0.1.0", "extension_protocol": "1" },
+  "extension": {
+    "protocol_version": 1,
+    "runtime": "process",
+    "command": "python3",
+    "args": ["main.py"],
+    "permissions": ["tools.register"]
+  }
+}

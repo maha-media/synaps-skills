@@ -179,6 +179,17 @@ fn setpw_writes_restrictive_permissions() {
     assert!(script.contains("umask 077") || script.contains("chmod 0600"));
 }
 
+#[test]
+fn setpw_materializes_per_user_tls_pem_before_vncserver_starts() {
+    let script = read("bin/pria-kasm-setpw");
+    // Container desktops bypass Kasm's vnc_startup.sh, which normally creates
+    // ~/.vnc/self.pem. KasmVNC is configured to read both its certificate and
+    // key from that path and exits before binding the websocket port if absent.
+    assert!(script.contains("${VNC_DIR}/self.pem"));
+    assert!(script.contains("openssl req -x509"));
+    assert!(script.contains("chmod 0600 \"${TLS_PEM}\""));
+}
+
 // ── install script contract (spec §11.2) ─────────────────────────────────────
 
 #[test]

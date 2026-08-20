@@ -1,0 +1,7 @@
+# finlens — free-data path works with just these.
+yfinance>=1.4.0
+numpy>=2.0
+# optional: search-trend lens
+pytrends>=4.9 ; python_version < "3.13"
+# dev
+pytest>=8.0

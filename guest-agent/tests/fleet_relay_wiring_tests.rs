@@ -76,7 +76,7 @@ async fn relay_wiring_drives_fleet_result_on_agent_end_and_session_exited_on_eof
     let agent_end =
         r#"{"type":"agent_end","usage":{"input_tokens":10,"output_tokens":5}}"#;
     let stdout = child_stdout(&format!("echo 'not json'; echo '{agent_end}'"));
-    relay_agent_end_usage(stdout, identity(), pria.clone(), fleet.clone()).await;
+    relay_agent_end_usage(stdout, identity(), pria.clone(), fleet.clone(), None).await;
 
     let cbs = fleet_cbs(&pria);
     // ack + result{ok:true}; the EOF AFTER the clear must be silent.
@@ -106,7 +106,7 @@ async fn relay_wiring_drives_fleet_result_on_agent_end_and_session_exited_on_eof
         .await;
     fleet.mark_running("sess_relay");
     let stdout = child_stdout("true");
-    relay_agent_end_usage(stdout, identity(), pria.clone(), fleet.clone()).await;
+    relay_agent_end_usage(stdout, identity(), pria.clone(), fleet.clone(), None).await;
 
     let cbs = fleet_cbs(&pria);
     let last = cbs.last().expect("callbacks recorded");

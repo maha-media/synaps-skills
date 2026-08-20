@@ -1,0 +1,35 @@
+{
+  "name": "misfire",
+  "version": "0.1.0",
+  "description": "Misconception diagnoser for tutoring and education. When a student gives a wrong answer, reverse-engineers the broken mental model behind it, names the exact misconception, and returns a verified remediation move (contrast case + probe question). Uses Groq llama-3.3-70b with JSON-mode + a self-verification pass. Offline proof mode when no LLM key is present.",
+  "author": {
+    "name": "Jawz",
+    "url": "https://github.com/maha-media"
+  },
+  "repository": "maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "education",
+  "compatibility": {
+    "synaps": ">=0.1.0",
+    "extension_protocol": "1"
+  },
+  "extension": {
+    "protocol_version": 1,
+    "runtime": "process",
+    "command": "python3",
+    "args": [
+      "extensions/main.py"
+    ],
+    "permissions": [
+      "tools.register"
+    ],
+    "config": [
+      {
+        "key": "llm_key",
+        "description": "Groq API key for llama-3.3-70b-versatile. Falls back to provider.groq in ~/.synaps-cli/config, then to MISFIRE_LLM_KEY env. Offline proof mode is used when no key is available.",
+        "required": false,
+        "secret_env": "MISFIRE_LLM_KEY"
+      }
+    ]
+  }
+}

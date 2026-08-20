@@ -70,6 +70,12 @@ pub trait PriaCallbackClient: Send + Sync {
         &self,
         p: &CredentialRequestPayload,
     ) -> Result<Value, CallbackError>;
+    /// Forward a synaps rpc reply frame (message_update / response / agent_end)
+    /// so the user-facing SSE chat stream can surface it (seam #3). Best-effort.
+    /// Default is a no-op so non-HTTP impls (test fakes) need no changes.
+    async fn session_output(&self, _session_id: &str, _event: &Value) -> Result<(), CallbackError> {
+        Ok(())
+    }
 }
 
 /// Endpoint paths (configurable prefix defaults to `/internal/agentic-vm`).
@@ -79,6 +85,7 @@ const SESSION_EVENT_PATH: &str = "/internal/agentic-vm/session-event";
 const FLEET_CALLBACK_PATH: &str = "/internal/agentic-vm/fleet-callback";
 const USAGE_PATH: &str = "/internal/agentic-vm/usage";
 const CREDENTIAL_PATH: &str = "/internal/agentic-vm/credential-request";
+const SESSION_OUTPUT_PATH: &str = "/internal/agentic-vm/session-output";
 
 /// The production HTTP client using reqwest + the outbound signer.
 pub struct HttpPriaClient {
@@ -203,6 +210,15 @@ impl PriaCallbackClient for HttpPriaClient {
     async fn session_event(&self, p: &SessionEventPayload) -> Result<(), CallbackError> {
         let body = serde_json::to_vec(p).map_err(|e| CallbackError::Network(e.to_string()))?;
         self.post_signed(SESSION_EVENT_PATH, &body, Some(&p.session_id))
+            .await?;
+        Ok(())
+    }
+
+    async fn session_output(&self, session_id: &str, event: &Value) -> Result<(), CallbackError> {
+        let body =
+            serde_json::to_vec(&serde_json::json!({ "session_id": session_id, "event": event }))
+                .map_err(|e| CallbackError::Network(e.to_string()))?;
+        self.post_signed(SESSION_OUTPUT_PATH, &body, Some(session_id))
             .await?;
         Ok(())
     }

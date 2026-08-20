@@ -86,11 +86,24 @@ pub trait SessionProcess: Send + Sync {
     async fn cancel(&self) -> Result<(), LaunchError>;
     async fn close(&self, grace_ms: u64) -> Result<(), LaunchError>;
     fn status(&self) -> SessionStatus;
-    /// Take the child's stdout stream exactly once, for the usage-relay reader
+    /// Take the child's output stream exactly once, for the usage-relay reader
     /// task (spec §5.5 / HS-U6). Returns `None` when unavailable — already taken,
-    /// or a non-process backend (fake / non-unix). Default: `None`.
-    fn take_stdout(&self) -> Option<tokio::process::ChildStdout> {
+    /// or a backend with no output channel. Default: `None`.
+    ///
+    /// Typed as an opaque `AsyncRead` rather than `tokio::process::ChildStdout`
+    /// because the relay only ever reads lines from it. Keeping the concrete
+    /// process type here made readiness untestable: a fake process cannot
+    /// manufacture a `ChildStdout` without spawning a real OS process, so every
+    /// fake-launcher test of `/sessions/start` failed the ready handshake.
+    fn take_stdout(&self) -> Option<Box<dyn tokio::io::AsyncRead + Send + Unpin>> {
         None
+    }
+    /// Await the child process's natural exit. Used by the zombie reaper task
+    /// (`api/sessions.rs` `start` handler) to learn when to remove the session
+    /// from the store after the child dies. Default impl never resolves so
+    /// existing impls that don't back a real OS process are unaffected.
+    async fn wait_for_exit(&self) {
+        std::future::pending::<()>().await
     }
 }
 
@@ -145,6 +158,18 @@ pub struct UsageIdentity {
     pub replica_id: String,
     pub session_id: String,
     pub ephemeral_task_id: Option<String>,
+}
+
+/// Validated startup receipt from Synaps RPC's first lifecycle frame.
+///
+/// `session_id` emitted by Synaps is its own runtime-session identifier, not
+/// Pria's control-plane session id. The guest binds the process to the Pria id
+/// at launch, so readiness validates the event type/protocol and returns only
+/// the model + protocol receipt for that bound process.
+#[derive(Debug, Clone)]
+pub struct RpcReadyReceipt {
+    pub model: String,
+    pub protocol_version: u32,
 }
 
 /// Meter a raw SynapsCLI `RpcEvent::AgentEnd { usage }` (untagged JSON) into a
@@ -226,13 +251,15 @@ pub fn tag_agent_end_usage(raw_event: &Value, identity: &UsageIdentity) -> Optio
 /// `agent_end` frame notifies [`FleetBindings::on_agent_end`] (a Running
 /// binding's completion), and stdout EOF notifies
 /// [`FleetBindings::on_session_eof`] (a bound task's process died).
-pub async fn relay_agent_end_usage(
-    stdout: tokio::process::ChildStdout,
+pub async fn relay_agent_end_usage<R: tokio::io::AsyncRead + Unpin + Send>(
+    stdout: R,
     identity: UsageIdentity,
     pria: std::sync::Arc<dyn crate::pria_client::PriaCallbackClient>,
     fleet: std::sync::Arc<FleetBindings>,
+    ready_tx: Option<tokio::sync::oneshot::Sender<RpcReadyReceipt>>,
 ) {
     use tokio::io::{AsyncBufReadExt, BufReader};
+    let mut ready_tx = ready_tx;
     let mut lines = BufReader::new(stdout).lines();
     loop {
         match lines.next_line().await {
@@ -244,6 +271,42 @@ pub async fn relay_agent_end_usage(
                 let Ok(val) = serde_json::from_str::<Value>(trimmed) else {
                     continue;
                 };
+                // Readiness is a guest-owned process handshake, not an eventual
+                // Pria callback. The first valid RPC `ready` lets `/sessions/start`
+                // return a truthful receipt for EVERY preset/plugin set.
+                if let Some(tx) = ready_tx.take() {
+                    if val.get("type").and_then(Value::as_str) == Some("ready") {
+                        let model = val
+                            .get("model")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        let protocol_version = val
+                            .get("protocol_version")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0) as u32;
+                        if !model.is_empty() && protocol_version > 0 {
+                            let _ = tx.send(RpcReadyReceipt {
+                                model,
+                                protocol_version,
+                            });
+                        } else {
+                            // Sender is consumed deliberately: malformed ready is
+                            // not readiness and startup will fail closed on timeout.
+                            tracing::warn!(session_id = %identity.session_id, "malformed synaps ready frame");
+                        }
+                    } else {
+                        // Synaps contract says ready is first. Do not accept a
+                        // later arbitrary frame as proof the process is promptable.
+                        tracing::warn!(session_id = %identity.session_id, event_type = ?val.get("type"), "expected synaps ready as first RPC frame");
+                    }
+                }
+                // Seam #3: forward every reply frame to Pria so the user-facing
+                // SSE chat stream can surface it. Best-effort — never blocks the
+                // usage metering below.
+                if let Err(e) = pria.session_output(&identity.session_id, &val).await {
+                    tracing::debug!(error = %e, "session_output forward failed");
+                }
                 if val.get("type").and_then(|t| t.as_str()) == Some("agent_end") {
                     // Fleet result semantics are turn-end, not billing: notify
                     // even for zero-token turns the usage path drops.
@@ -398,9 +461,18 @@ mod real {
 
     pub struct ChildProcess {
         pid: u32,
-        child: AsyncMutex<Child>,
+        /// Stdin handle for message writes. Separate from `child_wait` so
+        /// `send()` can run concurrently with the background wait task.
+        stdin: AsyncMutex<Option<tokio::process::ChildStdin>>,
+        /// Child process handle held ONLY by the background wait task. Once the
+        /// task acquires this, it calls `wait()` — no other method touches it.
+        child_wait: AsyncMutex<Child>,
         status: StdMutex<SessionStatus>,
         stdout: StdMutex<Option<tokio::process::ChildStdout>>,
+        /// watch(false → true) fired when the OS process exits. Allows
+        /// wait_for_exit() to subscribe without holding any lock.
+        exit_rx: tokio::sync::watch::Receiver<bool>,
+        exit_tx: StdMutex<Option<tokio::sync::watch::Sender<bool>>>,
     }
 
     pub fn spawn(spec: &LaunchSpec) -> Result<std::sync::Arc<dyn SessionProcess>, LaunchError> {
@@ -422,8 +494,7 @@ mod real {
             use std::os::unix::process::CommandExt as StdCommandExt;
             let uid = spec.uid as libc::uid_t;
             let gid = spec.gid as libc::gid_t;
-            let groups: Vec<libc::gid_t> =
-                spec.groups.iter().map(|g| *g as libc::gid_t).collect();
+            let groups: Vec<libc::gid_t> = spec.groups.iter().map(|g| *g as libc::gid_t).collect();
             // SAFETY: pre_exec runs in the forked child before exec. We only call
             // async-signal-safe syscalls (setgroups/setgid/setuid) over an owned,
             // pre-allocated gid slice — no allocation, no locks.
@@ -464,15 +535,38 @@ mod real {
             .map_err(|e| LaunchError(format!("failed to spawn synaps: {e}")))?;
         let pid = child.id().unwrap_or(0);
         let mut child = child;
-        // Take stdout up-front so the usage-relay reader task can own it; the
-        // child stays in the AsyncMutex for stdin writes (send) + lifecycle.
+        // Take stdout + stdin up-front; child_wait holds the Child solely for
+        // the background OS-wait task. Separating stdin lets send() run
+        // concurrently with wait() — no lock contention.
         let stdout = child.stdout.take();
-        Ok(std::sync::Arc::new(ChildProcess {
+        let stdin = child.stdin.take();
+        // watch channel: false = running, true = exited.
+        let (exit_tx, exit_rx) = tokio::sync::watch::channel(false);
+        let proc = std::sync::Arc::new(ChildProcess {
             pid,
-            child: AsyncMutex::new(child),
+            stdin: AsyncMutex::new(stdin),
+            child_wait: AsyncMutex::new(child),
             status: StdMutex::new(SessionStatus::Running),
             stdout: StdMutex::new(stdout),
-        }))
+            exit_rx,
+            exit_tx: StdMutex::new(Some(exit_tx)),
+        });
+        // Background OS-wait task: acquires the child lock and calls wait().
+        // cancel()/close() now use libc::kill() directly (no lock needed), so
+        // SIGKILL is sent immediately; the SIGKILL wakes up this wait() quickly.
+        // No deadlock: cancel/close never contend for the child lock.
+        {
+            let proc_ref = proc.clone();
+            tokio::spawn(async move {
+                // child_wait is held only here — no contention with send/cancel/close.
+                let _ = proc_ref.child_wait.lock().await.wait().await;
+                // Fire the exit watch so any outstanding wait_for_exit() returns.
+                if let Some(tx) = proc_ref.exit_tx.lock().unwrap().take() {
+                    let _ = tx.send(true);
+                }
+            });
+        }
+        Ok(proc)
     }
 
     #[async_trait]
@@ -481,14 +575,20 @@ mod real {
             self.pid
         }
 
-        fn take_stdout(&self) -> Option<tokio::process::ChildStdout> {
-            self.stdout.lock().unwrap().take()
+        fn take_stdout(&self) -> Option<Box<dyn tokio::io::AsyncRead + Send + Unpin>> {
+            self.stdout
+                .lock()
+                .unwrap()
+                .take()
+                .map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Send + Unpin>)
         }
 
         async fn send(&self, message: &str) -> Result<(), LaunchError> {
             use tokio::io::AsyncWriteExt;
-            let mut guard = self.child.lock().await;
-            if let Some(stdin) = guard.stdin.as_mut() {
+            // Lock stdin only — no child_wait lock needed, so send() runs
+            // concurrently with the background wait task.
+            let mut guard = self.stdin.lock().await;
+            if let Some(stdin) = guard.as_mut() {
                 stdin
                     .write_all(format!("{message}\n").as_bytes())
                     .await
@@ -500,21 +600,52 @@ mod real {
         }
 
         async fn cancel(&self) -> Result<(), LaunchError> {
-            let mut guard = self.child.lock().await;
-            let _ = guard.start_kill();
+            // Send SIGKILL directly via pid — no child-mutex needed, so this
+            // never blocks even while the background wait task holds the lock.
+            // SAFETY: kill(2) is always safe; ESRCH means already dead — ok.
+            unsafe {
+                libc::kill(self.pid as libc::pid_t, libc::SIGKILL);
+            }
             *self.status.lock().unwrap() = SessionStatus::Cancelled;
             Ok(())
         }
 
-        async fn close(&self, _grace_ms: u64) -> Result<(), LaunchError> {
-            let mut guard = self.child.lock().await;
-            let _ = guard.start_kill();
+        async fn close(&self, grace_ms: u64) -> Result<(), LaunchError> {
+            // Graceful shutdown: SIGTERM -> wait up to grace_ms -> SIGKILL if needed.
+            // Synaps writes its final agent_end frame on SIGTERM's shutdown path;
+            // SIGKILL alone drops that frame and the turn's usage goes unmetered.
+            // SAFETY: kill(2) with ESRCH (already dead) is harmless.
+            unsafe {
+                libc::kill(self.pid as libc::pid_t, libc::SIGTERM);
+            }
+
+            let grace = std::time::Duration::from_millis(grace_ms);
+            let exited = tokio::time::timeout(grace, self.wait_for_exit())
+                .await
+                .is_ok();
+
+            if !exited {
+                // Grace period expired -- force termination.
+                unsafe {
+                    libc::kill(self.pid as libc::pid_t, libc::SIGKILL);
+                }
+            }
+
             *self.status.lock().unwrap() = SessionStatus::Closed;
             Ok(())
         }
 
         fn status(&self) -> SessionStatus {
             *self.status.lock().unwrap()
+        }
+
+        async fn wait_for_exit(&self) {
+            // Clone the receiver and wait for the watch to become true.
+            // Already true (child already exited before we were called) -> returns
+            // immediately. This does NOT hold the child lock.
+            let mut rx = self.exit_rx.clone();
+            // wait_for returns immediately if the current value matches.
+            let _ = rx.wait_for(|&v| v).await;
         }
     }
 }
@@ -530,15 +661,34 @@ mod real {
 // ── test fake ────────────────────────────────────────────────────────────────
 
 #[cfg(any(test, feature = "test-fakes"))]
-pub use fake::{FakeLauncher, FakeProcess};
+pub use fake::{FakeLauncher, FakeProcess, FakeStdout, READY_FRAME};
 
 #[cfg(any(test, feature = "test-fakes"))]
 mod fake {
     use super::*;
     use std::sync::Mutex;
 
+    /// What a [`FakeProcess`] hands to the usage relay.
+    #[derive(Clone, Debug)]
+    pub enum FakeStdout {
+        /// Emit exactly these bytes, then EOF. `Script(String::new())` is a
+        /// child that closed stdout without ever speaking.
+        Script(String),
+        /// Hold stdout open and emit nothing, forever.
+        Silent,
+    }
+
+    /// The canonical first frame a healthy `synaps rpc` emits. Fakes default to
+    /// this so existing tests exercise the happy path unchanged.
+    pub const READY_FRAME: &str =
+        r#"{"type":"ready","model":"claude-sonnet-4-6","protocol_version":1}"#;
+
     /// Records launches and returns a controllable fake process.
-    #[derive(Default)]
+    ///
+    /// `stdout_script` is the byte stream the produced [`FakeProcess`] hands to
+    /// the usage relay. It defaults to a valid ready frame; tests override it to
+    /// drive the readiness failure paths (malformed frame, wrong first frame,
+    /// EOF before ready, or silence until timeout).
     pub struct FakeLauncher {
         pub launches: Mutex<Vec<LaunchSpec>>,
         pub fail: Mutex<bool>,
@@ -549,12 +699,52 @@ mod fake {
         /// assert byte-identical stdin passthrough (`FakeProcess::sent`) — e.g.
         /// the W3.7-G fleet-detection fence — reach the fake through here.
         pub launched: Mutex<Vec<std::sync::Arc<FakeProcess>>>,
+        pub stdout_script: Mutex<Option<FakeStdout>>,
+    }
+
+    impl Default for FakeLauncher {
+        fn default() -> Self {
+            Self {
+                launches: Mutex::new(Vec::new()),
+                fail: Mutex::new(false),
+                next_pid: Mutex::new(0),
+                launched: Mutex::new(Vec::new()),
+                stdout_script: Mutex::new(Some(FakeStdout::Script(format!("{READY_FRAME}\n")))),
+            }
+        }
     }
 
     impl FakeLauncher {
         pub fn failing() -> Self {
             Self {
                 fail: Mutex::new(true),
+                ..Default::default()
+            }
+        }
+
+        /// Emit exactly these bytes on the launched child's stdout, then EOF.
+        pub fn with_stdout(script: impl Into<String>) -> Self {
+            Self {
+                stdout_script: Mutex::new(Some(FakeStdout::Script(script.into()))),
+                ..Default::default()
+            }
+        }
+
+        /// A child that holds stdout open and never speaks — drives the
+        /// readiness TIMEOUT path (distinct from exiting, and from having no
+        /// stdout at all).
+        pub fn silent() -> Self {
+            Self {
+                stdout_script: Mutex::new(Some(FakeStdout::Silent)),
+                ..Default::default()
+            }
+        }
+
+        /// A child with no stdout channel whatsoever — drives the
+        /// "cannot verify readiness" guard.
+        pub fn no_stdout() -> Self {
+            Self {
+                stdout_script: Mutex::new(None),
                 ..Default::default()
             }
         }
@@ -573,9 +763,10 @@ mod fake {
                 return Err(LaunchError("synthetic launch failure".into()));
             }
             self.launches.lock().unwrap().push(spec.clone());
+            let script = self.stdout_script.lock().unwrap().clone();
             let mut pid = self.next_pid.lock().unwrap();
             *pid = if *pid == 0 { 12345 } else { *pid + 1 };
-            let proc = std::sync::Arc::new(FakeProcess::new(*pid));
+            let proc = std::sync::Arc::new(FakeProcess::with_stdout(*pid, script));
             self.launched.lock().unwrap().push(proc.clone());
             Ok(proc)
         }
@@ -585,14 +776,39 @@ mod fake {
         pid: u32,
         pub sent: Mutex<Vec<String>>,
         status: Mutex<SessionStatus>,
+        /// Exit signal. A `watch` (not a oneshot) so `wait_for_exit()` is
+        /// IDEMPOTENT, exactly like `real::ChildProcess`. With a oneshot the
+        /// receiver was consumed by the first caller and every later caller
+        /// returned instantly — so the start handler's smoke-check would take
+        /// it and the zombie reaper would then conclude a live child had died
+        /// and evict the session (close/send later 404'd on a running process).
+        exit_tx: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
+        exit_rx: tokio::sync::watch::Receiver<bool>,
+        /// What the relay will read from this child.
+        stdout: Mutex<Option<FakeStdout>>,
     }
 
     impl FakeProcess {
         pub fn new(pid: u32) -> Self {
+            Self::with_stdout(pid, Some(FakeStdout::Script(format!("{READY_FRAME}\n"))))
+        }
+
+        pub fn with_stdout(pid: u32, stdout: Option<FakeStdout>) -> Self {
+            let (tx, rx) = tokio::sync::watch::channel(false);
             Self {
                 pid,
                 sent: Mutex::new(Vec::new()),
                 status: Mutex::new(SessionStatus::Running),
+                exit_tx: Mutex::new(Some(tx)),
+                exit_rx: rx,
+                stdout: Mutex::new(stdout),
+            }
+        }
+
+        /// Fire the exit signal (simulates child process death).
+        pub fn trigger_exit(&self) {
+            if let Some(tx) = self.exit_tx.lock().unwrap().take() {
+                let _ = tx.send(true);
             }
         }
     }
@@ -602,6 +818,22 @@ mod fake {
         fn pid(&self) -> u32 {
             self.pid
         }
+
+        fn take_stdout(&self) -> Option<Box<dyn tokio::io::AsyncRead + Send + Unpin>> {
+            match self.stdout.lock().unwrap().take()? {
+                // Frames, then EOF — the normal shape.
+                FakeStdout::Script(text) => Some(Box::new(std::io::Cursor::new(text.into_bytes()))),
+                // Alive but saying nothing. A cursor would hit EOF immediately
+                // and look like a dead child; a duplex whose writer is held
+                // open pends forever, which is what a silent process does.
+                FakeStdout::Silent => {
+                    let (reader, writer) = tokio::io::duplex(64);
+                    std::mem::forget(writer);
+                    Some(Box::new(reader))
+                }
+            }
+        }
+
         async fn send(&self, message: &str) -> Result<(), LaunchError> {
             self.sent.lock().unwrap().push(message.to_string());
             Ok(())
@@ -610,12 +842,22 @@ mod fake {
             *self.status.lock().unwrap() = SessionStatus::Cancelled;
             Ok(())
         }
-        async fn close(&self, _grace_ms: u64) -> Result<(), LaunchError> {
+        async fn close(&self, grace_ms: u64) -> Result<(), LaunchError> {
+            // Mirror real::ChildProcess: wait up to grace_ms for exit, then force.
+            let grace = std::time::Duration::from_millis(grace_ms);
+            let _ = tokio::time::timeout(grace, self.wait_for_exit()).await;
             *self.status.lock().unwrap() = SessionStatus::Closed;
             Ok(())
         }
         fn status(&self) -> SessionStatus {
             *self.status.lock().unwrap()
+        }
+
+        async fn wait_for_exit(&self) {
+            // Idempotent: every caller gets its own clone of the watch and
+            // waits for the same edge. Mirrors real::ChildProcess.
+            let mut rx = self.exit_rx.clone();
+            let _ = rx.wait_for(|&exited| exited).await;
         }
     }
 }
@@ -671,7 +913,7 @@ mod tests {
             pria.clone(),
             std::time::Duration::from_secs(30),
         ));
-        relay_agent_end_usage(stdout, identity(), pria.clone(), fleet).await;
+        relay_agent_end_usage(stdout, identity(), pria.clone(), fleet, None).await;
         let usages = pria.usages.lock().unwrap();
         assert_eq!(usages.len(), 1, "exactly one billable agent_end metered");
         assert_eq!(usages[0].session_id, "sess_5");
@@ -698,8 +940,11 @@ mod tests {
             pria.clone(),
             std::time::Duration::from_secs(30),
         ));
-        relay_agent_end_usage(stdout, identity(), pria.clone(), fleet).await;
-        assert!(pria.usages.lock().unwrap().is_empty(), "empty turn not billed");
+        relay_agent_end_usage(stdout, identity(), pria.clone(), fleet, None).await;
+        assert!(
+            pria.usages.lock().unwrap().is_empty(),
+            "empty turn not billed"
+        );
     }
 
     #[test]
@@ -869,5 +1114,56 @@ mod tests {
             session_id: "s".into(),
         };
         assert!(l.launch(&spec).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn close_respects_grace_when_child_exits_early() {
+        // FakeProcess exits at ~50ms; close(500) should complete around 50ms
+        // without hitting the SIGKILL fallback path.
+        let proc = std::sync::Arc::new(FakeProcess::new(99));
+        let proc_clone = proc.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            proc_clone.trigger_exit();
+        });
+        let start = std::time::Instant::now();
+        proc.close(500).await.unwrap();
+        let elapsed = start.elapsed();
+        assert_eq!(proc.status(), SessionStatus::Closed);
+        // Should return well before the 500ms grace window expires.
+        assert!(
+            elapsed < std::time::Duration::from_millis(400),
+            "close took too long: {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn close_falls_back_to_sigkill_after_grace() {
+        // FakeProcess never exits; close(50) must return after ~50ms (grace
+        // period exhausted) with status Closed.
+        let proc = FakeProcess::new(100);
+        let start = std::time::Instant::now();
+        proc.close(50).await.unwrap();
+        let elapsed = start.elapsed();
+        assert_eq!(proc.status(), SessionStatus::Closed);
+        // Must have waited at least the grace period before returning.
+        assert!(
+            elapsed >= std::time::Duration::from_millis(45),
+            "close returned too early: {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn close_zero_grace_does_not_wait() {
+        // close(0) must return almost immediately regardless of exit state.
+        let proc = FakeProcess::new(101);
+        let start = std::time::Instant::now();
+        proc.close(0).await.unwrap();
+        let elapsed = start.elapsed();
+        assert_eq!(proc.status(), SessionStatus::Closed);
+        assert!(
+            elapsed < std::time::Duration::from_millis(100),
+            "close(0) was too slow: {elapsed:?}"
+        );
     }
 }
