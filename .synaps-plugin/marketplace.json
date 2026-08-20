@@ -1,8 +1,8 @@
 {
   "$schema": "https://synaps.sh/synaps-cli/marketplace.schema.json",
   "name": "synaps-skills",
-  "version": "1.1.0",
-  "description": "Web search, browser automation, YouTube toolkit, speech-to-text, persistent memory, tmux orchestration, engineering disciplines, and skill scaffolding for Synaps CLI",
+  "version": "1.2.0",
+  "description": "Web search, browser automation, YouTube toolkit, speech-to-text, persistent memory, tmux orchestration, terminal-code integration, engineering disciplines, and skill scaffolding for Synaps CLI",
   "owner": {
     "name": "JR Morton",
     "url": "https://github.com/maha-media"
@@ -84,6 +84,17 @@
       },
       "source": "./axel-memory-manager-plugin",
       "category": "productivity"
+    },
+    {
+      "name": "tode",
+      "description": "Use when Synaps runs inside terminal-code to open edits, locations, diffs, and Source Control in the current tode workbench while preserving its nested terminal runtime.",
+      "version": "0.1.0",
+      "author": {
+        "name": "JR Morton",
+        "url": "https://github.com/maha-media"
+      },
+      "source": "./tode-plugin",
+      "category": "developer-tools"
     }
   ]
 }
