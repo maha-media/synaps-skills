@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 use crate::api::AppState;
 use crate::error::{ErrorCode, GuestAgentError};
+use crate::fleet::parse_fleet_directive;
 use crate::hmac::SignedJson;
 use crate::paths::ensure_under;
 use crate::pria_client::{kinds, AuditEventBuilder};
@@ -228,7 +229,7 @@ pub async fn start(
             ephemeral_task_id: None,
         };
         let pria = state.pria.clone();
-        tokio::spawn(relay_agent_end_usage(stdout, identity, pria));
+        tokio::spawn(relay_agent_end_usage(stdout, identity, pria, state.fleet.clone()));
     }
 
     state.sessions.insert(SessionEntry {
@@ -292,6 +293,14 @@ pub async fn send(
         .sessions
         .process(&session_id)
         .ok_or_else(|| GuestAgentError::new(ErrorCode::SessionNotFound, "session not found"))?;
+    // Fleet detection (W3.7-G): observe the wire text at the choke point. A
+    // valid `fleet <handle> <gen>` line in a set_task message binds + acks; any
+    // other send moves an Acked binding to Running (the task's brief). Either
+    // way the input is forwarded unchanged — detection never blocks or rewrites.
+    match parse_fleet_directive(&req.input) {
+        Some(directive) => state.fleet.bind(&session_id, directive).await,
+        None => state.fleet.mark_running(&session_id),
+    }
     proc.send(&req.input)
         .await
         .map_err(|e| GuestAgentError::new(ErrorCode::SessionNotFound, e.to_string()))?;

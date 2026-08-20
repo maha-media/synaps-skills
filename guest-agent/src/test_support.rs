@@ -106,6 +106,10 @@ fn assemble(
         desktop_run_root,
         Arc::new(FakeSystemctl::default()),
     ));
+    let fleet = Arc::new(crate::fleet::FleetBindings::new(
+        pria.clone(),
+        std::time::Duration::from_secs(cfg.fleet.heartbeat_interval_seconds.max(1)),
+    ));
     AppState {
         config: Arc::new(cfg),
         hmac: Arc::new(HmacVerifier::disabled("acct_123", "vm_456")),
@@ -117,6 +121,7 @@ fn assemble(
         sessions,
         fsmon: Arc::new(crate::fsmon::client::FakeFsmonControl::healthy()),
         desktops,
+        fleet,
     }
 }
 

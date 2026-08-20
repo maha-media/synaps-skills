@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::fleet::FleetBindings;
 use crate::pria_client::payloads::{
     derive_idempotency_key, normalise_usage, EVENT_TYPE_LLM_TOKENS, SOURCE_ON_USAGE,
     SOURCE_RPC_AGENT_END,
@@ -220,10 +221,16 @@ pub fn tag_agent_end_usage(raw_event: &Value, identity: &UsageIdentity) -> Optio
 /// are ignored. The guest agent owns trusted attribution: SynapsCLI core only
 /// emits raw token counts, and [`tag_agent_end_usage`] stamps the
 /// account/vm/user/session identity the core cannot know.
+///
+/// W3.7-G: the relay also drives the fleet-binding state machine — every
+/// `agent_end` frame notifies [`FleetBindings::on_agent_end`] (a Running
+/// binding's completion), and stdout EOF notifies
+/// [`FleetBindings::on_session_eof`] (a bound task's process died).
 pub async fn relay_agent_end_usage(
     stdout: tokio::process::ChildStdout,
     identity: UsageIdentity,
     pria: std::sync::Arc<dyn crate::pria_client::PriaCallbackClient>,
+    fleet: std::sync::Arc<FleetBindings>,
 ) {
     use tokio::io::{AsyncBufReadExt, BufReader};
     let mut lines = BufReader::new(stdout).lines();
@@ -237,6 +244,11 @@ pub async fn relay_agent_end_usage(
                 let Ok(val) = serde_json::from_str::<Value>(trimmed) else {
                     continue;
                 };
+                if val.get("type").and_then(|t| t.as_str()) == Some("agent_end") {
+                    // Fleet result semantics are turn-end, not billing: notify
+                    // even for zero-token turns the usage path drops.
+                    fleet.on_agent_end(&identity.session_id).await;
+                }
                 if let Some(payload) = tag_agent_end_usage(&val, &identity) {
                     if let Err(e) = pria.usage(&payload).await {
                         tracing::warn!(
@@ -252,7 +264,11 @@ pub async fn relay_agent_end_usage(
                     }
                 }
             }
-            Ok(None) => break, // EOF: synaps process exited
+            Ok(None) => {
+                // EOF: synaps process exited. A still-bound fleet task failed.
+                fleet.on_session_eof(&identity.session_id).await;
+                break;
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "usage relay stdout read failed");
                 break;
@@ -647,7 +663,11 @@ mod tests {
             .expect("spawn test child");
         let stdout = child.stdout.take().expect("child stdout");
         let pria = Arc::new(FakePriaClient::default());
-        relay_agent_end_usage(stdout, identity(), pria.clone()).await;
+        let fleet = Arc::new(crate::fleet::FleetBindings::new(
+            pria.clone(),
+            std::time::Duration::from_secs(30),
+        ));
+        relay_agent_end_usage(stdout, identity(), pria.clone(), fleet).await;
         let usages = pria.usages.lock().unwrap();
         assert_eq!(usages.len(), 1, "exactly one billable agent_end metered");
         assert_eq!(usages[0].session_id, "sess_5");
@@ -670,7 +690,11 @@ mod tests {
             .expect("spawn test child");
         let stdout = child.stdout.take().expect("child stdout");
         let pria = Arc::new(FakePriaClient::default());
-        relay_agent_end_usage(stdout, identity(), pria.clone()).await;
+        let fleet = Arc::new(crate::fleet::FleetBindings::new(
+            pria.clone(),
+            std::time::Duration::from_secs(30),
+        ));
+        relay_agent_end_usage(stdout, identity(), pria.clone(), fleet).await;
         assert!(pria.usages.lock().unwrap().is_empty(), "empty turn not billed");
     }
 

@@ -137,6 +137,10 @@ fsmon:
     let sessions = Arc::new(SessionStore::new(runtime.clone()));
     let versions = Arc::new(Versions::detect(&config));
     let pria = Arc::new(HttpPriaClient::new(&config, SECRET.to_vec()));
+    let fleet = Arc::new(pria_guest_agent::fleet::FleetBindings::new(
+        pria.clone(),
+        std::time::Duration::from_secs(30),
+    ));
 
     let state = AppState {
         config: Arc::new(config),
@@ -149,6 +153,7 @@ fsmon:
         sessions,
         fsmon: Arc::new(FakeFsmonControl::healthy()),
         desktops: pria_guest_agent::test_support::fake_desktop_store(),
+        fleet,
     };
 
     let app = build_router(state);

@@ -19,6 +19,10 @@ fn default_heartbeat_interval() -> u64 {
     15
 }
 
+fn default_fleet_heartbeat_interval() -> u64 {
+    30
+}
+
 fn default_skew() -> u64 {
     300
 }
@@ -88,6 +92,21 @@ impl Default for HeartbeatConfig {
     }
 }
 
+/// Fleet callback config (W3.7-G): heartbeat cadence for bound fleet tasks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FleetConfig {
+    #[serde(default = "default_fleet_heartbeat_interval")]
+    pub heartbeat_interval_seconds: u64,
+}
+
+impl Default for FleetConfig {
+    fn default() -> Self {
+        Self {
+            heartbeat_interval_seconds: default_fleet_heartbeat_interval(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityConfig {
     #[serde(default = "default_skew")]
@@ -121,6 +140,8 @@ pub struct Config {
     pub fsmon: FsmonConfig,
     #[serde(default)]
     pub heartbeat: HeartbeatConfig,
+    #[serde(default)]
+    pub fleet: FleetConfig,
     #[serde(default)]
     pub security: SecurityConfig,
 }
