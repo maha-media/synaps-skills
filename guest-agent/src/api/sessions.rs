@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use crate::api::AppState;
 use crate::error::{ErrorCode, GuestAgentError};
-use crate::fleet::parse_fleet_directive;
+use crate::fleet::{classify_send, SendClass};
 use crate::hmac::SignedJson;
 use crate::paths::ensure_under;
 use crate::pria_client::{kinds, AuditEventBuilder};
@@ -482,13 +482,17 @@ pub async fn send(
         .sessions
         .process(&session_id)
         .ok_or_else(|| GuestAgentError::new(ErrorCode::SessionNotFound, "session not found"))?;
-    // Fleet detection (W3.7-G): observe the wire text at the choke point. A
-    // valid `fleet <handle> <gen>` line in a set_task message binds + acks; any
-    // other send moves an Acked binding to Running (the task's brief). Either
-    // way the input is forwarded unchanged — detection never blocks or rewrites.
-    match parse_fleet_directive(&req.input) {
-        Some(directive) => state.fleet.bind(&session_id, directive).await,
-        None => state.fleet.mark_running(&session_id),
+    // Fleet detection (W3.7-G, envelope-aware per the leg-4 live finding): the
+    // wire text may ride inside a prompt envelope's `message`. A valid
+    // `fleet <handle> <gen>` line in a set_task message binds + acks; a
+    // non-fleet prompt turn moves an Acked binding to Running (the task's
+    // brief); control frames are NOT turns (the E3 ruling) and do neither.
+    // Either way the ORIGINAL input is forwarded unchanged — detection never
+    // blocks or rewrites.
+    match classify_send(&req.input) {
+        SendClass::FleetDirective(directive) => state.fleet.bind(&session_id, directive).await,
+        SendClass::PromptTurn => state.fleet.mark_running(&session_id),
+        SendClass::ControlFrame => {}
     }
     proc.send(&req.input)
         .await
