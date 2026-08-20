@@ -193,6 +193,26 @@ impl FleetBindings {
         }
     }
 
+    /// The session was torn down via `close`/`cancel` (review 9 finding 1).
+    /// While bound — in either phase — emit
+    /// `result {ok:false, error:{code:"session_closed"}}` EXACTLY ONCE and
+    /// clear (aborting the heartbeat loop). On an unbound session it is
+    /// silent: teardown is not a turn outcome for sessions that never carried
+    /// a fleet task, and repeated teardown finds nothing bound.
+    pub async fn on_session_closed(&self, session_id: &str) {
+        let cleared = self.bindings.lock().unwrap().remove(session_id);
+        if let Some(binding) = cleared {
+            binding.heartbeat.abort();
+            self.emit(
+                session_id,
+                &binding.directive,
+                "result",
+                json!({ "ok": false, "error": { "code": "session_closed" } }),
+            )
+            .await;
+        }
+    }
+
     async fn emit(&self, session_id: &str, directive: &FleetDirective, kind: &str, payload: Value) {
         if let Err(e) = self
             .pria

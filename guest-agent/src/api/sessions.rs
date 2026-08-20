@@ -330,6 +330,9 @@ pub async fn cancel(
     proc.cancel()
         .await
         .map_err(|e| GuestAgentError::internal(e.to_string()))?;
+    // Teardown clears any fleet binding: exactly-once session_closed result +
+    // heartbeat abort (review 9 finding 1); silent when unbound.
+    state.fleet.on_session_closed(&session_id).await;
     let ev = AuditEventBuilder::new(kinds::SESSION_CANCELLED)
         .str_field("account_id", state.config.account_id.to_string())
         .str_field("vm_id", state.config.vm_id.to_string())
@@ -366,6 +369,9 @@ pub async fn close(
         .await
         .map_err(|e| GuestAgentError::internal(e.to_string()))?;
     state.sessions.remove(&session_id);
+    // Teardown clears any fleet binding: exactly-once session_closed result +
+    // heartbeat abort (review 9 finding 1); silent when unbound.
+    state.fleet.on_session_closed(&session_id).await;
     let ev = AuditEventBuilder::new(kinds::SESSION_EXITED)
         .str_field("account_id", state.config.account_id.to_string())
         .str_field("vm_id", state.config.vm_id.to_string())

@@ -270,7 +270,11 @@ pub async fn relay_agent_end_usage(
                 break;
             }
             Err(e) => {
+                // Read-Err ≡ EOF for fleet purposes (review 9 finding 1): the
+                // loop breaks here, so EOF is never observed — a still-bound
+                // task must still report session_exited and clear.
                 tracing::warn!(error = %e, "usage relay stdout read failed");
+                fleet.on_session_eof(&identity.session_id).await;
                 break;
             }
         }
