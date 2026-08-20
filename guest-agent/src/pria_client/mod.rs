@@ -247,6 +247,16 @@ pub mod fake {
         pub usages: Mutex<Vec<UsagePayload>>,
         pub credential_requests: Mutex<Vec<CredentialRequestPayload>>,
         pub credential_response: Mutex<Value>,
+        /// W3.7-G fence recorder (fleet callback protocol, guest half of F6).
+        ///
+        /// Contract: the (not-yet-existing) `PriaCallbackClient::fleet_callback
+        /// (session_id, handle_id, generation, kind, payload)` trait method —
+        /// mirroring `session_event` above — must push one JSON object per call:
+        /// `{"session_id", "handle_id", "generation", "kind", "payload"}`.
+        /// Recorded as `Value` so the fence does not pin a payload struct that
+        /// does not exist yet. Until the trait method lands, nothing writes
+        /// here — that emptiness IS the born-RED for the detection rows.
+        pub fleet_callbacks: Mutex<Vec<Value>>,
     }
 
     #[async_trait]

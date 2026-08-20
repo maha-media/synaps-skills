@@ -523,6 +523,12 @@ mod fake {
         pub launches: Mutex<Vec<LaunchSpec>>,
         pub fail: Mutex<bool>,
         pub next_pid: Mutex<u32>,
+        /// Concrete handles to every [`FakeProcess`] this launcher returned, in
+        /// launch order. Recorder arm (mirrors `launches`): `Arc<dyn
+        /// SessionProcess>` cannot be downcast, so integration fences that must
+        /// assert byte-identical stdin passthrough (`FakeProcess::sent`) — e.g.
+        /// the W3.7-G fleet-detection fence — reach the fake through here.
+        pub launched: Mutex<Vec<std::sync::Arc<FakeProcess>>>,
     }
 
     impl FakeLauncher {
@@ -549,7 +555,9 @@ mod fake {
             self.launches.lock().unwrap().push(spec.clone());
             let mut pid = self.next_pid.lock().unwrap();
             *pid = if *pid == 0 { 12345 } else { *pid + 1 };
-            Ok(std::sync::Arc::new(FakeProcess::new(*pid)))
+            let proc = std::sync::Arc::new(FakeProcess::new(*pid));
+            self.launched.lock().unwrap().push(proc.clone());
+            Ok(proc)
         }
     }
 
