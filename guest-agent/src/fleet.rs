@@ -83,6 +83,55 @@ fn valid_generation(generation: &str) -> Option<u64> {
     generation.parse().ok()
 }
 
+/// How the send choke point should treat one `SendRequest.input`.
+///
+/// Live inputs are single-line JSON-RPC envelopes (`{"type":"prompt",…}` /
+/// `{"type":"set_model",…}`) with the W3.7-P wire text riding INSIDE a prompt
+/// envelope's `message` — the leg-4 staging finding. Classification is for
+/// fleet detection and the Acked→Running state machine ONLY; the ORIGINAL
+/// input is always forwarded to the process unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SendClass {
+    /// A fleet set_task directive (envelope-borne or raw text): bind + ack.
+    FleetDirective(FleetDirective),
+    /// A non-fleet prompt turn (envelope-borne or raw text): mark Running.
+    PromptTurn,
+    /// A control frame (e.g. set_model) — NOT a turn (the E3 ruling): neither
+    /// binds nor advances Acked→Running.
+    ControlFrame,
+}
+
+/// Classify one send input at the choke point.
+///
+/// * JSON object with `type=="prompt"` and a string `message` → fleet
+///   detection runs against the EXTRACTED message; without a directive it is
+///   an ordinary prompt turn.
+/// * JSON object with any other `type` string → a control frame: control
+///   frames are not turns and are never fleet-sniffed (the E3 ruling — a
+///   control frame marking Running would let its own turn-end mint a `result`
+///   before the brief).
+/// * Everything else (non-JSON, malformed JSON, non-object, no `type`) falls
+///   through to the original raw-text behavior byte-identically.
+pub fn classify_send(input: &str) -> SendClass {
+    if let Ok(Value::Object(envelope)) = serde_json::from_str::<Value>(input) {
+        if let Some(kind) = envelope.get("type").and_then(Value::as_str) {
+            if kind == "prompt" {
+                if let Some(message) = envelope.get("message").and_then(Value::as_str) {
+                    return match parse_fleet_directive(message) {
+                        Some(directive) => SendClass::FleetDirective(directive),
+                        None => SendClass::PromptTurn,
+                    };
+                }
+            }
+            return SendClass::ControlFrame;
+        }
+    }
+    match parse_fleet_directive(input) {
+        Some(directive) => SendClass::FleetDirective(directive),
+        None => SendClass::PromptTurn,
+    }
+}
+
 /// Binding lifecycle: `Acked` until the brief send arrives, then `Running`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
