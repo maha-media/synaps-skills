@@ -25,11 +25,13 @@ Install `tode` first if needed:
 curl -fsSL https://tode.sh/install | bash
 ```
 
-Then install this plugin from the `synaps-skills` marketplace using Synaps' `/plugins` screen, or copy `tode-plugin` into:
+Then install this plugin from the `synaps-skills` marketplace using Synaps' `/plugins` screen. For local development, copy `tode-plugin` into:
 
 ```text
 ~/.synaps-cli/plugins/tode/
 ```
+
+Installed marketplace plugins are snapshots; update them through `/plugins` after a new release rather than editing the installed copy.
 
 Start Synaps from a tode integrated terminal:
 

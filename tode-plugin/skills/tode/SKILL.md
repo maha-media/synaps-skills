@@ -16,13 +16,17 @@ profile internals or talking to code-server directly.
 Do this before assuming the session is in tode:
 
 ```bash
-if [ -n "${TODE_IPC:-}" ]; then
+if [ -n "${TODE_IPC:-}" ] && [ -S "$TODE_IPC" ]; then
   printf 'inside tode: %s\n' "$TODE_IPC"
 else
-  printf 'not inside a tode integrated terminal\n'
+  printf 'not connected to a live tode window\n'
 fi
-command -v tode && tode --version
-tode --skill
+if command -v tode >/dev/null 2>&1; then
+  tode --version
+  tode --skill
+else
+  printf 'tode is not installed or not on PATH\n'
+fi
 ```
 
 `TODE_IPC` identifies the current workbench window and is inherited by Synaps
