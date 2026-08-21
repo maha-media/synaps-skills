@@ -65,6 +65,14 @@ fn test_state() -> AppState {
     let sessions = Arc::new(pria_guest_agent::sessions::SessionStore::new(
         runtime.clone(),
     ));
+    let fleet = Arc::new(pria_guest_agent::fleet::FleetBindings::new(
+        Arc::new(pria_guest_agent::pria_client::fake::FakePriaClient::default()),
+        std::time::Duration::from_secs(30),
+    ));
+    let gate = Arc::new(pria_guest_agent::turn_gate::TurnGate::new(
+        fleet.clone(),
+        sessions.clone(),
+    ));
     AppState {
         config: Arc::new(cfg),
         hmac: Arc::new(hmac),
@@ -76,10 +84,8 @@ fn test_state() -> AppState {
         sessions,
         fsmon: Arc::new(pria_guest_agent::fsmon::client::FakeFsmonControl::healthy()),
         desktops: pria_guest_agent::test_support::fake_desktop_store(),
-        fleet: Arc::new(pria_guest_agent::fleet::FleetBindings::new(
-            Arc::new(pria_guest_agent::pria_client::fake::FakePriaClient::default()),
-            std::time::Duration::from_secs(30),
-        )),
+        fleet,
+        gate,
     }
 }
 

@@ -200,6 +200,9 @@ async fn f2_no_fleet_line_means_zero_callbacks_and_unchanged_passthrough() {
     let two_line = plain_task();
     let prompt = "please summarise the workspace README";
     send(&router, &two_line).await;
+    // F6.2: turns are sequential — the first turn ends before the next send
+    // (the gate would otherwise buffer it; delivery timing, not detection).
+    env.state.gate.on_agent_end("sess_abc").await;
     send(&router, prompt).await;
 
     assert!(
@@ -272,6 +275,9 @@ async fn f3_invalid_fleet_shapes_over_the_wire_forward_unchanged_no_callbacks() 
     ];
     for input in &bad {
         send(&router, input).await;
+        // F6.2: each (non-fleet ⇒ prompt-turn) input ends before the next
+        // send, or the gate would buffer — delivery timing, not detection.
+        env.state.gate.on_agent_end("sess_abc").await;
     }
     assert!(fleet_cbs(&pria).is_empty(), "invalid shapes emit nothing");
     assert!(env.state.fleet.binding("sess_abc").is_none());
@@ -284,9 +290,10 @@ async fn f3_invalid_fleet_shapes_over_the_wire_forward_unchanged_no_callbacks() 
 /// agent_end emits exactly one `result {ok:true}` and clears; a third agent_end
 /// after clear emits nothing.
 ///
-/// Driven through `FleetBindings::on_agent_end` — the seam the stdout relay
-/// (relay_agent_end_usage) must call per agent_end frame; the relay itself is
-/// not drivable here because FakeProcess has no stdout (see module doc).
+/// Driven through `TurnGate::on_agent_end` — the composed seam the stdout
+/// relay (relay_agent_end_usage) calls per agent_end frame since F6.2 (fleet
+/// state machine first, then the gate flush); the relay itself is not
+/// drivable here because FakeProcess has no stdout (see module doc).
 #[tokio::test]
 async fn f4_result_ok_after_running_turn_and_binding_clears() {
     let (router, _launcher, pria, env) = started().await;
@@ -294,7 +301,7 @@ async fn f4_result_ok_after_running_turn_and_binding_clears() {
     assert_eq!(fleet_cbs(&pria).len(), 1, "ack only");
 
     // The set_task turn's own agent_end must be IGNORED (state: Acked).
-    env.state.fleet.on_agent_end("sess_abc").await;
+    env.state.gate.on_agent_end("sess_abc").await;
     assert_eq!(
         fleet_cbs(&pria).len(),
         1,
@@ -306,7 +313,7 @@ async fn f4_result_ok_after_running_turn_and_binding_clears() {
     assert_eq!(fleet_cbs(&pria).len(), 1, "the brief send emits nothing");
 
     // agent_end while Running → exactly one result {ok:true}, binding cleared.
-    env.state.fleet.on_agent_end("sess_abc").await;
+    env.state.gate.on_agent_end("sess_abc").await;
     let cbs = fleet_cbs(&pria);
     assert_eq!(cbs.len(), 2, "exactly one result after the running turn");
     assert_eq!(cbs[1]["kind"], "result");
@@ -316,43 +323,53 @@ async fn f4_result_ok_after_running_turn_and_binding_clears() {
     assert!(env.state.fleet.binding("sess_abc").is_none(), "cleared");
 
     // After clear, later turns emit nothing.
-    env.state.fleet.on_agent_end("sess_abc").await;
+    env.state.gate.on_agent_end("sess_abc").await;
     assert_eq!(fleet_cbs(&pria).len(), 2, "post-clear agent_end is silent");
 }
 
 // ── F5: rebind ───────────────────────────────────────────────────────────────
 
-/// A new set_task+fleet on the same session REPLACES the binding: ack under the
-/// new handle, and no later event ever emits under the old handle.
+/// A same-handle FORWARD-GENERATION set_task+fleet on the same session
+/// REPLACES the binding: ack under the new generation, and no later event
+/// ever emits under the old generation.
+///
+/// LAW CHANGE NOTE (F6.3): this row originally proved replacement with a
+/// FOREIGN handle — that leg is now REFUSED by the binding-conflict law (the
+/// fj-8d7c1e71 livelock; pinned by f6_3c and F6.3e/f). The replacement
+/// contract this row pins survives on the one leg that remains legal: the
+/// same handle stepping its generation forward (requeue redispatch).
 #[tokio::test]
 async fn f5_rebind_replaces_binding_and_old_handle_never_emits_again() {
     let (router, _launcher, pria, env) = started().await;
-    send(&router, &fleet_task("fj-old", "1")).await;
-    send(&router, &fleet_task("fj-new", "2")).await;
+    send(&router, &fleet_task("fj-job", "1")).await;
+    // The gen-1 set_task turn ends before the redispatch arrives (F6.2:
+    // turns are sequential; a mid-turn redispatch would buffer, not bind).
+    env.state.gate.on_agent_end("sess_abc").await;
+    send(&router, &fleet_task("fj-job", "2")).await;
 
     let cbs = fleet_cbs(&pria);
     assert_eq!(cbs.len(), 2, "one ack per set_task");
     assert_eq!(cbs[1]["kind"], "ack");
-    assert_eq!(cbs[1]["handle_id"], "fj-new");
+    assert_eq!(cbs[1]["handle_id"], "fj-job");
     assert_eq!(cbs[1]["generation"], 2);
 
     let b = env.state.fleet.binding("sess_abc").expect("bound");
-    assert_eq!(b.handle_id, "fj-new");
+    assert_eq!(b.handle_id, "fj-job");
     assert_eq!(b.generation, 2);
 
     // Drive the new binding to result: its set_task agent_end is ignored, then
-    // brief + agent_end emits the result — under fj-new, never fj-old.
-    env.state.fleet.on_agent_end("sess_abc").await;
+    // brief + agent_end emits the result — under gen 2, never gen 1.
+    env.state.gate.on_agent_end("sess_abc").await;
     send(&router, "begin").await;
-    env.state.fleet.on_agent_end("sess_abc").await;
+    env.state.gate.on_agent_end("sess_abc").await;
 
     let cbs = fleet_cbs(&pria);
     assert_eq!(cbs.last().unwrap()["kind"], "result");
-    assert_eq!(cbs.last().unwrap()["handle_id"], "fj-new");
+    assert_eq!(cbs.last().unwrap()["generation"], 2);
     assert!(
         cbs.iter()
-            .all(|c| c["handle_id"] != "fj-old" || c["kind"] == "ack"),
-        "the old handle may only ever have its ack: {cbs:?}"
+            .all(|c| c["generation"] != 1 || c["kind"] == "ack"),
+        "the old generation may only ever have its ack: {cbs:?}"
     );
 }
 
@@ -441,7 +458,8 @@ async fn f7_acked_binding_emits_heartbeats_until_cleared() {
                 generation: 3,
             },
         )
-        .await;
+        .await
+        .expect("bind on a fresh session accepted");
 
     tokio::time::sleep(Duration::from_millis(120)).await;
     let cbs = fleet_cbs(&pria);

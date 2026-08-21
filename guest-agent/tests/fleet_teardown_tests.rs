@@ -56,6 +56,7 @@ use pria_guest_agent::pria_client::fake::FakePriaClient;
 use pria_guest_agent::pria_client::PriaCallbackClient;
 use pria_guest_agent::synaps::launcher::{relay_agent_end_usage, FakeLauncher, UsageIdentity};
 use pria_guest_agent::test_support::{test_env, TestEnv};
+use pria_guest_agent::turn_gate::TurnGate;
 
 // ── helpers (mirroring tests/fleet_callback_tests.rs) ────────────────────────
 
@@ -233,6 +234,10 @@ async fn t1_close_stops_the_heartbeat_loop() {
         pria.clone() as Arc<dyn PriaCallbackClient>,
         Duration::from_millis(10),
     ));
+    // F6.2: the send path runs through the gate, which is composed over the
+    // fleet — the swapped-in tiny-interval fleet needs a gate of its own or
+    // sends would bind on the ORIGINAL fleet and this row would probe nothing.
+    state.gate = Arc::new(TurnGate::new(state.fleet.clone(), state.sessions.clone()));
     let router = build_router(state.clone());
     start_session(&router, &env).await;
 
@@ -300,6 +305,10 @@ async fn t2_cancel_stops_the_heartbeat_loop() {
         pria.clone() as Arc<dyn PriaCallbackClient>,
         Duration::from_millis(10),
     ));
+    // F6.2: the send path runs through the gate, which is composed over the
+    // fleet — the swapped-in tiny-interval fleet needs a gate of its own or
+    // sends would bind on the ORIGINAL fleet and this row would probe nothing.
+    state.gate = Arc::new(TurnGate::new(state.fleet.clone(), state.sessions.clone()));
     let router = build_router(state.clone());
     start_session(&router, &env).await;
 
@@ -347,7 +356,8 @@ async fn t3_relay_read_err_while_bound_emits_session_exited_and_clears() {
                 generation: 6,
             },
         )
-        .await;
+        .await
+        .expect("bind on a fresh session accepted");
     fleet.mark_running("sess_err");
 
     // Invalid UTF-8 on the first line → next_line Err(InvalidData) → Err arm.
@@ -367,7 +377,7 @@ async fn t3_relay_read_err_while_bound_emits_session_exited_and_clears() {
         session_id: "sess_err".into(),
         ephemeral_task_id: None,
     };
-    relay_agent_end_usage(stdout, identity, pria.clone(), fleet.clone(), None).await;
+    relay_agent_end_usage(stdout, identity, pria.clone(), fleet.clone(), None, None).await;
 
     let cbs = fleet_cbs(&pria);
     assert_eq!(
@@ -406,15 +416,16 @@ async fn t4_rebind_same_session_after_cancel_teardown_works_fresh() {
     assert_eq!(last["handle_id"], "fj-fresh");
     assert_eq!(last["generation"], 4);
 
-    // Fresh Acked phase: no Running leftover from the old binding.
-    env.state.fleet.on_agent_end("sess_abc").await;
+    // Fresh Acked phase: no Running leftover from the old binding. Driven
+    // through the gate — the composed seam the relay calls since F6.2.
+    env.state.gate.on_agent_end("sess_abc").await;
     assert_eq!(
         fleet_cbs(&pria).last().unwrap()["kind"],
         "ack",
         "the fresh binding's set_task agent_end is ignored (Acked, not stale Running)"
     );
     send(&router, "begin").await;
-    env.state.fleet.on_agent_end("sess_abc").await;
+    env.state.gate.on_agent_end("sess_abc").await;
     let cbs = fleet_cbs(&pria);
     let last = cbs.last().unwrap();
     assert_eq!(last["kind"], "result");

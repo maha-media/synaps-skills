@@ -257,6 +257,9 @@ async fn e2a_prompt_envelope_without_fleet_line_emits_nothing_and_forwards_uncha
         "set_task vault-curator@1\ndigest sha256:{DIGEST_HEX}"
     ));
     send(&router, &plain).await;
+    // F6.2: turns are sequential — the first turn ends before the next send
+    // (the gate would otherwise buffer it; delivery timing, not detection).
+    env.state.gate.on_agent_end("sess_abc").await;
     send(&router, &two_line).await;
 
     assert!(
@@ -273,7 +276,8 @@ async fn e2a_prompt_envelope_without_fleet_line_emits_nothing_and_forwards_uncha
 /// a second prompt envelope (the brief) marks Running → agent_end emits
 /// exactly one `result {ok:true}` and clears. Same seam note as F4: the stdout
 /// relay is not drivable under FakeLauncher, so agent_end is driven through
-/// `FleetBindings::on_agent_end`.
+/// `TurnGate::on_agent_end` — the composed seam the relay calls per agent_end
+/// frame since F6.2 (fleet state machine first, then the gate flush).
 #[tokio::test]
 async fn e2b_envelope_brief_marks_running_then_agent_end_mints_result_ok() {
     let (router, _launcher, pria, env) = started().await;
@@ -285,14 +289,14 @@ async fn e2b_envelope_brief_marks_running_then_agent_end_mints_result_ok() {
     );
 
     // The set_task turn's own agent_end must be IGNORED (state: Acked).
-    env.state.fleet.on_agent_end("sess_abc").await;
+    env.state.gate.on_agent_end("sess_abc").await;
     assert_eq!(fleet_cbs(&pria).len(), 1, "set_task turn end is ignored");
 
     // The brief — ALSO an envelope on live — marks Running; no callback.
     send(&router, &prompt_envelope("curate the vault as briefed")).await;
     assert_eq!(fleet_cbs(&pria).len(), 1, "the brief emits nothing");
 
-    env.state.fleet.on_agent_end("sess_abc").await;
+    env.state.gate.on_agent_end("sess_abc").await;
     let cbs = fleet_cbs(&pria);
     assert_eq!(cbs.len(), 2, "exactly one result after the running turn");
     assert_eq!(cbs[1]["kind"], "result");
@@ -330,7 +334,8 @@ async fn e3_set_model_envelope_does_not_advance_acked_to_running() {
                 generation: 1,
             },
         )
-        .await;
+        .await
+        .expect("bind on a fresh session accepted");
     assert_eq!(fleet_cbs(&pria).len(), 1, "bind acks");
 
     // Control frame while Acked, then the set_task turn's own agent_end.
@@ -415,6 +420,9 @@ async fn e4_non_json_malformed_and_unknown_type_fall_through_to_raw_parse() {
     ];
     for input in &inputs {
         send(&router, input).await;
+        // F6.2: each (non-fleet ⇒ prompt-turn) input ends before the next
+        // send, or the gate would buffer — delivery timing, not detection.
+        env.state.gate.on_agent_end("sess_abc").await;
     }
     assert!(
         fleet_cbs(&pria).is_empty(),
@@ -426,37 +434,46 @@ async fn e4_non_json_malformed_and_unknown_type_fall_through_to_raw_parse() {
 
 // ── E5: envelope rebind ──────────────────────────────────────────────────────
 
-/// A second E1-style prompt envelope with a NEW handle REPLACES the binding:
-/// ack under the new handle; the old handle is silent ever after (the F5 law,
-/// proven through the live envelope shape).
+/// A second E1-style prompt envelope with the SAME handle at a FORWARD
+/// generation REPLACES the binding: ack under the new generation; the old
+/// generation is silent ever after (the F5 law, proven through the live
+/// envelope shape).
+///
+/// LAW CHANGE NOTE (F6.3): this row originally proved replacement with a
+/// FOREIGN handle — that leg is now REFUSED by the binding-conflict law (the
+/// fj-8d7c1e71 livelock; pinned by f6_3b/c and F6.3e/f). The replacement
+/// contract this row pins survives on the one leg that remains legal: the
+/// same handle stepping its generation forward (requeue redispatch).
 #[tokio::test]
 async fn e5_second_envelope_with_new_handle_replaces_binding_old_handle_silent() {
     let (router, _launcher, pria, env) = started().await;
-    let old_handle = LIVE_HANDLE;
-    let new_handle = "fj-a3355277-91a0-4b52-9c2f-8d1e0642cafe";
-    send(&router, &prompt_envelope(&fleet_wire(old_handle, "1"))).await;
-    send(&router, &prompt_envelope(&fleet_wire(new_handle, "2"))).await;
+    let handle = LIVE_HANDLE;
+    send(&router, &prompt_envelope(&fleet_wire(handle, "1"))).await;
+    // The gen-1 set_task turn ends before the redispatch arrives (F6.2:
+    // turns are sequential; a mid-turn redispatch would buffer, not bind).
+    env.state.gate.on_agent_end("sess_abc").await;
+    send(&router, &prompt_envelope(&fleet_wire(handle, "2"))).await;
 
     let cbs = fleet_cbs(&pria);
     assert_eq!(cbs.len(), 2, "one ack per envelope-borne set_task: {cbs:?}");
     assert_eq!(cbs[1]["kind"], "ack");
-    assert_eq!(cbs[1]["handle_id"], new_handle);
+    assert_eq!(cbs[1]["handle_id"], handle);
     assert_eq!(cbs[1]["generation"], 2);
     let b = env.state.fleet.binding("sess_abc").expect("bound");
-    assert_eq!(b.handle_id, new_handle);
+    assert_eq!(b.handle_id, handle);
     assert_eq!(b.generation, 2);
 
-    // Drive the new binding to result — under the new handle, never the old.
-    env.state.fleet.on_agent_end("sess_abc").await;
+    // Drive the new binding to result — under gen 2, never gen 1.
+    env.state.gate.on_agent_end("sess_abc").await;
     send(&router, &prompt_envelope("begin")).await;
-    env.state.fleet.on_agent_end("sess_abc").await;
+    env.state.gate.on_agent_end("sess_abc").await;
 
     let cbs = fleet_cbs(&pria);
     assert_eq!(cbs.last().unwrap()["kind"], "result");
-    assert_eq!(cbs.last().unwrap()["handle_id"], new_handle);
+    assert_eq!(cbs.last().unwrap()["generation"], 2);
     assert!(
         cbs.iter()
-            .all(|c| c["handle_id"] != old_handle || c["kind"] == "ack"),
-        "the old handle may only ever have its ack: {cbs:?}"
+            .all(|c| c["generation"] != 1 || c["kind"] == "ack"),
+        "the old generation may only ever have its ack: {cbs:?}"
     );
 }

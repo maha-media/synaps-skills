@@ -20,6 +20,7 @@ pub mod runtime;
 pub mod sessions;
 pub mod supervisor;
 pub mod synaps;
+pub mod turn_gate;
 pub mod versions;
 
 pub mod api;

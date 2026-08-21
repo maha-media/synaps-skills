@@ -10,7 +10,6 @@ use serde_json::{json, Value};
 
 use crate::api::AppState;
 use crate::error::{ErrorCode, GuestAgentError};
-use crate::fleet::{classify_send, SendClass};
 use crate::hmac::SignedJson;
 use crate::paths::ensure_under;
 use crate::pria_client::{kinds, AuditEventBuilder};
@@ -18,6 +17,7 @@ use crate::sessions::SessionEntry;
 use crate::synaps::launcher::LaunchSpec;
 use crate::synaps::launcher::{relay_agent_end_usage, RpcReadyReceipt, UsageIdentity};
 use crate::synaps::session_context::{now_timestamps, write_context, SessionContext};
+use crate::turn_gate::SubmitError;
 
 #[derive(Debug, Deserialize)]
 pub struct TransportSpec {
@@ -329,6 +329,7 @@ pub async fn start(
             identity,
             pria,
             state.fleet.clone(),
+            Some(state.gate.clone()),
             Some(ready_tx),
         ));
     } else {
@@ -418,12 +419,15 @@ pub async fn start(
     // Keeps launcher pure — session lifecycle is owned here, not in the launcher.
     {
         let sessions = state.sessions.clone();
+        let gate = state.gate.clone();
         let sid = req.session_id.clone();
         tokio::spawn(async move {
             reaper_proc.wait_for_exit().await;
             // Only remove if still present — explicit close/cancel may have
             // already removed it, and remove() is idempotent on absent keys.
             sessions.remove(&sid);
+            // Gate state dies with the session: a dead child flushes nothing.
+            gate.teardown(&sid);
             tracing::info!(session_id = %sid, "reaper: session removed after child exit");
         });
     }
@@ -482,25 +486,33 @@ pub async fn send(
         .sessions
         .process(&session_id)
         .ok_or_else(|| GuestAgentError::new(ErrorCode::SessionNotFound, "session not found"))?;
-    // Fleet detection (W3.7-G, envelope-aware per the leg-4 live finding): the
-    // wire text may ride inside a prompt envelope's `message`. A valid
-    // `fleet <handle> <gen>` line in a set_task message binds + acks; a
-    // non-fleet prompt turn moves an Acked binding to Running (the task's
-    // brief); control frames are NOT turns (the E3 ruling) and do neither.
-    // Either way the ORIGINAL input is forwarded unchanged — detection never
-    // blocks or rewrites.
-    match classify_send(&req.input) {
-        SendClass::FleetDirective(directive) => state.fleet.bind(&session_id, directive).await,
-        SendClass::PromptTurn => state.fleet.mark_running(&session_id),
-        SendClass::ControlFrame => {}
+    // F6.2 turn gate (live finding sess_BxJ8NnCUOoVU): the CLI silently drops
+    // prompts that arrive mid-turn, so the gate owns delivery — an idle
+    // session writes through immediately (today's bytes, today's timing), a
+    // busy one buffers the turn for flush at the streaming turn's agent_end.
+    // Fleet detection (W3.7-G) and the F6.1 state machine now fire at the
+    // WRITE point inside the gate, keeping the skip count aligned with the
+    // turn that actually runs next. Refusals are fail-closed and loud:
+    // binding_conflict (F6.3) and the full-queue stdin-unavailable class —
+    // Pria's checked delivery must never see a silent drop.
+    match state.gate.submit(&session_id, &req.input, proc).await {
+        Ok(_) => Ok(Json(AckResponse {
+            session_id,
+            ok: true,
+        })),
+        Err(SubmitError::Binding(refusal)) => Err(GuestAgentError::new(
+            ErrorCode::BindingConflict,
+            format!("fleet directive refused: {refusal}"),
+        )),
+        Err(SubmitError::QueueFull) => Err(GuestAgentError::new(
+            ErrorCode::SessionNotFound,
+            "session stdin is not available: turn queue full",
+        )),
+        Err(SubmitError::Write(e)) => Err(GuestAgentError::new(
+            ErrorCode::SessionNotFound,
+            e.to_string(),
+        )),
     }
-    proc.send(&req.input)
-        .await
-        .map_err(|e| GuestAgentError::new(ErrorCode::SessionNotFound, e.to_string()))?;
-    Ok(Json(AckResponse {
-        session_id,
-        ok: true,
-    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -523,6 +535,9 @@ pub async fn cancel(
     proc.cancel()
         .await
         .map_err(|e| GuestAgentError::internal(e.to_string()))?;
+    // Gate state dies with the session (F6.2f): pending queue dropped, no
+    // posthumous flush of buffered turns into a killed process.
+    state.gate.teardown(&session_id);
     // Teardown clears any fleet binding: exactly-once session_closed result +
     // heartbeat abort (review 9 finding 1); silent when unbound.
     state.fleet.on_session_closed(&session_id).await;
@@ -562,6 +577,9 @@ pub async fn close(
         .await
         .map_err(|e| GuestAgentError::internal(e.to_string()))?;
     state.sessions.remove(&session_id);
+    // Gate state dies with the session (F6.2f): pending queue dropped, no
+    // posthumous flush of buffered turns into a closed process.
+    state.gate.teardown(&session_id);
     // Teardown clears any fleet binding: exactly-once session_closed result +
     // heartbeat abort (review 9 finding 1); silent when unbound.
     state.fleet.on_session_closed(&session_id).await;
