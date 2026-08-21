@@ -172,6 +172,38 @@ pub struct FleetBindings {
     bindings: Mutex<HashMap<String, Binding>>,
 }
 
+/// Why a `bind()` was refused (F6.3 binding-conflict law).
+///
+/// Live root cause (staging, fj-8d7c1e71 gen 3→6 → attempts_exhausted):
+/// Pria's session-reuse path can send a set_task for handle B into a session
+/// carrying a LIVE binding for handle A. Unconditional replacement aborts A's
+/// heartbeat — A starves, gets lease-reaped, steals the session back, and the
+/// two handles livelock. `bind()` must refuse instead; the send path surfaces
+/// the refusal as `binding_conflict` so Pria's checked set_task delivery fails
+/// that dispatch leg closed (the row stays queued server-side).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindRefusal {
+    /// A live binding for a DIFFERENT handle occupies the session. Nothing is
+    /// disturbed: no replacement, no heartbeat abort, no ack for the intruder.
+    Conflict { live_handle: String },
+    /// Same handle, but generation did not move forward (stale directive —
+    /// generations only step forward on requeue redispatch).
+    StaleGeneration { current: u64 },
+}
+
+impl std::fmt::Display for BindRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BindRefusal::Conflict { live_handle } => {
+                write!(f, "session carries a live binding for {live_handle}")
+            }
+            BindRefusal::StaleGeneration { current } => {
+                write!(f, "stale directive: bound generation is already {current}")
+            }
+        }
+    }
+}
+
 impl FleetBindings {
     pub fn new(pria: Arc<dyn PriaCallbackClient>, heartbeat_interval: Duration) -> Self {
         Self {
@@ -181,10 +213,19 @@ impl FleetBindings {
         }
     }
 
-    /// Bind a fleet directive to a session: replaces any existing binding
-    /// (aborting its heartbeat — the old handle never emits again), emits the
-    /// `ack` callback, and starts the per-binding heartbeat loop.
-    pub async fn bind(&self, session_id: &str, directive: FleetDirective) {
+    /// Bind a fleet directive to a session, subject to the F6.3 conflict law:
+    /// a SAME-handle rebind with a forward-stepping generation replaces the
+    /// binding (aborting its heartbeat, fresh debt — the requeue-redispatch
+    /// leg); a same-handle bind at `generation <= current` is refused as
+    /// stale; a FOREIGN-handle bind while any binding is live is refused
+    /// outright (no replacement, no heartbeat abort, no ack — the fj-8d7c1e71
+    /// livelock). A cleared session accepts any handle fresh. On acceptance:
+    /// emits the `ack` callback and starts the per-binding heartbeat loop.
+    pub async fn bind(
+        &self,
+        session_id: &str,
+        directive: FleetDirective,
+    ) -> Result<(), BindRefusal> {
         let heartbeat = spawn_binding_heartbeat(
             self.pria.clone(),
             self.heartbeat_interval,
@@ -206,6 +247,7 @@ impl FleetBindings {
             old.heartbeat.abort();
         }
         self.emit(session_id, &directive, "ack", json!({})).await;
+        Ok(())
     }
 
     /// The send handler observed a non-fleet send: an `Acked` binding becomes
@@ -535,5 +577,217 @@ mod f6_1_turn_fence {
         assert_eq!(rs[0]["handle_id"], "fj-b");
         assert_eq!(rs[0]["generation"], 2);
         assert_eq!(rs[0]["payload"]["ok"], true);
+    }
+}
+
+// ── F6.3 binding-conflict law (born-RED) ─────────────────────────────────────
+//
+// Live root cause (staging): Pria's session-reuse path sent a set_task for
+// handle B into a session carrying a LIVE binding for handle A. `bind()`
+// replaced unconditionally and aborted A's heartbeat — A starved, got
+// lease-reaped, stole the session back, and the two handles livelocked
+// (fj-8d7c1e71 churned gen 3→6 to attempts_exhausted). The law pinned here:
+// same-handle FORWARD-generation rebind replaces (requeue redispatch);
+// same-handle non-forward generation is refused as stale; a foreign handle is
+// refused outright while any binding is live and disturbs NOTHING; a cleared
+// binding (result emitted / teardown) frees the session for any handle.
+#[cfg(test)]
+mod f6_3_binding_conflict {
+    use super::*;
+    use crate::pria_client::fake::FakePriaClient;
+
+    fn directive(handle: &str, generation: u64) -> FleetDirective {
+        FleetDirective {
+            handle_id: handle.into(),
+            generation,
+        }
+    }
+
+    fn fleet_with(interval: Duration) -> (Arc<FakePriaClient>, FleetBindings) {
+        let pria = Arc::new(FakePriaClient::default());
+        let fleet = FleetBindings::new(
+            pria.clone() as Arc<dyn PriaCallbackClient>,
+            interval,
+        );
+        (pria, fleet)
+    }
+
+    fn fleet() -> (Arc<FakePriaClient>, FleetBindings) {
+        fleet_with(Duration::from_secs(3600))
+    }
+
+    fn cbs(pria: &FakePriaClient) -> Vec<Value> {
+        pria.fleet_callbacks.lock().unwrap().clone()
+    }
+
+    fn results(pria: &FakePriaClient) -> Vec<Value> {
+        cbs(pria)
+            .into_iter()
+            .filter(|c| c["kind"] == "result")
+            .collect()
+    }
+
+    /// F6.3a — same-handle FORWARD-generation rebind (requeue redispatch) is
+    /// allowed and replaces: ack under the new generation, fresh skip debt
+    /// (the F6.1e law re-proven through the accepted-rebind leg).
+    #[tokio::test]
+    async fn f6_3a_same_handle_forward_generation_rebind_replaces_with_fresh_debt() {
+        let (pria, fleet) = fleet();
+        fleet
+            .bind("sess_abc", directive("fj-a", 1))
+            .await
+            .expect("first bind on a free session");
+        fleet.on_agent_end("sess_abc").await; // burns gen-1's debt
+
+        fleet
+            .bind("sess_abc", directive("fj-a", 2))
+            .await
+            .expect("same handle, forward generation: allowed");
+        let acks: Vec<Value> = cbs(&pria)
+            .into_iter()
+            .filter(|c| c["kind"] == "ack")
+            .collect();
+        assert_eq!(acks.len(), 2, "one ack per accepted bind");
+        assert_eq!(acks[1]["generation"], 2);
+        assert_eq!(fleet.binding("sess_abc").unwrap().generation, 2);
+
+        // Fresh debt: the gen-2 directive turn's own end is silent; the brief
+        // turn's end mints exactly once, under gen 2.
+        fleet.mark_running("sess_abc");
+        fleet.on_agent_end("sess_abc").await;
+        assert!(results(&pria).is_empty(), "gen-2 directive turn end silent");
+        fleet.on_agent_end("sess_abc").await;
+        let rs = results(&pria);
+        assert_eq!(rs.len(), 1, "exactly one result: {rs:?}");
+        assert_eq!(rs[0]["generation"], 2);
+        assert_eq!(rs[0]["payload"]["ok"], true);
+    }
+
+    /// F6.3b — same-handle bind at `generation <= current` is REFUSED as a
+    /// stale directive: no ack, no replacement, and the live binding's
+    /// phase/skip debt are undisturbed (it still completes exactly once).
+    #[tokio::test]
+    async fn f6_3b_same_handle_stale_or_equal_generation_refused_undisturbed() {
+        let (pria, fleet) = fleet();
+        fleet
+            .bind("sess_abc", directive("fj-a", 3))
+            .await
+            .expect("bind on a free session");
+
+        assert_eq!(
+            fleet.bind("sess_abc", directive("fj-a", 3)).await,
+            Err(BindRefusal::StaleGeneration { current: 3 }),
+            "equal generation must be refused (stale redelivery)"
+        );
+        assert_eq!(
+            fleet.bind("sess_abc", directive("fj-a", 2)).await,
+            Err(BindRefusal::StaleGeneration { current: 3 }),
+            "backward generation must be refused"
+        );
+        assert_eq!(
+            cbs(&pria).len(),
+            1,
+            "refused binds must not ack: {:?}",
+            cbs(&pria)
+        );
+        assert_eq!(fleet.binding("sess_abc").unwrap().generation, 3);
+
+        // The refusals disturbed nothing: burn + brief + mint, exactly once.
+        fleet.mark_running("sess_abc");
+        fleet.on_agent_end("sess_abc").await; // directive turn's own end
+        assert!(results(&pria).is_empty(), "debt survived the refusals");
+        fleet.on_agent_end("sess_abc").await;
+        let rs = results(&pria);
+        assert_eq!(rs.len(), 1, "exactly one result: {rs:?}");
+        assert_eq!(rs[0]["generation"], 3);
+    }
+
+    /// F6.3c — THE LIVELOCK ROW: a FOREIGN-handle bind while a live binding
+    /// exists is REFUSED — no replacement, no heartbeat abort, no ack for the
+    /// intruder. Today `bind()` replaces unconditionally and aborts A's
+    /// heartbeat: A starves → lease-reaped → steals back → livelock
+    /// (fj-8d7c1e71, gen 3→6, attempts_exhausted).
+    #[tokio::test]
+    async fn f6_3c_foreign_handle_bind_refused_binding_and_heartbeat_undisturbed() {
+        let (pria, fleet) = fleet_with(Duration::from_millis(10));
+        fleet
+            .bind("sess_abc", directive("fj-a", 1))
+            .await
+            .expect("A binds a free session");
+
+        assert_eq!(
+            fleet.bind("sess_abc", directive("fj-b", 1)).await,
+            Err(BindRefusal::Conflict {
+                live_handle: "fj-a".into()
+            }),
+            "a foreign handle must never replace a live binding"
+        );
+        let b = fleet.binding("sess_abc").expect("A still bound");
+        assert_eq!(b.handle_id, "fj-a", "A's binding survives");
+        assert_eq!(
+            cbs(&pria).iter().filter(|c| c["kind"] == "ack").count(),
+            1,
+            "the intruder must not be acked: {:?}",
+            cbs(&pria)
+        );
+
+        // A's heartbeat loop must NOT have been aborted by the refusal.
+        let before = cbs(&pria).len();
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        let after = cbs(&pria);
+        assert!(
+            after.len() > before
+                && after.iter().any(|c| {
+                    c["kind"] == "heartbeat" && c["handle_id"] == "fj-a"
+                }),
+            "A's heartbeat must survive the refused foreign bind: {after:?}"
+        );
+
+        // A completes normally; fj-b never appears in any callback.
+        fleet.mark_running("sess_abc");
+        fleet.on_agent_end("sess_abc").await; // burn
+        fleet.on_agent_end("sess_abc").await; // mint
+        let rs = results(&pria);
+        assert_eq!(rs.len(), 1, "exactly one result, A's: {rs:?}");
+        assert_eq!(rs[0]["handle_id"], "fj-a");
+        assert!(
+            cbs(&pria).iter().all(|c| c["handle_id"] != "fj-b"),
+            "fj-b must never emit anything: {:?}",
+            cbs(&pria)
+        );
+    }
+
+    /// F6.3d — a CLEARED binding frees the session: after a minted result (or
+    /// teardown) any handle may bind fresh.
+    #[tokio::test]
+    async fn f6_3d_cleared_binding_frees_session_for_any_handle() {
+        let (pria, fleet) = fleet();
+        fleet
+            .bind("sess_abc", directive("fj-a", 1))
+            .await
+            .expect("A binds a free session");
+        fleet.mark_running("sess_abc");
+        fleet.on_agent_end("sess_abc").await; // burn
+        fleet.on_agent_end("sess_abc").await; // mint + clear
+        assert!(fleet.binding("sess_abc").is_none(), "A cleared");
+
+        fleet
+            .bind("sess_abc", directive("fj-b", 1))
+            .await
+            .expect("a result-cleared session accepts any handle");
+        assert_eq!(fleet.binding("sess_abc").unwrap().handle_id, "fj-b");
+
+        // Teardown also frees.
+        fleet.on_session_closed("sess_abc").await;
+        fleet
+            .bind("sess_abc", directive("fj-c", 9))
+            .await
+            .expect("a teardown-cleared session accepts any handle");
+        assert_eq!(fleet.binding("sess_abc").unwrap().handle_id, "fj-c");
+        assert_eq!(
+            cbs(&pria).last().unwrap()["kind"],
+            "ack",
+            "fresh binds on a freed session ack normally"
+        );
     }
 }

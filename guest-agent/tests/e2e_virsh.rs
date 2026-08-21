@@ -162,6 +162,10 @@ fsmon:
         pria.clone(),
         std::time::Duration::from_secs(30),
     ));
+    let gate = Arc::new(pria_guest_agent::turn_gate::TurnGate::new(
+        fleet.clone(),
+        sessions.clone(),
+    ));
 
     let state = AppState {
         config: Arc::new(config),
@@ -175,6 +179,7 @@ fsmon:
         fsmon: Arc::new(FakeFsmonControl::healthy()),
         desktops: pria_guest_agent::test_support::fake_desktop_store(),
         fleet,
+        gate,
     };
 
     let app = build_router(state);

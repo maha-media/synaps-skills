@@ -15,6 +15,7 @@ use crate::pria_client::PriaCallbackClient;
 use crate::runtime::RuntimeState;
 use crate::sessions::SessionStore;
 use crate::synaps::launcher::SynapsLauncher;
+use crate::turn_gate::TurnGate;
 use crate::versions::Versions;
 
 pub mod desktop;
@@ -42,6 +43,9 @@ pub struct AppState {
     pub desktops: Arc<DesktopStore>,
     /// Fleet task bindings (W3.7-G): session → {handle_id, generation}.
     pub fleet: Arc<FleetBindings>,
+    /// Per-session turn gate (F6.2): busy/pending state so a prompt is never
+    /// written to the SynapsCLI stdin mid-turn (the CLI silently drops it).
+    pub gate: Arc<TurnGate>,
 }
 
 /// Build the axum router for the configured route prefix.

@@ -490,7 +490,11 @@ pub async fn send(
     // Either way the ORIGINAL input is forwarded unchanged — detection never
     // blocks or rewrites.
     match classify_send(&req.input) {
-        SendClass::FleetDirective(directive) => state.fleet.bind(&session_id, directive).await,
+        SendClass::FleetDirective(directive) => {
+            // Fence-stage note (F6.3): refusals surface in the fix commit; the
+            // scaffold bind still accepts everything, so discard the Result.
+            let _ = state.fleet.bind(&session_id, directive).await;
+        }
         SendClass::PromptTurn => state.fleet.mark_running(&session_id),
         SendClass::ControlFrame => {}
     }

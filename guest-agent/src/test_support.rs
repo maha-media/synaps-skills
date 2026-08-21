@@ -114,6 +114,7 @@ fn assemble(
         pria.clone(),
         std::time::Duration::from_secs(cfg.fleet.heartbeat_interval_seconds.max(1)),
     ));
+    let gate = Arc::new(crate::turn_gate::TurnGate::new(fleet.clone(), sessions.clone()));
     AppState {
         config: Arc::new(cfg),
         hmac: Arc::new(HmacVerifier::disabled("acct_123", "vm_456")),
@@ -126,6 +127,7 @@ fn assemble(
         fsmon: Arc::new(crate::fsmon::client::FakeFsmonControl::healthy()),
         desktops,
         fleet,
+        gate,
     }
 }
 
