@@ -226,28 +226,84 @@ impl FleetBindings {
         session_id: &str,
         directive: FleetDirective,
     ) -> Result<(), BindRefusal> {
-        let heartbeat = spawn_binding_heartbeat(
+        // Spawn the heartbeat BEFORE taking the lock (spawning inside the
+        // critical section would hold the map across a runtime call); an
+        // aborted-on-refusal task never ticks — the first beat is one full
+        // interval out. Option-wrapped so only the insert arm consumes it.
+        let mut heartbeat = Some(spawn_binding_heartbeat(
             self.pria.clone(),
             self.heartbeat_interval,
             session_id.to_string(),
             directive.clone(),
-        );
-        let replaced = self.bindings.lock().unwrap().insert(
-            session_id.to_string(),
-            Binding {
-                directive: directive.clone(),
-                phase: Phase::Acked,
-                // The directive turn's own future end. A REPLACED binding's
-                // burned count never leaks: the new binding starts fresh.
-                skip_ends: 1,
-                heartbeat,
-            },
-        );
-        if let Some(old) = replaced {
-            old.heartbeat.abort();
+        ));
+        let outcome = {
+            let mut bindings = self.bindings.lock().unwrap();
+            match bindings.get(session_id) {
+                // Decide and insert under ONE lock so a concurrent bind can
+                // never interleave between the conflict check and the insert.
+                Some(live) if live.directive.handle_id != directive.handle_id => {
+                    Err(BindRefusal::Conflict {
+                        live_handle: live.directive.handle_id.clone(),
+                    })
+                }
+                Some(live) if directive.generation <= live.directive.generation => {
+                    Err(BindRefusal::StaleGeneration {
+                        current: live.directive.generation,
+                    })
+                }
+                _ => Ok(bindings.insert(
+                    session_id.to_string(),
+                    Binding {
+                        directive: directive.clone(),
+                        phase: Phase::Acked,
+                        // The directive turn's own future end. A REPLACED
+                        // binding's burned count never leaks: the new binding
+                        // starts fresh.
+                        skip_ends: 1,
+                        heartbeat: heartbeat.take().expect("heartbeat consumed once"),
+                    },
+                )),
+            }
+        };
+        match outcome {
+            Ok(replaced) => {
+                if let Some(old) = replaced {
+                    old.heartbeat.abort();
+                }
+                self.emit(session_id, &directive, "ack", json!({})).await;
+                Ok(())
+            }
+            Err(refusal) => {
+                // Refusals disturb NOTHING that lives: only the intruder's
+                // own never-ticked heartbeat dies; no ack is emitted.
+                if let Some(h) = heartbeat {
+                    h.abort();
+                }
+                Err(refusal)
+            }
         }
-        self.emit(session_id, &directive, "ack", json!({})).await;
-        Ok(())
+    }
+
+    /// Read-only preview of the F6.3 law for the send choke point: would this
+    /// directive be refused right now? Used to fail a BUFFERED dispatch
+    /// closed at HTTP receipt (a doomed directive must not occupy a queue
+    /// slot and die silently at flush). `bind()` re-checks under its own lock
+    /// — this is advisory, the law has one authority.
+    pub fn bind_refusal(&self, session_id: &str, directive: &FleetDirective) -> Option<BindRefusal> {
+        let bindings = self.bindings.lock().unwrap();
+        match bindings.get(session_id) {
+            Some(live) if live.directive.handle_id != directive.handle_id => {
+                Some(BindRefusal::Conflict {
+                    live_handle: live.directive.handle_id.clone(),
+                })
+            }
+            Some(live) if directive.generation <= live.directive.generation => {
+                Some(BindRefusal::StaleGeneration {
+                    current: live.directive.generation,
+                })
+            }
+            _ => None,
+        }
     }
 
     /// The send handler observed a non-fleet send: an `Acked` binding becomes
@@ -451,7 +507,10 @@ mod f6_1_turn_fence {
     #[tokio::test]
     async fn f6_1a_end_before_brief_then_running_end_mints_exactly_once() {
         let (pria, fleet) = fleet();
-        fleet.bind("sess_abc", directive("fj-alpha", 7)).await;
+        fleet
+            .bind("sess_abc", directive("fj-alpha", 7))
+            .await
+            .expect("first bind accepted");
 
         // set_task turn's own end while Acked: counted, ignored.
         fleet.on_agent_end("sess_abc").await;
@@ -475,7 +534,10 @@ mod f6_1_turn_fence {
     #[tokio::test]
     async fn f6_1b_running_before_directive_turn_ends_first_end_mints_nothing() {
         let (pria, fleet) = fleet();
-        fleet.bind("sess_abc", directive("fj-alpha", 7)).await;
+        fleet
+            .bind("sess_abc", directive("fj-alpha", 7))
+            .await
+            .expect("first bind accepted");
 
         // Brief sent while the set_task turn is STILL open.
         fleet.mark_running("sess_abc");
@@ -508,7 +570,10 @@ mod f6_1_turn_fence {
     #[tokio::test]
     async fn f6_1c_no_brief_two_ends_binding_alive_heartbeats_continue() {
         let (pria, fleet) = fleet_with(Duration::from_millis(10));
-        fleet.bind("sess_abc", directive("fj-alpha", 7)).await;
+        fleet
+            .bind("sess_abc", directive("fj-alpha", 7))
+            .await
+            .expect("first bind accepted");
 
         fleet.on_agent_end("sess_abc").await; // burns the debt
         fleet.on_agent_end("sess_abc").await; // spurious extra: ignored
@@ -534,7 +599,10 @@ mod f6_1_turn_fence {
     #[tokio::test]
     async fn f6_1d_session_closed_with_skip_pending_mints_failure_immediately() {
         let (pria, fleet) = fleet();
-        fleet.bind("sess_abc", directive("fj-alpha", 7)).await;
+        fleet
+            .bind("sess_abc", directive("fj-alpha", 7))
+            .await
+            .expect("first bind accepted");
         fleet.mark_running("sess_abc"); // debt still pending
 
         fleet.on_session_closed("sess_abc").await;
@@ -550,31 +618,46 @@ mod f6_1_turn_fence {
         assert_eq!(results(&pria).len(), 1);
     }
 
-    /// F6.1e — rebind resets the debt: A's burned count must not leak into B.
-    /// bind A → A's directive-turn end (Acked, burns A's debt) → rebind B
-    /// (fresh debt of 1) → brief marks Running while B's directive turn is
-    /// still open → the first end is B's directive turn (mints nothing), the
-    /// second is B's brief turn (mints, under fj-b).
+    /// F6.1e — rebind resets the debt: gen 1's burned count must not leak
+    /// into gen 2. bind gen 1 → its directive-turn end (Acked, burns the
+    /// debt) → rebind gen 2 (fresh debt of 1) → brief marks Running while
+    /// gen 2's directive turn is still open → the first end is gen 2's
+    /// directive turn (mints nothing), the second is gen 2's brief turn
+    /// (mints, under generation 2).
+    ///
+    /// LAW CHANGE NOTE (F6.3): this row originally proved the debt reset via
+    /// a FOREIGN-handle rebind (fj-a → fj-b) — that leg is now REFUSED by
+    /// the binding-conflict law (the fj-8d7c1e71 livelock; pinned by f6_3b/c
+    /// and F6.3e/f). The property this row pins — a replaced binding's
+    /// burned count never leaks into its replacement — survives at full
+    /// strength on the one leg that remains legal: the same handle stepping
+    /// its generation forward (requeue redispatch).
     #[tokio::test]
     async fn f6_1e_rebind_resets_skip_count_first_end_after_rebind_silent() {
         let (pria, fleet) = fleet();
-        fleet.bind("sess_abc", directive("fj-a", 1)).await;
-        fleet.on_agent_end("sess_abc").await; // burns A's debt
+        fleet
+            .bind("sess_abc", directive("fj-a", 1))
+            .await
+            .expect("first bind accepted");
+        fleet.on_agent_end("sess_abc").await; // burns gen 1's debt
 
-        fleet.bind("sess_abc", directive("fj-b", 2)).await; // fresh debt: 1
+        fleet
+            .bind("sess_abc", directive("fj-a", 2))
+            .await
+            .expect("forward-generation rebind replaces"); // fresh debt: 1
         fleet.mark_running("sess_abc");
 
-        fleet.on_agent_end("sess_abc").await; // B's directive turn — silent
+        fleet.on_agent_end("sess_abc").await; // gen 2's directive turn — silent
         assert!(
             results(&pria).is_empty(),
-            "stale (burned) A-count must not let B's directive turn mint: {:?}",
+            "stale (burned) gen-1 count must not let gen 2's directive turn mint: {:?}",
             cbs(&pria)
         );
 
-        fleet.on_agent_end("sess_abc").await; // B's brief turn — mints
+        fleet.on_agent_end("sess_abc").await; // gen 2's brief turn — mints
         let rs = results(&pria);
-        assert_eq!(rs.len(), 1, "exactly one result, for B: {rs:?}");
-        assert_eq!(rs[0]["handle_id"], "fj-b");
+        assert_eq!(rs.len(), 1, "exactly one result, for gen 2: {rs:?}");
+        assert_eq!(rs[0]["handle_id"], "fj-a");
         assert_eq!(rs[0]["generation"], 2);
         assert_eq!(rs[0]["payload"]["ok"], true);
     }

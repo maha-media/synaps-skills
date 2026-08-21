@@ -251,11 +251,20 @@ pub fn tag_agent_end_usage(raw_event: &Value, identity: &UsageIdentity) -> Optio
 /// `agent_end` frame notifies [`FleetBindings::on_agent_end`] (a Running
 /// binding's completion), and stdout EOF notifies
 /// [`FleetBindings::on_session_eof`] (a bound task's process died).
+///
+/// F6.2: when a [`TurnGate`](crate::turn_gate::TurnGate) is supplied, the
+/// `agent_end` arm goes THROUGH it (`TurnGate::on_agent_end` drives the fleet
+/// machine first, then flushes one buffered turn) and the EOF/read-error arms
+/// drop the gate state before the fleet EOF callback — a dead child must
+/// never receive a posthumous flush. `None` preserves the direct fleet path
+/// (fail-open: gate missing ⇒ today's behavior) for callers that predate the
+/// gate.
 pub async fn relay_agent_end_usage<R: tokio::io::AsyncRead + Unpin + Send>(
     stdout: R,
     identity: UsageIdentity,
     pria: std::sync::Arc<dyn crate::pria_client::PriaCallbackClient>,
     fleet: std::sync::Arc<FleetBindings>,
+    gate: Option<std::sync::Arc<crate::turn_gate::TurnGate>>,
     ready_tx: Option<tokio::sync::oneshot::Sender<RpcReadyReceipt>>,
 ) {
     use tokio::io::{AsyncBufReadExt, BufReader};
@@ -309,8 +318,13 @@ pub async fn relay_agent_end_usage<R: tokio::io::AsyncRead + Unpin + Send>(
                 }
                 if val.get("type").and_then(|t| t.as_str()) == Some("agent_end") {
                     // Fleet result semantics are turn-end, not billing: notify
-                    // even for zero-token turns the usage path drops.
-                    fleet.on_agent_end(&identity.session_id).await;
+                    // even for zero-token turns the usage path drops. Through
+                    // the gate when present: fleet machine first, then the
+                    // flush of at most one buffered turn (F6.2).
+                    match &gate {
+                        Some(g) => g.on_agent_end(&identity.session_id).await,
+                        None => fleet.on_agent_end(&identity.session_id).await,
+                    }
                 }
                 if let Some(payload) = tag_agent_end_usage(&val, &identity) {
                     if let Err(e) = pria.usage(&payload).await {
@@ -328,7 +342,12 @@ pub async fn relay_agent_end_usage<R: tokio::io::AsyncRead + Unpin + Send>(
                 }
             }
             Ok(None) => {
-                // EOF: synaps process exited. A still-bound fleet task failed.
+                // EOF: synaps process exited. Gate state dies with it (no
+                // posthumous flush) BEFORE the fleet EOF result fires; a
+                // still-bound fleet task failed.
+                if let Some(g) = &gate {
+                    g.teardown(&identity.session_id);
+                }
                 fleet.on_session_eof(&identity.session_id).await;
                 break;
             }
@@ -337,6 +356,9 @@ pub async fn relay_agent_end_usage<R: tokio::io::AsyncRead + Unpin + Send>(
                 // loop breaks here, so EOF is never observed — a still-bound
                 // task must still report session_exited and clear.
                 tracing::warn!(error = %e, "usage relay stdout read failed");
+                if let Some(g) = &gate {
+                    g.teardown(&identity.session_id);
+                }
                 fleet.on_session_eof(&identity.session_id).await;
                 break;
             }
@@ -913,7 +935,7 @@ mod tests {
             pria.clone(),
             std::time::Duration::from_secs(30),
         ));
-        relay_agent_end_usage(stdout, identity(), pria.clone(), fleet, None).await;
+        relay_agent_end_usage(stdout, identity(), pria.clone(), fleet, None, None).await;
         let usages = pria.usages.lock().unwrap();
         assert_eq!(usages.len(), 1, "exactly one billable agent_end metered");
         assert_eq!(usages[0].session_id, "sess_5");
@@ -940,7 +962,7 @@ mod tests {
             pria.clone(),
             std::time::Duration::from_secs(30),
         ));
-        relay_agent_end_usage(stdout, identity(), pria.clone(), fleet, None).await;
+        relay_agent_end_usage(stdout, identity(), pria.clone(), fleet, None, None).await;
         assert!(
             pria.usages.lock().unwrap().is_empty(),
             "empty turn not billed"

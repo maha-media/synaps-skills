@@ -71,7 +71,8 @@ async fn relay_wiring_drives_fleet_result_on_agent_end_and_session_exited_on_eof
                 generation: 4,
             },
         )
-        .await;
+        .await
+        .expect("bind on a fresh session accepted");
     fleet.mark_running("sess_relay");
     // F6.1 turn fence: bind() owes the directive turn's own agent_end
     // (skip_ends=1). Deliver it here — the relay's single frame below is then
@@ -80,7 +81,7 @@ async fn relay_wiring_drives_fleet_result_on_agent_end_and_session_exited_on_eof
     let agent_end =
         r#"{"type":"agent_end","usage":{"input_tokens":10,"output_tokens":5}}"#;
     let stdout = child_stdout(&format!("echo 'not json'; echo '{agent_end}'"));
-    relay_agent_end_usage(stdout, identity(), pria.clone(), fleet.clone(), None).await;
+    relay_agent_end_usage(stdout, identity(), pria.clone(), fleet.clone(), None, None).await;
 
     let cbs = fleet_cbs(&pria);
     // ack + result{ok:true}; the EOF AFTER the clear must be silent.
@@ -107,10 +108,11 @@ async fn relay_wiring_drives_fleet_result_on_agent_end_and_session_exited_on_eof
                 generation: 5,
             },
         )
-        .await;
+        .await
+        .expect("rebind after clear accepted");
     fleet.mark_running("sess_relay");
     let stdout = child_stdout("true");
-    relay_agent_end_usage(stdout, identity(), pria.clone(), fleet.clone(), None).await;
+    relay_agent_end_usage(stdout, identity(), pria.clone(), fleet.clone(), None, None).await;
 
     let cbs = fleet_cbs(&pria);
     let last = cbs.last().expect("callbacks recorded");

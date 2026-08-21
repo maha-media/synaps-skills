@@ -26,6 +26,9 @@ pub enum ErrorCode {
     PrincipalDisabled,
     SessionNotFound,
     SessionAlreadyRunning,
+    /// F6.3: a fleet set_task was refused because the session carries a live
+    /// binding for another handle (or a stale generation of the same handle).
+    BindingConflict,
     SynapsLaunchFailed,
     FsmonUnavailable,
     PolicyApplyFailed,
@@ -45,6 +48,7 @@ impl ErrorCode {
             ErrorCode::PrincipalDisabled => "principal_disabled",
             ErrorCode::SessionNotFound => "session_not_found",
             ErrorCode::SessionAlreadyRunning => "session_already_running",
+            ErrorCode::BindingConflict => "binding_conflict",
             ErrorCode::SynapsLaunchFailed => "synaps_launch_failed",
             ErrorCode::FsmonUnavailable => "fsmon_unavailable",
             ErrorCode::PolicyApplyFailed => "policy_apply_failed",
@@ -62,7 +66,7 @@ impl ErrorCode {
             }
             ErrorCode::InvalidRequest | ErrorCode::InvalidPolicy => StatusCode::BAD_REQUEST,
             ErrorCode::PrincipalNotFound | ErrorCode::SessionNotFound => StatusCode::NOT_FOUND,
-            ErrorCode::SessionAlreadyRunning => StatusCode::CONFLICT,
+            ErrorCode::SessionAlreadyRunning | ErrorCode::BindingConflict => StatusCode::CONFLICT,
             ErrorCode::FsmonUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             ErrorCode::SynapsLaunchFailed
             | ErrorCode::PolicyApplyFailed
@@ -71,8 +75,14 @@ impl ErrorCode {
     }
 
     /// Whether the caller may safely retry the same request.
+    /// `BindingConflict` is retryable BY DESIGN: the dispatch leg fails
+    /// closed, the job row stays queued server-side, and the same directive
+    /// may succeed once the live binding clears (result or teardown).
     pub fn retryable(self) -> bool {
-        matches!(self, ErrorCode::FsmonUnavailable | ErrorCode::InternalError)
+        matches!(
+            self,
+            ErrorCode::FsmonUnavailable | ErrorCode::InternalError | ErrorCode::BindingConflict
+        )
     }
 }
 
