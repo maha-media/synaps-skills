@@ -73,6 +73,10 @@ async fn relay_wiring_drives_fleet_result_on_agent_end_and_session_exited_on_eof
         )
         .await;
     fleet.mark_running("sess_relay");
+    // F6.1 turn fence: bind() owes the directive turn's own agent_end
+    // (skip_ends=1). Deliver it here — the relay's single frame below is then
+    // the RUNNING turn's end, the one that may mint (SD invariant 5).
+    fleet.on_agent_end("sess_relay").await;
     let agent_end =
         r#"{"type":"agent_end","usage":{"input_tokens":10,"output_tokens":5}}"#;
     let stdout = child_stdout(&format!("echo 'not json'; echo '{agent_end}'"));
