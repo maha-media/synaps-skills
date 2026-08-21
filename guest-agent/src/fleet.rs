@@ -15,10 +15,15 @@
 //!     `{ok:false, error:{code:"session_exited"}}` when the session's stdout
 //!     hits EOF while still bound.
 //!
-//! State machine: `Acked` (the set_task turn's own `agent_end` is IGNORED) →
-//! the next send marks `Running` → `agent_end` while `Running` emits the
-//! result and clears. Rebinding replaces the old binding entirely — the old
-//! handle never emits again. Detection never blocks or rewrites forwarding.
+//! State machine: `Acked` → the next non-fleet send marks `Running`, with a
+//! turn-end debt (`skip_ends`, born 1 at bind) burning the set_task turn's own
+//! `agent_end` in EITHER phase — prompts are FIFO, so the brief can mark
+//! `Running` while the set_task turn is still streaming (W3.8) and its end
+//! must never mint the brief's result (SD invariant 5). `agent_end` while
+//! `Running` past the debt emits the result and clears. Rebinding replaces
+//! the old binding entirely (fresh debt) — the old handle never emits again.
+//! Teardown is never debt-gated. Detection never blocks or rewrites
+//! forwarding.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -143,6 +148,19 @@ enum Phase {
 struct Binding {
     directive: FleetDirective,
     phase: Phase,
+    /// Outstanding turn-end debt: `agent_end`s that belong to turns OPENED AT
+    /// OR BEFORE the bind and must never mint this binding's result. `bind()`
+    /// initializes it to 1 — the directive turn's own future end. Turn-COUNT
+    /// correlation is the law here: `agent_end` carries no prompt id (SynapsCLI
+    /// contract), prompts are strictly sequential, every prompt turn ends with
+    /// exactly one `agent_end`, and control frames are not turns (the E3
+    /// ruling) and emit none. Without this fence, a brief sent while the
+    /// set_task turn is still streaming lets that turn's own end mint
+    /// `result {ok:true}` for work that never started — a fabricated success
+    /// (SD invariant 5 violation) — and leaves the brief as a zombie turn.
+    /// NOT consulted by teardown (`on_session_eof` / `on_session_closed`):
+    /// process death is process death, both phases.
+    skip_ends: u32,
     /// Per-binding heartbeat task; aborted when the binding clears/replaces.
     heartbeat: tokio::task::JoinHandle<()>,
 }
@@ -178,6 +196,9 @@ impl FleetBindings {
             Binding {
                 directive: directive.clone(),
                 phase: Phase::Acked,
+                // The directive turn's own future end. A REPLACED binding's
+                // burned count never leaks: the new binding starts fresh.
+                skip_ends: 1,
                 heartbeat,
             },
         );
@@ -188,7 +209,10 @@ impl FleetBindings {
     }
 
     /// The send handler observed a non-fleet send: an `Acked` binding becomes
-    /// `Running` (the dispatched task's brief). No-op otherwise.
+    /// `Running` (the dispatched task's brief). Phase flip ONLY — any
+    /// outstanding `skip_ends` debt carries over (the set_task turn may still
+    /// be streaming when the brief lands; its end is burned, not minted).
+    /// No-op otherwise.
     pub fn mark_running(&self, session_id: &str) {
         if let Some(binding) = self.bindings.lock().unwrap().get_mut(session_id) {
             if binding.phase == Phase::Acked {
@@ -206,14 +230,25 @@ impl FleetBindings {
             .map(|b| b.directive.clone())
     }
 
-    /// An `agent_end` frame arrived on the session's stdout relay. While
-    /// `Running` this is the task's completion: emit `result {ok:true}` and
-    /// clear. While `Acked` it is the set_task turn's own end — ignored. On an
-    /// unbound session it is silent.
+    /// An `agent_end` frame arrived on the session's stdout relay. Correlation
+    /// is turn-count based (see `Binding::skip_ends`): an end still owed to
+    /// the directive turn burns the debt and is ignored IN EITHER PHASE —
+    /// while `Acked` this is today's ignore, now counted; while `Running` it
+    /// is the still-open set_task turn closing AFTER the brief send (the W3.8
+    /// FIFO race — that end must never mint the brief's result, SD invariant
+    /// 5). Only `Running` with the debt at zero is the task's completion:
+    /// emit `result {ok:true}` and clear. `Acked` with the debt at zero (a
+    /// spurious extra end before any brief — brief-less old-Pria lineage) is
+    /// ignored and the binding stays, heartbeats and all. On an unbound
+    /// session it is silent.
     pub async fn on_agent_end(&self, session_id: &str) {
         let cleared = {
             let mut bindings = self.bindings.lock().unwrap();
-            match bindings.get(session_id) {
+            match bindings.get_mut(session_id) {
+                Some(b) if b.skip_ends > 0 => {
+                    b.skip_ends = b.skip_ends.saturating_sub(1);
+                    None
+                }
                 Some(b) if b.phase == Phase::Running => bindings.remove(session_id),
                 _ => None,
             }
@@ -309,4 +344,196 @@ fn spawn_binding_heartbeat(
             }
         }
     })
+}
+
+// ── F6.1 turn-count fence (born-RED) ─────────────────────────────────────────
+//
+// Live + code finding (2026-08-21): Pria's W3.8 slice sends the work-start
+// brief IMMEDIATELY after set_task. The CLI processes prompts FIFO, so the
+// brief send can mark `Running` while the set_task turn is STILL STREAMING —
+// the set_task turn's own `agent_end` then arrives first, while `Running`,
+// and mints `result {ok:true}` for work that never started (a fabricated
+// success — SD invariant 5 violation), leaving the brief as a zombie turn.
+//
+// `agent_end` carries no prompt id (SynapsCLI contract — out of scope), so
+// correlation is turn-COUNT based: prompts are strictly sequential, every
+// prompt turn ends with exactly one `agent_end`, and control frames
+// (`set_model`) are not turns and emit none (the E3 ruling). Hence the
+// `skip_ends` fence pinned below: `bind()` owes exactly one future end (the
+// directive turn's own), and only an end past that debt may mint. Teardown
+// (`on_session_eof` / `on_session_closed`) is NOT gated — process death is
+// process death, both phases.
+#[cfg(test)]
+mod f6_1_turn_fence {
+    use super::*;
+    use crate::pria_client::fake::FakePriaClient;
+
+    fn directive(handle: &str, generation: u64) -> FleetDirective {
+        FleetDirective {
+            handle_id: handle.into(),
+            generation,
+        }
+    }
+
+    /// FleetBindings driven directly against the fake recorder (the seam the
+    /// stdout relay calls — same as the tests/fleet_callback_tests.rs F4 row).
+    /// The interval is effectively-never unless a row exercises heartbeats.
+    fn fleet_with(interval: Duration) -> (Arc<FakePriaClient>, FleetBindings) {
+        let pria = Arc::new(FakePriaClient::default());
+        let fleet = FleetBindings::new(
+            pria.clone() as Arc<dyn PriaCallbackClient>,
+            interval,
+        );
+        (pria, fleet)
+    }
+
+    fn fleet() -> (Arc<FakePriaClient>, FleetBindings) {
+        fleet_with(Duration::from_secs(3600))
+    }
+
+    fn cbs(pria: &FakePriaClient) -> Vec<Value> {
+        pria.fleet_callbacks.lock().unwrap().clone()
+    }
+
+    fn results(pria: &FakePriaClient) -> Vec<Value> {
+        cbs(pria)
+            .into_iter()
+            .filter(|c| c["kind"] == "result")
+            .collect()
+    }
+
+    /// F6.1a — regression fence (the ordering that already works today, kept
+    /// pinned): the set_task turn ends BEFORE the brief. The Acked-phase end
+    /// burns the directive turn's debt; the next end after `mark_running` is
+    /// the brief turn's and mints exactly one `result {ok:true}`.
+    #[tokio::test]
+    async fn f6_1a_end_before_brief_then_running_end_mints_exactly_once() {
+        let (pria, fleet) = fleet();
+        fleet.bind("sess_abc", directive("fj-alpha", 7)).await;
+
+        // set_task turn's own end while Acked: counted, ignored.
+        fleet.on_agent_end("sess_abc").await;
+        assert!(results(&pria).is_empty(), "Acked end must not mint");
+
+        fleet.mark_running("sess_abc");
+        fleet.on_agent_end("sess_abc").await;
+        let rs = results(&pria);
+        assert_eq!(rs.len(), 1, "exactly one result: {rs:?}");
+        assert_eq!(rs[0]["handle_id"], "fj-alpha");
+        assert_eq!(rs[0]["generation"], 7);
+        assert_eq!(rs[0]["payload"]["ok"], true);
+        assert!(fleet.binding("sess_abc").is_none(), "cleared");
+    }
+
+    /// F6.1b — THE RED ROW. The brief send marks `Running` while the set_task
+    /// turn is still streaming: the FIRST `agent_end` is the set_task turn's
+    /// own (FIFO) and must mint NOTHING; only the SECOND — the brief turn —
+    /// mints, exactly once. Today the first end mints a fabricated success
+    /// (SD invariant 5 violation).
+    #[tokio::test]
+    async fn f6_1b_running_before_directive_turn_ends_first_end_mints_nothing() {
+        let (pria, fleet) = fleet();
+        fleet.bind("sess_abc", directive("fj-alpha", 7)).await;
+
+        // Brief sent while the set_task turn is STILL open.
+        fleet.mark_running("sess_abc");
+
+        // end#1: the set_task turn closing — burns the debt, mints nothing.
+        fleet.on_agent_end("sess_abc").await;
+        assert!(
+            results(&pria).is_empty(),
+            "the set_task turn's end must never mint the brief's result: {:?}",
+            cbs(&pria)
+        );
+        assert!(
+            fleet.binding("sess_abc").is_some(),
+            "binding must survive the directive turn's end"
+        );
+
+        // end#2: the brief turn — mints exactly once.
+        fleet.on_agent_end("sess_abc").await;
+        let rs = results(&pria);
+        assert_eq!(rs.len(), 1, "exactly one result on the brief turn's end");
+        assert_eq!(rs[0]["payload"]["ok"], true);
+        assert_eq!(rs[0]["handle_id"], "fj-alpha");
+        assert!(fleet.binding("sess_abc").is_none(), "cleared after mint");
+    }
+
+    /// F6.1c — brief-less lineage (old Pria, W3.8 not yet deployed): ends
+    /// while Acked burn to zero and are ignored; the binding stays alive and
+    /// heartbeats keep flowing until teardown — observable behavior
+    /// byte-identical to today (backward compat: this image ships FIRST).
+    #[tokio::test]
+    async fn f6_1c_no_brief_two_ends_binding_alive_heartbeats_continue() {
+        let (pria, fleet) = fleet_with(Duration::from_millis(10));
+        fleet.bind("sess_abc", directive("fj-alpha", 7)).await;
+
+        fleet.on_agent_end("sess_abc").await; // burns the debt
+        fleet.on_agent_end("sess_abc").await; // spurious extra: ignored
+        assert!(results(&pria).is_empty(), "no result without a brief turn");
+        assert!(fleet.binding("sess_abc").is_some(), "binding alive");
+
+        // Heartbeats must still be emitting AFTER both ends.
+        let before = cbs(&pria).len();
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        let after = cbs(&pria);
+        assert!(
+            after.iter().filter(|c| c["kind"] == "heartbeat").count() > 0
+                && after.len() > before,
+            "heartbeat loop must survive burned/spurious ends: {after:?}"
+        );
+        assert!(results(&pria).is_empty(), "still no result");
+    }
+
+    /// F6.1d — teardown is NOT gated on the skip fence: `Running` with the
+    /// debt still pending, then `close`/`cancel` → exactly one
+    /// `result {ok:false, error.code=="session_closed"}` and the binding
+    /// clears. Process death is process death, both phases.
+    #[tokio::test]
+    async fn f6_1d_session_closed_with_skip_pending_mints_failure_immediately() {
+        let (pria, fleet) = fleet();
+        fleet.bind("sess_abc", directive("fj-alpha", 7)).await;
+        fleet.mark_running("sess_abc"); // debt still pending
+
+        fleet.on_session_closed("sess_abc").await;
+        let rs = results(&pria);
+        assert_eq!(rs.len(), 1, "exactly one teardown result: {rs:?}");
+        assert_eq!(rs[0]["payload"]["ok"], false);
+        assert_eq!(rs[0]["payload"]["error"]["code"], "session_closed");
+        assert!(fleet.binding("sess_abc").is_none(), "cleared");
+
+        // Post-clear ends/teardown are silent.
+        fleet.on_agent_end("sess_abc").await;
+        fleet.on_session_closed("sess_abc").await;
+        assert_eq!(results(&pria).len(), 1);
+    }
+
+    /// F6.1e — rebind resets the debt: A's burned count must not leak into B.
+    /// bind A → A's directive-turn end (Acked, burns A's debt) → rebind B
+    /// (fresh debt of 1) → brief marks Running while B's directive turn is
+    /// still open → the first end is B's directive turn (mints nothing), the
+    /// second is B's brief turn (mints, under fj-b).
+    #[tokio::test]
+    async fn f6_1e_rebind_resets_skip_count_first_end_after_rebind_silent() {
+        let (pria, fleet) = fleet();
+        fleet.bind("sess_abc", directive("fj-a", 1)).await;
+        fleet.on_agent_end("sess_abc").await; // burns A's debt
+
+        fleet.bind("sess_abc", directive("fj-b", 2)).await; // fresh debt: 1
+        fleet.mark_running("sess_abc");
+
+        fleet.on_agent_end("sess_abc").await; // B's directive turn — silent
+        assert!(
+            results(&pria).is_empty(),
+            "stale (burned) A-count must not let B's directive turn mint: {:?}",
+            cbs(&pria)
+        );
+
+        fleet.on_agent_end("sess_abc").await; // B's brief turn — mints
+        let rs = results(&pria);
+        assert_eq!(rs.len(), 1, "exactly one result, for B: {rs:?}");
+        assert_eq!(rs[0]["handle_id"], "fj-b");
+        assert_eq!(rs[0]["generation"], 2);
+        assert_eq!(rs[0]["payload"]["ok"], true);
+    }
 }
