@@ -625,14 +625,16 @@ impl FleetBindings {
         let Some(_oid) = committed else {
             return json!({ "ok": true }); // clean tree: no artifact, no push
         };
-        let bundle = match fleet_git::make_result_bundle(&ws.work_dir, &ws.base_oid) {
+        // The declared result ref is minted BEFORE bundling: the bundle must
+        // CARRY it by name (fj-77ff1056 — receive list-heads law).
+        let ref_name = format!("refs/vm/{}/result", d.handle_id);
+        let bundle = match fleet_git::make_result_bundle(&ws.work_dir, &ws.base_oid, &ref_name) {
             Ok(out) => out,
             Err(e) => {
                 tracing::warn!(error = %e, session_id, "fleet result bundle failed");
                 return json!({ "ok": false, "error": { "code": "push_refused" } });
             }
         };
-        let ref_name = format!("refs/vm/{}/result", d.handle_id);
         match self
             .pria
             .fleet_git_push(d.handle_id.as_str(), d.generation, &ref_name, session_id, &bundle.bytes)

@@ -114,7 +114,7 @@ fn f7o1_result_moment_chain_survives_foreign_owned_worktree() {
         .expect("commit must survive foreign ownership — NEVER a silent clean")
         .expect("dirty tree mints a commit");
 
-    let out = make_result_bundle(&clone.work_dir, &clone.base_oid)
+    let out = make_result_bundle(&clone.work_dir, &clone.base_oid, "refs/vm/fj-o1/result")
         .expect("result bundle must survive foreign ownership");
     assert_eq!(out.tip, oid, "the bundle carries the minted commit");
     assert!(!out.bytes.is_empty(), "real bundle bytes");

@@ -244,17 +244,26 @@ fn f7g_result_bundle_is_thin_and_fetchable() {
     clone_from_bundle(&bundle, &dest).unwrap();
     fs::write(dest.join("docs/out.md"), "result\n").unwrap();
     commit_if_dirty(&dest, "vault-curator@1 fleet fj-a").unwrap();
-    let out = make_result_bundle(&dest, &base_oid).expect("bundle ok");
+    let result_ref = "refs/vm/fj-a/result";
+    let out = make_result_bundle(&dest, &base_oid, result_ref).expect("bundle ok");
     assert!(!out.bytes.is_empty(), "bundle bytes produced");
-    // The bundle is THIN: it requires baseOid as a prerequisite (connectivity
-    // law — Pria's receive ladder rejects unrelated history).
-    let probe = tmp("f7g-probe");
-    git(&["init", "-q"], &probe);
     let bf = tmp("f7g-pb").join("r.bundle");
     fs::write(&bf, &out.bytes).unwrap();
+    // The RECEIVE LADDER LAW (fj-77ff1056): the bundle CARRIES the declared
+    // result ref by NAME — `bundle list-heads` must list it, or Pria refuses
+    // bundle_invalid. (A `<base>..HEAD` range names its head "HEAD" — banned.)
+    let probe = tmp("f7g-probe");
+    git(&["init", "-q"], &probe);
+    let heads = git(&["bundle", "list-heads", bf.to_str().unwrap()], &probe);
+    assert!(
+        heads.lines().any(|l| l.trim().ends_with(&format!(" {result_ref}"))),
+        "the bundle must carry the declared result ref: {heads:?}"
+    );
+    // The bundle is THIN: it requires baseOid as a prerequisite (connectivity
+    // law — Pria's receive ladder rejects unrelated history).
     // A repo WITHOUT baseOid cannot fetch the thin bundle (prereq unsatisfied)…
     let no_base = Command::new("git")
-        .args(["fetch", bf.to_str().unwrap(), "HEAD"])
+        .args(["fetch", bf.to_str().unwrap(), result_ref])
         .current_dir(&probe)
         .output()
         .unwrap();
@@ -262,16 +271,31 @@ fn f7g_result_bundle_is_thin_and_fetchable() {
         !no_base.status.success(),
         "thin bundle must require baseOid (unrelated repo cannot fetch)"
     );
-    // …but a repo WITH baseOid fetches it and the tip descends from base.
+    // …but a repo WITH baseOid fetches it BY THE DECLARED NAME (the exact
+    // quarantine fetch Pria performs) and the tip descends from base.
     git(&["fetch", _srv.to_str().unwrap(), "main"], &probe);
     git(
-        &["fetch", bf.to_str().unwrap(), "+HEAD:refs/vm/fj-a/result"],
+        &[
+            "fetch",
+            bf.to_str().unwrap(),
+            &format!("+{result_ref}:refs/vm/fj-a/result"),
+        ],
         &probe,
     );
     let tip = git(&["rev-parse", "refs/vm/fj-a/result"], &probe);
     git(&["merge-base", "--is-ancestor", &base_oid, &tip], &probe);
     let new_tip = git(&["rev-parse", "HEAD"], &dest);
     assert_eq!(tip, new_tip, "bundle tip == the committed work");
+    // Hygiene: the temp ref never lingers in the worktree after bundling.
+    let lingering = Command::new("git")
+        .args(["rev-parse", "--verify", result_ref])
+        .current_dir(&dest)
+        .output()
+        .unwrap();
+    assert!(
+        !lingering.status.success(),
+        "the temp result ref must be dropped after bundling"
+    );
 }
 
 #[test]
@@ -281,7 +305,7 @@ fn f7g_result_bundle_on_no_work_is_empty_or_absent() {
     let (_srv, base_oid, bundle) = make_base();
     let dest = tmp("f7g-empty").join("work");
     clone_from_bundle(&bundle, &dest).unwrap();
-    let out = make_result_bundle(&dest, &base_oid);
+    let out = make_result_bundle(&dest, &base_oid, "refs/vm/fj-a/result");
     assert!(
         out.is_err() || out.as_ref().map(|o| o.bytes.is_empty()).unwrap_or(true),
         "no work ⇒ no pushable bundle"
