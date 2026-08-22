@@ -22,6 +22,9 @@
 //!     still acks, no clone dir, no steer, no push, `result {ok:true}`.
 //!   * S6 — teardown with a dirty workspace pushes NOTHING; the F6.1d
 //!     honest-failure law is intact.
+//!   * S9 — a COMMIT-leg error at the result moment mints the honest
+//!     `{ok:false, push_refused}` (fj-b6107573: the old fail-open minted a
+//!     silent clean), never a push.
 //!   * S7 — an absent-ws directive is byte-identical F6: no fetch, no clone,
 //!     no steer, no push.
 //!   * S8 — the steer text carries the clone's ABSOLUTE PATH but never the
@@ -861,5 +864,51 @@ async fn f7s8_steer_text_carries_the_path_never_the_wire_token() {
     assert!(
         !staged.contains("fleet"),
         "never the fleet wire word: {staged:?}"
+    );
+}
+
+// ── S9: result-moment COMMIT failure → honest push_refused (never silent-clean)
+
+/// W5 staging finding (fj-b6107573): `git status` FAILED at the result moment
+/// ("detected dubious ownership" — the chowned worktree vs the root daemon)
+/// and the old fail-open mapped the error to a silent clean: `result
+/// {ok:true}`, zero pushes, no resultOid — a fabricated no-artifact success
+/// that masked the bug for a full staging run. The law: a commit-leg ERROR is
+/// indistinguishable-from-lost-work and must mint the honest first-cause
+/// failure, exactly like a bundle failure — `{ok:false, push_refused}` — and
+/// never a push. (A genuinely CLEAN tree stays S2's ok:true — clean is a
+/// successful observation, not an error.)
+#[tokio::test]
+async fn f7s9_commit_failure_mints_honest_failure_never_silent_clean() {
+    let (_srv, bundle) = make_base_bundle();
+    let (_router, _launcher, pria, env) = started().await;
+    program_fetch(&pria, GitFetch::Bundle(bundle));
+    program_push(&pria, GitPush::Accepted);
+    let fleet = direct_fleet(&env, pria.clone()).await;
+
+    fleet
+        .bind("sess_abc", ws_directive(HANDLE, 1, "brandsite"))
+        .await
+        .expect("ws bind accepted");
+    fs::write(clone_dir(&env, HANDLE).join("out.txt"), "work\n").unwrap();
+    // Sabotage: the worktree stops being a repo before the result moment —
+    // `git status` errors (the staging shape, hermetically).
+    fs::remove_dir_all(clone_dir(&env, HANDLE).join(".git")).unwrap();
+
+    fleet.mark_running("sess_abc");
+    for _ in 0..3 {
+        fleet.on_agent_end("sess_abc").await;
+    }
+
+    assert_eq!(pushes(&pria).len(), 0, "no commit ⇒ no push ever");
+    let rs = results(&pria);
+    assert_eq!(rs.len(), 1, "exactly one result: {rs:?}");
+    assert_eq!(
+        rs[0]["payload"]["ok"], false,
+        "a commit-leg error is NEVER a silent clean: {rs:?}"
+    );
+    assert_eq!(
+        rs[0]["payload"]["error"]["code"], "push_refused",
+        "the first-cause code"
     );
 }
