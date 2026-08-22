@@ -411,6 +411,8 @@ pub async fn start(
         pid,
         started_at: created.clone(),
         context_path: context_path.clone(),
+        session_dir: req.session_dir.clone(),
+        workspace_dir: req.workspace_dir.clone(),
         process,
     });
 

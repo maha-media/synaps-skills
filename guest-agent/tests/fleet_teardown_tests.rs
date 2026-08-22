@@ -354,6 +354,7 @@ async fn t3_relay_read_err_while_bound_emits_session_exited_and_clears() {
             FleetDirective {
                 handle_id: "fj-err".into(),
                 generation: 6,
+                workspace: None,
             },
         )
         .await

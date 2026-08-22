@@ -69,6 +69,7 @@ async fn relay_wiring_drives_fleet_result_on_agent_end_and_session_exited_on_eof
             FleetDirective {
                 handle_id: "fj-relay".into(),
                 generation: 4,
+                workspace: None,
             },
         )
         .await
@@ -106,6 +107,7 @@ async fn relay_wiring_drives_fleet_result_on_agent_end_and_session_exited_on_eof
             FleetDirective {
                 handle_id: "fj-relay2".into(),
                 generation: 5,
+                workspace: None,
             },
         )
         .await

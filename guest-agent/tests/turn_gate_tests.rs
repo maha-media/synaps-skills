@@ -622,6 +622,7 @@ async fn f6_3g_flush_time_bind_refusal_drops_directive_and_keeps_draining() {
             FleetDirective {
                 handle_id: HANDLE_A.into(),
                 generation: 1,
+                workspace: None,
             },
         )
         .await
