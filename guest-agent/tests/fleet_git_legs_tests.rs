@@ -130,6 +130,29 @@ fn make_base() -> (PathBuf, String, Vec<u8>) {
     (dir, base_oid, bytes)
 }
 
+/// The PRODUCTION bundle shape: Pria's composeFetchBundle creates a bundle of
+/// `refs/sync/<slug>/main` (agentFleetGitReceive.js), NOT a `main` branch. The
+/// guest's clone must discover and fetch that ref (W5 staging finding
+/// fj-5d719515: `fetch HEAD`/`main` both miss `refs/sync/<slug>/main` →
+/// "couldn't find remote ref main").
+fn make_sync_ref_bundle(slug: &str) -> (PathBuf, String, Vec<u8>) {
+    let dir = tmp("f7g-sync");
+    git(&["init", "-q", "-b", "main"], &dir);
+    git(&["config", "user.email", "srv@pria"], &dir);
+    git(&["config", "user.name", "pria"], &dir);
+    fs::write(dir.join("README.md"), "base\n").unwrap();
+    git(&["add", "-A"], &dir);
+    git(&["commit", "-q", "-m", "base"], &dir);
+    let base_oid = git(&["rev-parse", "HEAD"], &dir);
+    // Land the tip on refs/sync/<slug>/main and bundle THAT ref (Pria's shape).
+    let sync_ref = format!("refs/sync/{slug}/main");
+    git(&["update-ref", &sync_ref, "HEAD"], &dir);
+    let bundle_file = tmp("f7g-syncbundle").join("sync.bundle");
+    git(&["bundle", "create", bundle_file.to_str().unwrap(), &sync_ref], &dir);
+    let bytes = fs::read(&bundle_file).unwrap();
+    (dir, base_oid, bytes)
+}
+
 // ── F7-G1: clone from bundle produces a working tree at baseOid ─────────────
 
 #[test]
@@ -150,9 +173,21 @@ fn f7g_clone_from_bundle_materializes_working_tree_at_base() {
     assert!(remotes.is_empty(), "no remote configured: {remotes:?}");
 }
 
+// ── F7-G1b: the PRODUCTION bundle shape (refs/sync/<slug>/main) clones ──────
+
 #[test]
-fn f7g_clone_from_garbage_bundle_fails_closed() {
-    let dest = tmp("f7g-bad").join("work");
+fn f7g_clone_from_sync_ref_bundle_materializes_working_tree() {
+    let (_srv, base_oid, bundle) = make_sync_ref_bundle("brandsite");
+    let dest = tmp("f7g-syncclone").join("work");
+    let out = clone_from_bundle(&bundle, &dest)
+        .expect("clone of a refs/sync/<slug>/main bundle must succeed");
+    assert_eq!(out.base_oid, base_oid, "clone reports the base oid");
+    assert!(dest.join("README.md").exists(), "working tree materialized");
+    assert_eq!(git(&["rev-parse", "HEAD"], &dest), base_oid);
+}
+
+#[test]
+fn f7g_clone_from_garbage_bundle_fails_closed() {    let dest = tmp("f7g-bad").join("work");
     let out = clone_from_bundle(b"this is not a git bundle", &dest);
     assert!(out.is_err(), "garbage bundle must fail closed");
 }
