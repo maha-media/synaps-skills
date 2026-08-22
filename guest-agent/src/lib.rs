@@ -10,6 +10,7 @@ pub mod config;
 pub mod desktop;
 pub mod error;
 pub mod fleet;
+pub mod fleet_git;
 pub mod fsmon;
 pub mod hmac;
 pub mod ids;
