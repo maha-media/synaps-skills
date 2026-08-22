@@ -144,21 +144,34 @@ pub fn commit_if_dirty(work_dir: &Path, message: &str) -> Result<Option<String>,
     Ok(Some(oid))
 }
 
-/// Produce the THIN result bundle `<base_oid>..HEAD` for the result ref.
+/// Produce the THIN result bundle for the DECLARED result ref.
 ///
-/// The range excludes the base history (Pria's receive ladder requires
-/// connectivity to baseOid and caps bytes). An empty range — HEAD == base,
-/// no work — is an error: the caller skips the push and answers ok:true.
-pub fn make_result_bundle(work_dir: &Path, base_oid: &str) -> Result<BundleOutcome, GitError> {
+/// The receive ladder (`agentFleetGitReceive`) demands the bundle CARRY the
+/// declared ref: `git bundle list-heads` must name `refs/vm/<handle>/result`
+/// or the push refuses `bundle_invalid` (staging fj-77ff1056 — a
+/// `<base>..HEAD` range bundles its sole head as the literal name "HEAD").
+/// So: point `ref_name` at HEAD, bundle `^<base_oid> <ref_name>` (THIN —
+/// connectivity to baseOid required, Pria refuses unrelated history), then
+/// drop the temp ref (hygiene, best-effort). An empty range (no work) ⇒
+/// error (the caller skips push and answers ok:true).
+pub fn make_result_bundle(
+    work_dir: &Path,
+    base_oid: &str,
+    ref_name: &str,
+) -> Result<BundleOutcome, GitError> {
     let tip = git(&["rev-parse", "HEAD"], work_dir)?;
     if tip == base_oid {
         return Err(err("no work: HEAD == base_oid"));
     }
-    // The declared result ref rides the bundle so the fetch side can name it.
-    let range = format!("{base_oid}..HEAD");
+    // The declared result ref must RIDE the bundle so the receive side can
+    // list-heads it by name — bundle the REF, never a `..HEAD` range.
+    git(&["update-ref", ref_name, "HEAD"], work_dir)?;
+    let exclusion = format!("^{base_oid}");
     let bundle_file = work_dir.join(".git").join("result.bundle");
     let bf = bundle_file.to_string_lossy().to_string();
-    git(&["bundle", "create", &bf, &range], work_dir)?;
+    let created = git(&["bundle", "create", &bf, &exclusion, ref_name], work_dir);
+    let _ = git(&["update-ref", "-d", ref_name], work_dir);
+    created?;
     let bytes = std::fs::read(&bundle_file).map_err(|e| err(format!("read bundle: {e}")))?;
     std::fs::remove_file(&bundle_file).ok();
     if bytes.is_empty() {
