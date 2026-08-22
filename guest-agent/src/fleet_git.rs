@@ -94,9 +94,18 @@ pub fn clone_from_bundle(bytes: &[u8], dest: &Path) -> Result<CloneOutcome, GitE
     let bf = bundle_file.to_string_lossy().to_string();
     // Structural integrity + the tip it carries. A garbage bundle fails here.
     git(&["bundle", "verify", &bf], dest)?;
-    // Fetch the bundle's HEAD (whatever ref it carries) into FETCH_HEAD.
-    git(&["fetch", "-q", &bf, "HEAD"], dest)
-        .or_else(|_| git(&["fetch", "-q", &bf, "main"], dest))?;
+    // W5 staging finding (fj-5d719515): Pria's composeFetchBundle creates a
+    // bundle of `refs/sync/<slug>/main` — NOT a `HEAD`/`main` ref, so fetching
+    // either of those misses ("couldn't find remote ref main"). Discover the
+    // bundle's ACTUAL ref via list-heads and fetch THAT. Fail-closed: a bundle
+    // with no heads (or an unparseable tip) errors → honest workspace-less run.
+    let heads = git(&["bundle", "list-heads", &bf], dest)?;
+    let head_ref = heads
+        .lines()
+        .filter_map(|l| l.split_whitespace().nth(1))
+        .find(|r| !r.is_empty())
+        .ok_or_else(|| err("bundle carries no ref"))?;
+    git(&["fetch", "-q", &bf, head_ref], dest)?;
     git(&["checkout", "-q", "FETCH_HEAD"], dest)?;
     let base_oid = git(&["rev-parse", "HEAD"], dest)?;
     std::fs::remove_file(&bundle_file).ok();
