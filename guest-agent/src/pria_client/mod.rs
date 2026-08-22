@@ -324,6 +324,13 @@ impl PriaCallbackClient for HttpPriaClient {
             .map_err(|e| CallbackError::Network(e.to_string()))?;
         let status = resp.status();
         if !status.is_success() {
+            // W5 staging finding: a 401/403 here was undebuggable because the
+            // reason code rides the response BODY (`{error:{code}}`) and the
+            // guest discarded it. Capture it (bounded) so a refused fetch is
+            // self-diagnosing. Never log a 2xx body — that can be a bundle.
+            let body = resp.text().await.unwrap_or_default();
+            let body = body.chars().take(300).collect::<String>();
+            tracing::warn!(status = status.as_u16(), body = %body, "fleet-git fetch rejected");
             return Err(CallbackError::Status(status.as_u16()));
         }
         let content_type = resp
@@ -382,6 +389,10 @@ impl PriaCallbackClient for HttpPriaClient {
             .map_err(|e| CallbackError::Network(e.to_string()))?;
         let status = resp.status();
         if !status.is_success() {
+            // Capture the rejection reason code (bounded) — see the fetch twin.
+            let body = resp.text().await.unwrap_or_default();
+            let body = body.chars().take(300).collect::<String>();
+            tracing::warn!(status = status.as_u16(), body = %body, "fleet-git push rejected");
             return Err(CallbackError::Status(status.as_u16()));
         }
         let v: Value = resp.json::<Value>().await.unwrap_or(Value::Null);
