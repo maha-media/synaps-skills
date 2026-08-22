@@ -79,6 +79,20 @@ impl SessionStore {
             .map(|e| (e.session_dir.clone(), e.workspace_dir.clone()))
     }
 
+    /// F7 (W5 staging finding fj-79b201f3): the clone must land INSIDE the
+    /// agent's reachable filesystem AND be owned by the session uid (the
+    /// SynapsCLI agent runs dropped to uid; a root-owned worktree under
+    /// session_dir is unreachable/unwritable — "not accessible to this
+    /// process"). Returns (workspace_dir, uid) so the clone can be jailed
+    /// under the agent's workspace root and chown'd to the agent.
+    pub fn workspace_and_uid(&self, session_id: &str) -> Option<(std::path::PathBuf, u32)> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .map(|e| (e.workspace_dir.clone(), e.uid))
+    }
+
     /// Snapshot of status info for `status` endpoint.
     pub fn status(&self, session_id: &str) -> Option<(u32, String, SessionStatus)> {
         let map = self.sessions.lock().unwrap();

@@ -7,7 +7,7 @@
 //! here into the lifecycle that makes "work happens in the clone" TRUE:
 //!
 //!   * S1 — ws-bind fetches the base bundle (exactly once, with handle/gen/
-//!     session), materializes the clone under `<session_dir>/worktree`,
+//!     session), materializes the clone under `<workspace_dir>/worktree`,
 //!     queues ONE hidden steer turn (`pending_steer` returns the text exactly
 //!     once), and bumps the F6.1 debt to 2 so the set_task end AND the steer
 //!     end both burn before the brief's end mints.
@@ -200,10 +200,16 @@ fn session_dir(env: &TestEnv) -> PathBuf {
     env.efs_root.join("sessions/sess_abc")
 }
 
+fn workspace_dir(env: &TestEnv) -> PathBuf {
+    env.efs_root.join("instances/inst_456/workspace")
+}
+
 fn clone_dir(env: &TestEnv, _handle: &str) -> PathBuf {
-    // The leaf is neutral (never the handle id — R-F7-3: the handle must
-    // not be model-visible even via the steered path).
-    session_dir(env).join("worktree")
+    // W5 staging finding (fj-79b201f3): the clone lives under the agent's
+    // WORKSPACE root (its reachable, uid-owned fs) — never under session_dir
+    // (a root-owned, out-of-jail path the agent cannot reach). The leaf is
+    // neutral (never the handle id — R-F7-3).
+    workspace_dir(env).join("worktree")
 }
 
 // ── hermetic git helpers (the F7-G idiom — REAL git in temp dirs) ────────────
@@ -276,7 +282,7 @@ async fn direct_fleet(env: &TestEnv, pria: Arc<FakePriaClient>) -> FleetBindings
 // ── S1: ws-bind → fetch + clone + steer + debt bump ─────────────────────────
 
 /// The bind half: one fetch with exactly (handle, gen, session); the clone
-/// materialized under <session_dir>/worktree with the base tree
+/// materialized under <workspace_dir>/worktree with the base tree
 /// checked out; the steer text staged (readable exactly once) and carrying
 /// the clone's absolute path.
 #[tokio::test]
@@ -294,7 +300,7 @@ async fn f7s1_bind_fetches_clones_and_stages_the_steer() {
     assert_eq!(fs[0]["generation"], 1);
     assert_eq!(fs[0]["session_id"], "sess_abc");
 
-    // The clone materialized under <session_dir>/worktree.
+    // The clone materialized under <workspace_dir>/worktree.
     let dest = clone_dir(&env, HANDLE);
     assert!(
         dest.join("README.md").exists(),
