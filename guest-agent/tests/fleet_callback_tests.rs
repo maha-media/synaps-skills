@@ -456,6 +456,7 @@ async fn f7_acked_binding_emits_heartbeats_until_cleared() {
             FleetDirective {
                 handle_id: "fj-hb".into(),
                 generation: 3,
+                workspace: None,
             },
         )
         .await

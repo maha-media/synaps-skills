@@ -38,15 +38,29 @@ use crate::pria_client::PriaCallbackClient;
 pub struct FleetDirective {
     pub handle_id: String,
     pub generation: u64,
+    /// F7 (R-F7-1/2): the OPTIONAL workspace binding. `Some(slug)` ⇒ the guest
+    /// clones the workspace and is granted guest-local write; `None` ⇒ today's
+    /// workspace-less F6 behavior (no clone, no steer, no push). Fail-closed:
+    /// a malformed `ws:` token voids the WHOLE directive (no binding), never a
+    /// workspace-less binding smuggled out of a bad token.
+    pub workspace: Option<String>,
+}
+
+impl FleetDirective {
+    /// The bound workspace slug, if any (accessor so fences read intent, not
+    /// the field layout).
+    pub fn workspace_slug(&self) -> Option<String> {
+        self.workspace.clone()
+    }
 }
 
 /// Parse a fleet directive out of W3.7-P set_task wire text.
 ///
 /// Returns `Some` only when the FIRST line starts with `set_task ` and a later
-/// line matches `^fleet (fj-[a-z0-9][a-z0-9-]*) ([1-9][0-9]*)$` exactly.
-/// Anything else — bad handle charset, non-positive generation, a fleet line
-/// outside a set_task message — is `None` (fail-open passthrough, fail-closed
-/// binding).
+/// line matches `^fleet (fj-[a-z0-9][a-z0-9-]*) ([1-9][0-9]*)( ws:<slug>)?$`
+/// exactly. Anything else — bad handle charset, non-positive generation, a
+/// malformed/absent-but-dangling `ws:` token, a fleet line outside a set_task
+/// message — is `None` (fail-open passthrough, fail-closed binding).
 pub fn parse_fleet_directive(input: &str) -> Option<FleetDirective> {
     let mut lines = input.lines();
     if !lines.next()?.starts_with("set_task ") {
@@ -55,17 +69,47 @@ pub fn parse_fleet_directive(input: &str) -> Option<FleetDirective> {
     lines.find_map(parse_fleet_line)
 }
 
-/// Parse a single `fleet <handleId> <generation>` line (full-line match).
+/// Parse a single `fleet <handleId> <generation>[ ws:<slug>]` line (full-line
+/// match). The ws token, when present, must be EXACTLY `ws:<valid-slug>` and
+/// the ONLY trailing token — anything else fails the whole line closed.
 fn parse_fleet_line(line: &str) -> Option<FleetDirective> {
     let rest = line.strip_prefix("fleet ")?;
-    let (handle, generation) = rest.split_once(' ')?;
-    if generation.contains(' ') || !valid_handle(handle) {
+    let (handle, tail) = rest.split_once(' ')?;
+    if !valid_handle(handle) {
         return None;
     }
+    // `tail` is either `<generation>` (3-token) or `<generation> ws:<slug>`
+    // (4-token). A generation containing a space MUST be followed by exactly
+    // one well-formed ws token, else the line is malformed.
+    let (generation, workspace) = match tail.split_once(' ') {
+        None => (tail, None),
+        Some((gen, ws)) => (gen, Some(parse_ws_token(ws)?)),
+    };
     Some(FleetDirective {
         handle_id: handle.to_string(),
         generation: valid_generation(generation)?,
+        workspace,
     })
+}
+
+/// Parse the OPTIONAL `ws:<slug>` token (full-token match). The slug is
+/// server-controlled; the charset is a byte-twin of Pria's utils
+/// WORKSPACE_SLUG_RE `^[a-z0-9][a-z0-9_-]*$`. Anything else is `None` → the
+/// caller fails the directive closed.
+fn parse_ws_token(token: &str) -> Option<String> {
+    let slug = token.strip_prefix("ws:")?;
+    if valid_workspace_slug(slug) {
+        Some(slug.to_string())
+    } else {
+        None
+    }
+}
+
+/// `^[a-z0-9][a-z0-9_-]*$` — byte-twin of Pria's WORKSPACE_SLUG_RE.
+fn valid_workspace_slug(slug: &str) -> bool {
+    let mut chars = slug.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
 /// `^fj-[a-z0-9][a-z0-9-]*$`
@@ -470,6 +514,7 @@ mod f6_1_turn_fence {
         FleetDirective {
             handle_id: handle.into(),
             generation,
+            workspace: None,
         }
     }
 
@@ -683,6 +728,7 @@ mod f6_3_binding_conflict {
         FleetDirective {
             handle_id: handle.into(),
             generation,
+            workspace: None,
         }
     }
 

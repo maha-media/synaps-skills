@@ -332,6 +332,7 @@ async fn e3_set_model_envelope_does_not_advance_acked_to_running() {
             FleetDirective {
                 handle_id: LIVE_HANDLE.into(),
                 generation: 1,
+                workspace: None,
             },
         )
         .await
