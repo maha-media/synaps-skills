@@ -613,8 +613,13 @@ impl FleetBindings {
         let committed = match fleet_git::commit_if_dirty(&ws.work_dir, &message) {
             Ok(committed) => committed,
             Err(e) => {
-                tracing::warn!(error = %e, session_id, "fleet commit failed — treating as clean");
-                None
+                // S9 (staging fj-b6107573): a commit-leg ERROR is
+                // indistinguishable-from-lost-work — it must NEVER pass as a
+                // clean tree (the old fail-open minted a silent ok:true with
+                // no artifact). First-cause law: same honest code as a bundle
+                // failure. A genuinely clean tree is Ok(None) above, not Err.
+                tracing::warn!(error = %e, session_id, "fleet commit failed — honest push_refused");
+                return json!({ "ok": false, "error": { "code": "push_refused" } });
             }
         };
         let Some(_oid) = committed else {

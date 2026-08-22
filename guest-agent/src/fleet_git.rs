@@ -43,8 +43,19 @@ fn err(msg: impl Into<String>) -> GitError {
 }
 
 /// Run `git <args>` in `cwd`, returning trimmed stdout. argv-array only.
+///
+/// Every invocation carries `-c safe.directory=<cwd>` (protected "command"
+/// scope, git ≥2.38): the fleet clone is chowned to the SESSION uid so the
+/// agent can write it (the fj-79b201f3 fix), while the daemon's git runs as
+/// root — without the exception git's ownership guard kills every result-
+/// moment command with "detected dubious ownership" (staging fj-b6107573).
+/// Scoped to exactly the jailed path the caller hands us — never a global
+/// config mutation, never a wildcard.
 fn git(args: &[&str], cwd: &Path) -> Result<String, GitError> {
+    let safe_dir = format!("safe.directory={}", cwd.display());
     let out = Command::new("git")
+        .arg("-c")
+        .arg(&safe_dir)
         .args(args)
         .current_dir(cwd)
         .output()
