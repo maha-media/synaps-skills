@@ -33,6 +33,30 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::fleet_git;
+
+/// Recursively chown a tree to `uid` (gid unchanged). Mirrors the
+/// `api::sessions` helper — the fleet clone must be uid-owned so the
+/// SynapsCLI agent (dropped to uid) can write it (the guest-agent runs as
+/// root, so the clone is born root-owned).
+fn chown_tree_to_uid(root: &std::path::Path, uid: u32) {
+    fn chown_one(p: &std::path::Path, uid: u32) {
+        if let Ok(c) = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()) {
+            // SAFETY: valid NUL-terminated path; gid u32::MAX == (gid_t)-1 = unchanged.
+            let _ = unsafe { libc::chown(c.as_ptr(), uid, u32::MAX) };
+        }
+    }
+    chown_one(root, uid);
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                chown_tree_to_uid(&p, uid);
+            } else {
+                chown_one(&p, uid);
+            }
+        }
+    }
+}
 use crate::pria_client::{GitFetch, GitPush, PriaCallbackClient};
 use crate::sessions::SessionStore;
 
@@ -432,7 +456,12 @@ impl FleetBindings {
     /// workspace-less run, mirroring Pria).
     async fn bind_workspace(&self, session_id: &str, directive: &FleetDirective) -> Option<WsState> {
         directive.workspace.as_ref()?;
-        let (session_dir, _) = self.sessions.as_ref()?.dirs(session_id)?;
+        // W5 staging finding (fj-79b201f3): the clone must land INSIDE the
+        // agent's reachable filesystem (its workspace root) AND be owned by
+        // the session uid — the SynapsCLI agent runs dropped to uid and its
+        // fs tools are jailed to the workspace root, so a root-owned clone
+        // under session_dir is "not accessible to this process".
+        let (workspace_dir, uid) = self.sessions.as_ref()?.workspace_and_uid(session_id)?;
         let answer = self
             .pria
             .fleet_git_fetch(&directive.handle_id, directive.generation, session_id)
@@ -464,12 +493,19 @@ impl FleetBindings {
         // can't collide here: the F6.3 law keeps at most ONE live binding
         // per session (a same-handle rebind replaces the old workspace; a
         // foreign-handle bind is refused outright).
-        let dest = session_dir.join("worktree");
+        let dest = workspace_dir.join("worktree");
         match fleet_git::clone_from_bundle(&bytes, &dest) {
-            Ok(out) => Some(WsState {
-                work_dir: out.work_dir,
-                base_oid: out.base_oid,
-            }),
+            Ok(out) => {
+                // Chown the clone to the session uid so the agent (dropped to
+                // uid) can write it — the guest-agent's git plumbing runs as
+                // root, so without this the worktree is root-owned and the
+                // agent's writes fail.
+                chown_tree_to_uid(&dest, uid);
+                Some(WsState {
+                    work_dir: out.work_dir,
+                    base_oid: out.base_oid,
+                })
+            }
             Err(e) => {
                 tracing::warn!(
                     error = %e,
