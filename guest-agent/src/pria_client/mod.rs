@@ -76,6 +76,28 @@ pub trait PriaCallbackClient: Send + Sync {
     async fn session_output(&self, _session_id: &str, _event: &Value) -> Result<(), CallbackError> {
         Ok(())
     }
+    /// F7 (guest git legs): fetch the base bundle for a workspace-bound job.
+    /// Signed GET with the signed query + EMPTY body + x-pria-session-id header.
+    /// `Ok(GitFetch::Refused)` is the typed delegate answer (a 200 JSON
+    /// refusal), NOT an error — the caller runs workspace-less and reports
+    /// honestly. Network/5xx ride `Err`.
+    async fn fleet_git_fetch(
+        &self,
+        handle_id: &str,
+        generation: u64,
+        session_id: &str,
+    ) -> Result<GitFetch, CallbackError>;
+    /// F7: push the result bundle. Signed POST with the signed query (incl.
+    /// `ref`), the RAW bundle body (HMAC over the raw bytes), and the header
+    /// session id. `Ok(GitPush::Refused)` is the typed delegate answer.
+    async fn fleet_git_push(
+        &self,
+        handle_id: &str,
+        generation: u64,
+        ref_name: &str,
+        session_id: &str,
+        bundle: &[u8],
+    ) -> Result<GitPush, CallbackError>;
 }
 
 /// Endpoint paths (configurable prefix defaults to `/internal/agentic-vm`).
@@ -83,9 +105,44 @@ const HEARTBEAT_PATH: &str = "/internal/agentic-vm/heartbeat";
 const AUDIT_PATH: &str = "/internal/agentic-vm/audit";
 const SESSION_EVENT_PATH: &str = "/internal/agentic-vm/session-event";
 const FLEET_CALLBACK_PATH: &str = "/internal/agentic-vm/fleet-callback";
+const FLEET_GIT_FETCH_PATH: &str = "/internal/agentic-vm/fleet-git-fetch";
+const FLEET_GIT_PUSH_PATH: &str = "/internal/agentic-vm/fleet-git-push";
 const USAGE_PATH: &str = "/internal/agentic-vm/usage";
 const CREDENTIAL_PATH: &str = "/internal/agentic-vm/credential-request";
 const SESSION_OUTPUT_PATH: &str = "/internal/agentic-vm/session-output";
+
+/// The fleet-git-fetch answer (F7). `Bundle` carries the base-bundle bytes on
+/// a 200 octet-stream; `Refused` carries the typed reason on a 200 JSON
+/// `{ok:false, reason}` (the delegate shape — never an oracle, never a throw).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitFetch {
+    Bundle(Vec<u8>),
+    Refused(String),
+}
+
+/// The fleet-git-push answer (F7). `Accepted` on `{accepted:true}`; `Refused`
+/// carries the typed reason on `{accepted:false, reason}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitPush {
+    Accepted,
+    Refused(String),
+}
+
+/// RFC-3986 unreserved percent-encoding for a query value (the slug/ref
+/// charsets are already conservative, but the `ref` value carries `/` which
+/// must be encoded so the HMAC canonical query matches byte-for-byte).
+fn query_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
 
 /// The production HTTP client using reqwest + the outbound signer.
 pub struct HttpPriaClient {
@@ -243,6 +300,104 @@ impl PriaCallbackClient for HttpPriaClient {
         Ok(())
     }
 
+    async fn fleet_git_fetch(
+        &self,
+        handle_id: &str,
+        generation: u64,
+        session_id: &str,
+    ) -> Result<GitFetch, CallbackError> {
+        // Signed GET: the query rides the HMAC canonical string; the body is
+        // EMPTY (there is nothing to POST). x-pria-session-id is the header.
+        let query = format!("handle_id={}&generation={}", query_encode(handle_id), generation);
+        let signed = self
+            .signer
+            .sign_request("GET", FLEET_GIT_FETCH_PATH, &query, b"", Some(session_id));
+        let mut req = self
+            .http
+            .get(format!("{}{}?{}", self.base_url, FLEET_GIT_FETCH_PATH, query));
+        for (k, v) in &signed.headers {
+            req = req.header(*k, v);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| CallbackError::Network(e.to_string()))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(CallbackError::Status(status.as_u16()));
+        }
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| CallbackError::Network(e.to_string()))?;
+        if content_type.contains("application/json") {
+            // Typed refusal: {ok:false, reason} (the delegate shape).
+            let v: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+            let reason = v
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string();
+            return Ok(GitFetch::Refused(reason));
+        }
+        Ok(GitFetch::Bundle(bytes.to_vec()))
+    }
+
+    async fn fleet_git_push(
+        &self,
+        handle_id: &str,
+        generation: u64,
+        ref_name: &str,
+        session_id: &str,
+        bundle: &[u8],
+    ) -> Result<GitPush, CallbackError> {
+        // Signed POST: the RAW bundle body rides the HMAC (the signer hashes
+        // the raw bytes); the query carries handle_id/generation/ref.
+        let query = format!(
+            "handle_id={}&generation={}&ref={}",
+            query_encode(handle_id),
+            generation,
+            query_encode(ref_name)
+        );
+        let signed =
+            self.signer
+                .sign_request("POST", FLEET_GIT_PUSH_PATH, &query, bundle, Some(session_id));
+        let mut req = self
+            .http
+            .post(format!("{}{}?{}", self.base_url, FLEET_GIT_PUSH_PATH, query))
+            .header("content-type", "application/octet-stream")
+            .body(bundle.to_vec());
+        for (k, v) in &signed.headers {
+            req = req.header(*k, v);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| CallbackError::Network(e.to_string()))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(CallbackError::Status(status.as_u16()));
+        }
+        let v: Value = resp.json::<Value>().await.unwrap_or(Value::Null);
+        let accepted = v.get("accepted").and_then(Value::as_bool).unwrap_or(false);
+        if accepted {
+            Ok(GitPush::Accepted)
+        } else {
+            let reason = v
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string();
+            Ok(GitPush::Refused(reason))
+        }
+    }
+
     async fn usage(&self, p: &UsagePayload) -> Result<(), CallbackError> {
         if p.events.is_empty() {
             return Ok(());
@@ -305,6 +460,13 @@ pub mod fake {
         /// does not exist yet. Until the trait method lands, nothing writes
         /// here — that emptiness IS the born-RED for the detection rows.
         pub fleet_callbacks: Mutex<Vec<Value>>,
+        /// F7 git-leg recorders + programmable answers (the workspace lifecycle
+        /// fences assert these — recording as Values so the fence pins the wire
+        /// shape, not a struct).
+        pub fleet_git_fetches: Mutex<Vec<Value>>,
+        pub fleet_git_pushes: Mutex<Vec<Value>>,
+        pub fleet_git_fetch_answer: Mutex<Option<GitFetch>>,
+        pub fleet_git_push_answer: Mutex<Option<GitPush>>,
     }
 
     #[async_trait]
@@ -348,6 +510,46 @@ pub mod fake {
         ) -> Result<Value, CallbackError> {
             self.credential_requests.lock().unwrap().push(p.clone());
             Ok(self.credential_response.lock().unwrap().clone())
+        }
+        async fn fleet_git_fetch(
+            &self,
+            handle_id: &str,
+            generation: u64,
+            session_id: &str,
+        ) -> Result<GitFetch, CallbackError> {
+            self.fleet_git_fetches.lock().unwrap().push(serde_json::json!({
+                "handle_id": handle_id,
+                "generation": generation,
+                "session_id": session_id,
+            }));
+            Ok(self
+                .fleet_git_fetch_answer
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or(GitFetch::Refused("no_answer_programmed".into())))
+        }
+        async fn fleet_git_push(
+            &self,
+            handle_id: &str,
+            generation: u64,
+            ref_name: &str,
+            session_id: &str,
+            bundle: &[u8],
+        ) -> Result<GitPush, CallbackError> {
+            self.fleet_git_pushes.lock().unwrap().push(serde_json::json!({
+                "handle_id": handle_id,
+                "generation": generation,
+                "ref": ref_name,
+                "session_id": session_id,
+                "bundle_bytes": bundle.len(),
+            }));
+            Ok(self
+                .fleet_git_push_answer
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or(GitPush::Accepted))
         }
     }
 }
