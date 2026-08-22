@@ -18,7 +18,7 @@ pub struct SessionEntry {
     pub started_at: String,
     pub context_path: String,
     /// F7: the session's scratch + workspace roots, so the fleet workspace
-    /// lifecycle can jail the clone under `<session_dir>/fleet-ws/<handle>/`.
+    /// lifecycle can jail the clone under `<session_dir>/worktree/`.
     pub session_dir: std::path::PathBuf,
     pub workspace_dir: std::path::PathBuf,
     pub process: Arc<dyn SessionProcess>,

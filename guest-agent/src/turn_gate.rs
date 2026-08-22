@@ -263,14 +263,46 @@ impl TurnGate {
         proc: Arc<dyn SessionProcess>,
     ) -> Result<(), SubmitError> {
         match class {
-            SendClass::FleetDirective(directive) => self
-                .fleet
-                .bind(session_id, directive.clone())
-                .await
-                .map_err(SubmitError::Binding)?,
+            SendClass::FleetDirective(directive) => {
+                self.fleet
+                    .bind(session_id, directive.clone())
+                    .await
+                    .map_err(SubmitError::Binding)?;
+                // F7-S steer injection: a workspace-bound bind stages ONE
+                // hidden setup turn. The TurnGate is the ONE stdin writer, so
+                // the steer never writes here — it is queued into this gate's
+                // OWN pending FIFO, behind the still-streaming set_task turn
+                // and before the caller's brief (a push_FRONT keeps it ahead
+                // of a brief that is already buffered — the brief rides the
+                // W3.8 dispatch ~50ms behind set_task). The queue insert IS
+                // the steer-queued assertion: the binding owes the steer
+                // turn's end in its skip debt (2), and a staged steer can
+                // only be consumed into this FIFO — never minted, never lost.
+                if let Some(steer) = self.fleet.pending_steer(session_id) {
+                    if let Some(mut map) = self.lock() {
+                        map.entry(session_id.to_string())
+                            .or_default()
+                            .pending
+                            .push_front(prompt_envelope(&steer));
+                    }
+                }
+            }
             SendClass::PromptTurn => self.fleet.mark_running(session_id),
             SendClass::ControlFrame => {}
         }
         proc.send(input).await.map_err(SubmitError::Write)
     }
+}
+
+/// Wrap hidden-turn text in the standard prompt envelope (the same shape the
+/// brief rides) so the flush path classifies it as a plain PromptTurn —
+/// byte-opaque fleet vocabulary never reaches the classifier.
+fn prompt_envelope(message: &str) -> String {
+    serde_json::json!({
+        "type": "prompt",
+        "id": "p_setup",
+        "message": message,
+        "attachments": [],
+    })
+    .to_string()
 }

@@ -7,7 +7,7 @@
 //! here into the lifecycle that makes "work happens in the clone" TRUE:
 //!
 //!   * S1 — ws-bind fetches the base bundle (exactly once, with handle/gen/
-//!     session), materializes the clone under `<session_dir>/fleet-ws/<handle>`,
+//!     session), materializes the clone under `<session_dir>/worktree`,
 //!     queues ONE hidden steer turn (`pending_steer` returns the text exactly
 //!     once), and bumps the F6.1 debt to 2 so the set_task end AND the steer
 //!     end both burn before the brief's end mints.
@@ -200,8 +200,10 @@ fn session_dir(env: &TestEnv) -> PathBuf {
     env.efs_root.join("sessions/sess_abc")
 }
 
-fn clone_dir(env: &TestEnv, handle: &str) -> PathBuf {
-    session_dir(env).join("fleet-ws").join(handle)
+fn clone_dir(env: &TestEnv, _handle: &str) -> PathBuf {
+    // The leaf is neutral (never the handle id — R-F7-3: the handle must
+    // not be model-visible even via the steered path).
+    session_dir(env).join("worktree")
 }
 
 // ── hermetic git helpers (the F7-G idiom — REAL git in temp dirs) ────────────
@@ -274,7 +276,7 @@ async fn direct_fleet(env: &TestEnv, pria: Arc<FakePriaClient>) -> FleetBindings
 // ── S1: ws-bind → fetch + clone + steer + debt bump ─────────────────────────
 
 /// The bind half: one fetch with exactly (handle, gen, session); the clone
-/// materialized under <session_dir>/fleet-ws/<handle> with the base tree
+/// materialized under <session_dir>/worktree with the base tree
 /// checked out; the steer text staged (readable exactly once) and carrying
 /// the clone's absolute path.
 #[tokio::test]
@@ -292,7 +294,7 @@ async fn f7s1_bind_fetches_clones_and_stages_the_steer() {
     assert_eq!(fs[0]["generation"], 1);
     assert_eq!(fs[0]["session_id"], "sess_abc");
 
-    // The clone materialized under <session_dir>/fleet-ws/<handle>.
+    // The clone materialized under <session_dir>/worktree.
     let dest = clone_dir(&env, HANDLE);
     assert!(
         dest.join("README.md").exists(),
@@ -315,19 +317,19 @@ async fn f7s1_bind_fetches_clones_and_stages_the_steer() {
         "ws bind still acks"
     );
 
-    // The steer text was staged with the ABSOLUTE clone path, readable once.
-    let staged = env
-        .state
-        .fleet
-        .pending_steer("sess_abc")
-        .expect("a steer is staged at ws-bind");
-    assert!(
-        staged.contains(&dest.to_string_lossy().to_string()),
-        "steer text carries the absolute clone path: {staged:?}"
+    // The steer text was staged with the ABSOLUTE clone path. The gate
+    // consumes it ONCE at the bind write point (the queue insert IS the
+    // steer-queued assertion — f7s1_steer_turn_rides_the_gate_fifo pins the
+    // flush order), so read it from the queued steer turn instead: it must
+    // carry the absolute path, and `pending_steer` must now be spent.
+    assert_eq!(
+        env.state.gate.pending_len("sess_abc"),
+        1,
+        "the steer turn sits in the gate FIFO"
     );
     assert!(
         env.state.fleet.pending_steer("sess_abc").is_none(),
-        "pending_steer returns the text exactly once"
+        "pending_steer returns the text exactly once (the gate consumed it)"
     );
 }
 
@@ -486,7 +488,7 @@ async fn f7s3_dirty_tree_pushes_before_the_result_callback() {
 #[tokio::test]
 async fn f7s3b_push_event_precedes_the_result_event() {
     use pria_guest_agent::pria_client::{
-        AuditEventBuilder, CallbackError, CredentialRequestPayload, HeartbeatPayload,
+        CallbackError, CredentialRequestPayload, HeartbeatPayload,
         SessionEventPayload, UsagePayload,
     };
     use std::sync::Mutex;
@@ -614,8 +616,6 @@ async fn f7s3b_push_event_precedes_the_result_event() {
                 .await
         }
     }
-    let _ = AuditEventBuilder::default(); // keep the import honest
-
     let (_srv, bundle) = make_base_bundle();
     let (_router, _launcher, _pria, env) = started().await;
     let client = Arc::new(Scripted {
@@ -739,8 +739,12 @@ async fn f7s6_teardown_with_dirty_workspace_never_pushes() {
     let (_srv, bundle) = make_base_bundle();
     let (router, _launcher, pria, env) = started().await;
     program_fetch(&pria, GitFetch::Bundle(bundle));
-    let fleet = direct_fleet(&env, pria.clone()).await;
-
+    // Bind through the SAME fleet the router's /close handler consults
+    // (env.state.fleet) — a separate direct_fleet would share the
+    // SessionStore but NOT the binding table, and /close would find nothing
+    // bound. The S2/S3/S4 direct-fleet idiom is right for end-driven mints;
+    // teardown is router-driven, so the bind must live on the router's fleet.
+    let fleet = &env.state.fleet;
     fleet
         .bind("sess_abc", ws_directive(HANDLE, 1, "brandsite"))
         .await
@@ -791,7 +795,7 @@ async fn f7s7_absent_ws_is_byte_identical_f6_no_git_surface() {
         fetches(&pria)
     );
     assert!(
-        !session_dir(&env).join("fleet-ws").exists(),
+        !session_dir(&env).join("worktree").exists(),
         "absent ws ⇒ NO clone root"
     );
     assert!(
@@ -827,15 +831,17 @@ async fn f7s7_absent_ws_is_byte_identical_f6_no_git_surface() {
 #[tokio::test]
 async fn f7s8_steer_text_carries_the_path_never_the_wire_token() {
     let (_srv, bundle) = make_base_bundle();
-    let (router, _launcher, pria, env) = started().await;
+    let (router, launcher, pria, env) = started().await;
     program_fetch(&pria, GitFetch::Bundle(bundle));
 
     send_ok(&router, &set_task_ws_envelope(HANDLE, "1", "brandsite")).await;
-    let staged = env
-        .state
-        .fleet
-        .pending_steer("sess_abc")
-        .expect("a steer is staged");
+    // The gate consumed the staged steer at the bind write point and queued
+    // it — read the text from the flushed steer turn (the same observable
+    // the model would see).
+    env.state.gate.on_agent_end("sess_abc").await; // set_task end ⇒ steer flushes
+    let sent = sent_inputs(&launcher);
+    assert_eq!(sent.len(), 2, "the steer turn flushed: {sent:?}");
+    let staged = &sent[1];
 
     // Carries the ABSOLUTE clone path (structural steering — R-F7-3).
     assert!(

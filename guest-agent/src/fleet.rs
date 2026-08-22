@@ -26,12 +26,15 @@
 //! forwarding.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::pria_client::PriaCallbackClient;
+use crate::fleet_git;
+use crate::pria_client::{GitFetch, GitPush, PriaCallbackClient};
+use crate::sessions::SessionStore;
 
 /// A parsed `fleet <handleId> <generation>` directive from a set_task message.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,8 +208,46 @@ struct Binding {
     /// NOT consulted by teardown (`on_session_eof` / `on_session_closed`):
     /// process death is process death, both phases.
     skip_ends: u32,
+    /// F7-S: the staged hidden steer text for a workspace-bound binding.
+    /// Set at bind (after the clone materializes); consumed EXACTLY ONCE by
+    /// `pending_steer` — the TurnGate is the only caller, right after the
+    /// successful `bind()` in `notify_and_write`, and it queues the text into
+    /// its own pending FIFO (the ONE stdin writer law: FleetBindings never
+    /// writes to a process).
+    steer: Option<String>,
+    /// F7-S: the materialized workspace (the clone under
+    /// `<session_dir>/worktree`). `None` ⇒ a workspace-less binding
+    /// (absent ws token, refused fetch, or a clone failure): no steer, no
+    /// push, honest F6 result.
+    workspace: Option<WsState>,
     /// Per-binding heartbeat task; aborted when the binding clears/replaces.
     heartbeat: tokio::task::JoinHandle<()>,
+}
+
+/// F7-S: a live workspace clone on a binding (R-F7-1/2 — the ws binding IS
+/// the write grant; the agent works this tree with its local fs tools).
+#[derive(Debug, Clone)]
+pub struct WsState {
+    /// The clone root: `<session_dir>/worktree/` (jailed under the
+    /// session scratch — never inside the agent's `workspace_dir` cwd).
+    /// The leaf is deliberately NEUTRAL (not the handle id): the steer
+    /// text names this absolute path, and the R-F7-3 NEVER law forbids
+    /// the handle from being model-visible even via the path.
+    pub work_dir: PathBuf,
+    /// The oid the clone's HEAD was born at — the connectivity anchor for the
+    /// thin result bundle (`<base>..HEAD`).
+    pub base_oid: String,
+}
+
+/// The hidden steer text (R-F7-3): the agent is steered into the clone
+/// STRUCTURALLY — the wire token (`ws:<slug>`, `fleet <handle>`, the handle
+/// id) is NEVER model-visible; only the absolute path appears.
+pub fn steer_prompt(work_dir: &std::path::Path) -> String {
+    format!(
+        "Change into and do ALL of your work inside the directory `{}`; \
+         every file you create or edit must live under it.",
+        work_dir.display()
+    )
 }
 
 /// The per-VM store of session → fleet binding, shared on `AppState.fleet`.
@@ -214,6 +255,12 @@ pub struct FleetBindings {
     pria: Arc<dyn PriaCallbackClient>,
     heartbeat_interval: Duration,
     bindings: Mutex<HashMap<String, Binding>>,
+    /// F7-S: the session table, read ONCE per ws-bind for `dirs()` (the clone
+    /// root jail). Optional so unit fences that never bind a workspace need no
+    /// store. This does NOT cycle: `SessionStore` never references
+    /// `FleetBindings`, and the steer injection still rides the TurnGate —
+    /// `FleetBindings` never writes to a process.
+    sessions: Option<Arc<SessionStore>>,
 }
 
 /// Why a `bind()` was refused (F6.3 binding-conflict law).
@@ -254,7 +301,27 @@ impl FleetBindings {
             pria,
             heartbeat_interval,
             bindings: Mutex::new(HashMap::new()),
+            sessions: None,
         }
+    }
+
+    /// F7-S: attach the session table (construction-time wiring in main.rs /
+    /// test_support). Used ONLY to read `dirs()` for the clone root.
+    pub fn with_sessions(mut self, sessions: Arc<SessionStore>) -> Self {
+        self.sessions = Some(sessions);
+        self
+    }
+
+    /// F7-S: the staged hidden steer text for a session's binding, returned
+    /// EXACTLY ONCE (consumed) — the TurnGate calls this right after a
+    /// successful `bind()` and queues the text into its own pending FIFO.
+    /// `None` ⇒ no steer (workspace-less / already consumed / unbound).
+    pub fn pending_steer(&self, session_id: &str) -> Option<String> {
+        self.bindings
+            .lock()
+            .unwrap()
+            .get_mut(session_id)
+            .and_then(|b| b.steer.take())
     }
 
     /// Bind a fleet directive to a session, subject to the F6.3 conflict law:
@@ -263,8 +330,17 @@ impl FleetBindings {
     /// leg); a same-handle bind at `generation <= current` is refused as
     /// stale; a FOREIGN-handle bind while any binding is live is refused
     /// outright (no replacement, no heartbeat abort, no ack — the fj-8d7c1e71
-    /// livelock). A cleared session accepts any handle fresh. On acceptance:
-    /// emits the `ack` callback and starts the per-binding heartbeat loop.
+    /// livelock). A cleared session accepts any handle fresh.
+    ///
+    /// F7-S: when the directive carries a `ws:<slug>` binding, the acceptance
+    /// then performs the workspace lifecycle BEFORE the ack: fetch the base
+    /// bundle, materialize the clone under `<session_dir>/worktree`,
+    /// stage the hidden steer text, and owe TWO ends (the set_task turn's AND
+    /// the steer turn's). A refused fetch / failed clone degrades to an
+    /// honest workspace-LESS binding (no clone, no steer, no push — the ack
+    /// still fires). An absent-ws directive is byte-identical F6. The F6.3
+    /// insert-then-ack ordering is preserved: refusals never fetch, never
+    /// clone, never ack.
     pub async fn bind(
         &self,
         session_id: &str,
@@ -280,7 +356,7 @@ impl FleetBindings {
             session_id.to_string(),
             directive.clone(),
         ));
-        let outcome = {
+        let accepted = {
             let mut bindings = self.bindings.lock().unwrap();
             match bindings.get(session_id) {
                 // Decide and insert under ONE lock so a concurrent bind can
@@ -295,35 +371,113 @@ impl FleetBindings {
                         current: live.directive.generation,
                     })
                 }
-                _ => Ok(bindings.insert(
-                    session_id.to_string(),
-                    Binding {
-                        directive: directive.clone(),
-                        phase: Phase::Acked,
-                        // The directive turn's own future end. A REPLACED
-                        // binding's burned count never leaks: the new binding
-                        // starts fresh.
-                        skip_ends: 1,
-                        heartbeat: heartbeat.take().expect("heartbeat consumed once"),
-                    },
-                )),
+                _ => Ok(bindings.remove(session_id)),
             }
         };
-        match outcome {
-            Ok(replaced) => {
-                if let Some(old) = replaced {
-                    old.heartbeat.abort();
-                }
-                self.emit(session_id, &directive, "ack", json!({})).await;
-                Ok(())
-            }
+        let replaced = match accepted {
+            Ok(replaced) => replaced,
             Err(refusal) => {
                 // Refusals disturb NOTHING that lives: only the intruder's
-                // own never-ticked heartbeat dies; no ack is emitted.
+                // own never-ticked heartbeat dies; no ack is emitted, and the
+                // workspace legs below never run (fail-closed).
                 if let Some(h) = heartbeat {
                     h.abort();
                 }
-                Err(refusal)
+                return Err(refusal);
+            }
+        };
+
+        // F7-S: the workspace legs (fetch + clone + steer staging), AFTER the
+        // F6.3 acceptance. Fetch-before-insert keeps the F6.3 law observing
+        // the OLD binding for the whole fetch window; the `pending_steer`
+        // race hole is impossible because the steer can only be staged after
+        // this insert lands.
+        let (skip_ends, steer, workspace) = match self
+            .bind_workspace(session_id, &directive)
+            .await
+        {
+            Some(ws) => (2, Some(steer_prompt(&ws.work_dir)), Some(ws)),
+            None => (1, None, None),
+        };
+        {
+            let mut bindings = self.bindings.lock().unwrap();
+            bindings.insert(
+                session_id.to_string(),
+                Binding {
+                    directive: directive.clone(),
+                    phase: Phase::Acked,
+                    // The directive turn's own future end, plus the hidden
+                    // steer turn's end when a workspace bound (F7-S: its
+                    // agent_end must never mint the result).
+                    skip_ends,
+                    steer,
+                    workspace,
+                    heartbeat: heartbeat.take().expect("heartbeat consumed once"),
+                },
+            );
+        }
+        if let Some(old) = replaced {
+            old.heartbeat.abort();
+        }
+        self.emit(session_id, &directive, "ack", json!({})).await;
+        Ok(())
+    }
+
+    /// F7-S: the bind-time workspace legs. `Some(WsState)` ⇒ the base bundle
+    /// fetched and the clone materialized (workspace-bound); `None` ⇒ run
+    /// workspace-LESS — absent ws token (byte-identical F6), a refused fetch
+    /// (the typed delegate answer), or a clone failure. Never throws: the
+    /// binding is valid either way; the workspace is the granted capability,
+    /// not a precondition (R-F7-2 — absent capability fails CLOSED to the
+    /// workspace-less run, mirroring Pria).
+    async fn bind_workspace(&self, session_id: &str, directive: &FleetDirective) -> Option<WsState> {
+        directive.workspace.as_ref()?;
+        let (session_dir, _) = self.sessions.as_ref()?.dirs(session_id)?;
+        let answer = self
+            .pria
+            .fleet_git_fetch(&directive.handle_id, directive.generation, session_id)
+            .await;
+        let bytes = match answer {
+            Ok(GitFetch::Bundle(bytes)) => bytes,
+            Ok(GitFetch::Refused(reason)) => {
+                tracing::warn!(
+                    session_id,
+                    handle_id = %directive.handle_id,
+                    reason,
+                    "fleet git fetch refused — running workspace-less"
+                );
+                return None;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    session_id,
+                    "fleet git fetch failed — running workspace-less"
+                );
+                return None;
+            }
+        };
+        // Clone root: `<session_dir>/worktree/` — the R-F7-3 law says the
+        // wire token (the handle id included) is NEVER model-visible, and
+        // the steer text names the clone's absolute path — so the on-disk
+        // leaf must be neutral, not the handle. Two binds in one session
+        // can't collide here: the F6.3 law keeps at most ONE live binding
+        // per session (a same-handle rebind replaces the old workspace; a
+        // foreign-handle bind is refused outright).
+        let dest = session_dir.join("worktree");
+        match fleet_git::clone_from_bundle(&bytes, &dest) {
+            Ok(out) => Some(WsState {
+                work_dir: out.work_dir,
+                base_oid: out.base_oid,
+            }),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    session_id,
+                    dest = %dest.display(),
+                    "fleet workspace clone failed — running workspace-less"
+                );
+                None
             }
         }
     }
@@ -397,8 +551,61 @@ impl FleetBindings {
         };
         if let Some(binding) = cleared {
             binding.heartbeat.abort();
-            self.emit(session_id, &binding.directive, "result", json!({ "ok": true }))
+            let payload = self.result_payload(session_id, &binding).await;
+            self.emit(session_id, &binding.directive, "result", payload)
                 .await;
+        }
+    }
+
+    /// F7-S: the result payload for a minted completion. A workspace-LESS
+    /// binding is byte-identical F6 (`{ok:true}`). A workspace-bound binding
+    /// commits the agent's work IF the tree is dirty and pushes the thin
+    /// result bundle BEFORE the result callback fires (the ordering law):
+    ///   * clean tree ⇒ `{ok:true}`, ZERO push (no fabricated artifact —
+    ///     Pria's R-W5-3 terminal law);
+    ///   * push accepted ⇒ `{ok:true}`;
+    ///   * push refused / bundle failure ⇒
+    ///     `{ok:false, error:{code:"push_refused"}}` (first-cause law).
+    async fn result_payload(&self, session_id: &str, binding: &Binding) -> Value {
+        let Some(ws) = &binding.workspace else {
+            return json!({ "ok": true });
+        };
+        let d = &binding.directive;
+        // The task slug is not on the directive; the generic message binds
+        // the fleet handle (server-side audit corroboration).
+        let message = format!("fleet {}", d.handle_id);
+        let committed = match fleet_git::commit_if_dirty(&ws.work_dir, &message) {
+            Ok(committed) => committed,
+            Err(e) => {
+                tracing::warn!(error = %e, session_id, "fleet commit failed — treating as clean");
+                None
+            }
+        };
+        let Some(_oid) = committed else {
+            return json!({ "ok": true }); // clean tree: no artifact, no push
+        };
+        let bundle = match fleet_git::make_result_bundle(&ws.work_dir, &ws.base_oid) {
+            Ok(out) => out,
+            Err(e) => {
+                tracing::warn!(error = %e, session_id, "fleet result bundle failed");
+                return json!({ "ok": false, "error": { "code": "push_refused" } });
+            }
+        };
+        let ref_name = format!("refs/vm/{}/result", d.handle_id);
+        match self
+            .pria
+            .fleet_git_push(d.handle_id.as_str(), d.generation, &ref_name, session_id, &bundle.bytes)
+            .await
+        {
+            Ok(GitPush::Accepted) => json!({ "ok": true }),
+            Ok(GitPush::Refused(reason)) => {
+                tracing::warn!(session_id, reason, "fleet git push refused");
+                json!({ "ok": false, "error": { "code": "push_refused" } })
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, session_id, "fleet git push failed");
+                json!({ "ok": false, "error": { "code": "push_refused" } })
+            }
         }
     }
 

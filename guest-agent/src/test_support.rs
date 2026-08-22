@@ -110,10 +110,13 @@ fn assemble(
         desktop_run_root,
         Arc::new(FakeSystemctl::default()),
     ));
-    let fleet = Arc::new(crate::fleet::FleetBindings::new(
-        pria.clone(),
-        std::time::Duration::from_secs(cfg.fleet.heartbeat_interval_seconds.max(1)),
-    ));
+    let fleet = Arc::new(
+        crate::fleet::FleetBindings::new(
+            pria.clone(),
+            std::time::Duration::from_secs(cfg.fleet.heartbeat_interval_seconds.max(1)),
+        )
+        .with_sessions(sessions.clone()),
+    );
     let gate = Arc::new(crate::turn_gate::TurnGate::new(fleet.clone(), sessions.clone()));
     AppState {
         config: Arc::new(cfg),

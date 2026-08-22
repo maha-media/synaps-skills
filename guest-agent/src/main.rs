@@ -115,10 +115,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .with_unit_generator(unit_generator),
     );
-    let fleet = Arc::new(pria_guest_agent::fleet::FleetBindings::new(
-        pria.clone(),
-        std::time::Duration::from_secs(config.fleet.heartbeat_interval_seconds.max(1)),
-    ));
+    let fleet = Arc::new(
+        pria_guest_agent::fleet::FleetBindings::new(
+            pria.clone(),
+            std::time::Duration::from_secs(config.fleet.heartbeat_interval_seconds.max(1)),
+        )
+        .with_sessions(sessions.clone()),
+    );
     let gate = Arc::new(pria_guest_agent::turn_gate::TurnGate::new(
         fleet.clone(),
         sessions.clone(),
