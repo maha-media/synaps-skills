@@ -17,6 +17,10 @@ pub struct SessionEntry {
     pub pid: u32,
     pub started_at: String,
     pub context_path: String,
+    /// F7: the session's scratch + workspace roots, so the fleet workspace
+    /// lifecycle can jail the clone under `<session_dir>/fleet-ws/<handle>/`.
+    pub session_dir: std::path::PathBuf,
+    pub workspace_dir: std::path::PathBuf,
     pub process: Arc<dyn SessionProcess>,
 }
 
@@ -63,6 +67,16 @@ impl SessionStore {
             .unwrap()
             .get(session_id)
             .map(|e| e.process.clone())
+    }
+
+    /// F7: the session's scratch + workspace roots (cloned out so the fleet
+    /// workspace lifecycle can jail the clone without holding the lock).
+    pub fn dirs(&self, session_id: &str) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .map(|e| (e.session_dir.clone(), e.workspace_dir.clone()))
     }
 
     /// Snapshot of status info for `status` endpoint.
@@ -148,6 +162,8 @@ mod tests {
             pid: 99999,
             started_at: "2026-01-01T00:00:00Z".to_string(),
             context_path: "/tmp/ctx.json".to_string(),
+            session_dir: std::path::PathBuf::from("/tmp/sess-dir"),
+            workspace_dir: std::path::PathBuf::from("/tmp/ws-dir"),
             process: process.clone(),
         };
         store.insert(entry);
@@ -264,6 +280,8 @@ mod tests {
             pid: 1000,
             started_at: "2026-01-01T00:00:00Z".to_string(),
             context_path: "/tmp/ctx.json".to_string(),
+            session_dir: std::path::PathBuf::from("/tmp/sess-dir"),
+            workspace_dir: std::path::PathBuf::from("/tmp/ws-dir"),
             process: Arc::new(FakeProcess::new(1000)),
         }
     }
