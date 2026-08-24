@@ -21,6 +21,10 @@ pub struct Versions {
     pub synaps_version: Option<String>,
     pub fsmon_version: Option<String>,
     pub plugin_bundle_version: Option<String>,
+    /// W9 (SD D-3): the Synaps model inventory probed once at boot. Empty when
+    /// the probe failed/timed out — the heartbeat then omits `models` and Pria
+    /// falls back to its curated list.
+    pub synaps_models: Vec<crate::synaps::model_probe::ProviderModels>,
 }
 
 /// Run `<bin> --version` and return the trimmed first line (best-effort).
@@ -56,6 +60,14 @@ impl Versions {
     pub fn detect(config: &Config) -> Self {
         let synaps_version = binary_version(&config.synaps.binary);
         let plugin_bundle_version = config.synaps.plugin_dir.as_deref().and_then(bundle_version);
+        // W9: probe the model inventory ONCE at boot from the very Synaps binary
+        // the guest runs — the catalog is never forked, so a Synaps upgrade
+        // surfaces its new models automatically. Bounded by a short timeout;
+        // any failure → empty (fail-open, the heartbeat omits `models`).
+        let synaps_models = crate::synaps::model_probe::probe_with_timeout(
+            &config.synaps.binary,
+            std::time::Duration::from_secs(8),
+        );
         Versions {
             guest_agent_version: GUEST_AGENT_VERSION.to_string(),
             synaps_version,
@@ -63,6 +75,7 @@ impl Versions {
             // guest agent reports None until fsmon status is wired (GA-B8).
             fsmon_version: None,
             plugin_bundle_version,
+            synaps_models,
         }
     }
 }
