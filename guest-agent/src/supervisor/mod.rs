@@ -66,6 +66,9 @@ pub fn build_heartbeat(state: &AppState) -> HeartbeatPayload {
         fsmon_status: fsmon_status.as_str().to_string(),
         timestamp: Utc::now().to_rfc3339(),
         vnc,
+        // W9 (SD D-3): the boot-probed Synaps model inventory rides every
+        // heartbeat (omitted when the probe came back empty → Pria falls back).
+        models: state.versions.synaps_models.clone(),
     }
 }
 
@@ -208,6 +211,7 @@ mod tests {
                     password: "vnc_pw".into(),
                 }],
             }),
+            models: Vec::new(),
         };
         let json = serde_json::to_value(&hb).unwrap();
         let sessions = &json["vnc"]["sessions"];
@@ -242,6 +246,7 @@ mod tests {
             fsmon_status: "unavailable".into(),
             timestamp: "2026-06-14T00:00:00Z".into(),
             vnc: None,
+            models: Vec::new(),
         };
         let json = serde_json::to_value(&hb).unwrap();
         assert!(

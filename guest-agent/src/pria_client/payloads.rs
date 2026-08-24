@@ -34,6 +34,11 @@ pub struct HeartbeatPayload {
     /// Omitted from the payload when no desktop sessions are running.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vnc: Option<HeartbeatVnc>,
+    /// W9 (SD D-3): the Synaps model inventory probed once at boot
+    /// (`models:[{provider, models:[slug]}]`). Omitted when the probe came back
+    /// empty so Pria honestly falls back to its curated list.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<crate::synaps::model_probe::ProviderModels>,
 }
 
 /// The `vnc` sub-object in the heartbeat (spec §8.2).
