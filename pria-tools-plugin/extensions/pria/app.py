@@ -1,7 +1,7 @@
 """App — initialize / hook.handle / tool.call method handlers for pria-tools-plugin."""
-from pria.tools import TOOL_SPECS, ToolHandler, TOOL_SEARCH_KNOWLEDGE, TOOL_SEARCH_HISTORY
+from pria.tools import TOOL_SPECS, ToolHandler, TOOL_SEARCH_KNOWLEDGE, TOOL_SEARCH_HISTORY, TOOL_SAVE_TO_VAULT
 
-_KNOWN_TOOLS = {TOOL_SEARCH_KNOWLEDGE, TOOL_SEARCH_HISTORY}
+_KNOWN_TOOLS = {TOOL_SEARCH_KNOWLEDGE, TOOL_SEARCH_HISTORY, TOOL_SAVE_TO_VAULT}
 
 
 class App:

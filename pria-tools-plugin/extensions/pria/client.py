@@ -130,6 +130,29 @@ class GatewayClient:
             args["uploadIds"] = selected_upload_ids
         return self._call("SEARCH_KNOWLEDGE", args)
 
+    def save_to_vault(self, filename: str, content: str,
+                      content_type: str = "text/html",
+                      collection: str | None = None,
+                      dry_run: bool = True) -> dict:
+        """SAVE_TO_VAULT via gateway. WRITE — dry-run by DEFAULT.
+
+        Maps to subject SAVE_TO_VAULT with args:
+            { filename, content, contentType, collection?, dryRun }
+        Nothing is written unless dry_run is explicitly False. The gateway
+        returns a preview when dry_run is True; on a real save it returns
+        { uploadId, url, filename, collection, indexed }. Institution/user are
+        resolved server-side from the machine token — never sent from here.
+        """
+        args: dict = {
+            "filename": filename,
+            "content": content,
+            "contentType": content_type,
+            "dryRun": bool(dry_run),
+        }
+        if collection:
+            args["collection"] = collection
+        return self._call("SAVE_TO_VAULT", args)
+
     def search_histories(self, search: str | None = None, limit: int = 20,
                          course_id: str | None = None,
                          before: str | None = None,

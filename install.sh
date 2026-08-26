@@ -7,12 +7,14 @@ REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 CHECK_ONLY=false
 CLAUDE_CODE=false
 EXA_KEY=""
+INSTALL_NODE=false
 
 for arg in "$@"; do
   case "$arg" in
     --check) CHECK_ONLY=true ;;
     --claude-code) CLAUDE_CODE=true ;;
     --exa-key=*) EXA_KEY="${arg#--exa-key=}" ;;
+    --install-node) INSTALL_NODE=true ;;
   esac
 done
 
@@ -194,12 +196,30 @@ if command -v node &>/dev/null; then
     info "Install via nvm: nvm install --lts"
   fi
 else
-  issue "node not found"
-  case "$OS" in
-    mac)     info "Install: brew install node  OR  nvm install --lts" ;;
-    windows) info "Install: https://nodejs.org or nvm-windows" ;;
-    *)       info "Install: curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && nvm install --lts" ;;
-  esac
+  # Agentic VMs / headless images often ship without node, which breaks every
+  # Node-based skill (web-tools, etc.). With --install-node, fetch the official
+  # static build so the bundle is self-sufficient. Otherwise just advise.
+  if [ "$INSTALL_NODE" = true ] && [ "$CHECK_ONLY" = false ] && { [ "$OS" = "linux" ] || [ "$OS" = "wsl" ]; }; then
+    NODE_V="v20.18.1"; ARCH="$(uname -m)"; case "$ARCH" in x86_64) NARCH=linux-x64 ;; aarch64|arm64) NARCH=linux-arm64 ;; *) NARCH="" ;; esac
+    NSUDO=""; [ -w /usr/local ] || { command -v sudo &>/dev/null && NSUDO="sudo"; }
+    if [ -n "$NARCH" ]; then
+      info "node not found — installing $NODE_V ($NARCH) to /usr/local…"
+      if curl -fsSL --retry 3 "https://nodejs.org/dist/${NODE_V}/node-${NODE_V}-${NARCH}.tar.xz" | $NSUDO tar -xJ -C /usr/local --strip-components=1 2>/dev/null; then
+        hash -r; command -v node &>/dev/null && ok "installed node $(node -v)" || issue "node install ran but node still not on PATH"
+      else
+        issue "node auto-install failed — install manually (nvm install --lts)"
+      fi
+    else
+      issue "node not found — unsupported arch $ARCH for auto-install"
+    fi
+  else
+    issue "node not found"
+    case "$OS" in
+      mac)     info "Install: brew install node  OR  nvm install --lts" ;;
+      windows) info "Install: https://nodejs.org or nvm-windows" ;;
+      *)       info "Install: curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && nvm install --lts  (or re-run with --install-node)" ;;
+    esac
+  fi
 fi
 
 # yt-dlp (youtube skill)
@@ -479,6 +499,39 @@ if [ -d "$SKILLS_DIR" ]; then
 fi
 if [ "$CLEANED" -eq 0 ] && [ "$CHECK_ONLY" = false ]; then
   ok "No stale copies to clean"
+fi
+
+# ─── web-tools CLI wrappers ───────────────────────────────────
+# The web-tools scripts are invoked by the `web` skill via ${CLAUDE_PLUGIN_ROOT},
+# but agents (and humans) also expect them on PATH as plain commands — `search
+# "query"`, `fetch <url>`, etc. Without these an agent with no search tool falls
+# back to hand-rolled Python. Create thin `node <script>` wrappers in BIN_DIR.
+if [ "$CHECK_ONLY" = false ]; then
+  head "web-tools CLI wrappers"
+  BIN_DIR="${SYNAPS_BIN_DIR:-/usr/local/bin}"
+  WSUDO=""
+  if [ ! -w "$BIN_DIR" ] 2>/dev/null; then
+    if command -v sudo &>/dev/null && sudo -n true 2>/dev/null; then
+      WSUDO="sudo"
+    else
+      BIN_DIR="$HOME/.local/bin"; mkdir -p "$BIN_DIR"
+    fi
+  fi
+  WT="$REPO_DIR/web-tools-plugin/scripts"
+  made=0
+  for tool in search fetch browser youtube scholar pdf docs wiki status; do
+    entry="$WT/$tool/$tool.js"
+    [ -f "$entry" ] || continue
+    tmp="$(mktemp)"
+    printf '#!/bin/bash\nexec node "%s" "$@"\n' "$entry" > "$tmp"
+    if $WSUDO install -m 0755 "$tmp" "$BIN_DIR/$tool" 2>/dev/null; then made=$((made + 1)); fi
+    rm -f "$tmp"
+  done
+  if [ "$made" -gt 0 ]; then
+    ok "installed $made web-tools command(s) to $BIN_DIR (search, fetch, …)"
+  else
+    warn "no web-tools wrappers installed (is $BIN_DIR writable?)"
+  fi
 fi
 
 # ─── Summary ─────────────────────────────────────────────────

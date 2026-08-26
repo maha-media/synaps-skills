@@ -27,6 +27,7 @@ from pria.client import (
 
 TOOL_SEARCH_KNOWLEDGE = "search_knowledge"
 TOOL_SEARCH_HISTORY = "search_history"
+TOOL_SAVE_TO_VAULT = "save_to_vault"
 
 TOOL_SPECS = [
     {
@@ -76,6 +77,43 @@ TOOL_SPECS = [
                 },
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": TOOL_SAVE_TO_VAULT,
+        "description": (
+            "Save a document (e.g. a finished report) into the institution's Pria IP Vault, "
+            "optionally into a named folder (collection), and have it indexed for future search. "
+            "This is a WRITE and is DRY-RUN BY DEFAULT: it returns a preview of what WOULD be saved "
+            "without writing anything. Only when you pass dry_run=false does it actually create the "
+            "vault document. Always preview first, show the user, then commit. It cannot overwrite or "
+            "delete existing vault files. Institution and owner are resolved securely server-side."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filename": {
+                    "type": "string",
+                    "description": "File name for the vault document, e.g. 'MKS Bid Report 2026-08-31.html'.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The full document content to save (HTML, Markdown, or plain text).",
+                },
+                "content_type": {
+                    "type": "string",
+                    "description": "One of: text/html, text/markdown, text/plain. Default text/html.",
+                },
+                "collection": {
+                    "type": "string",
+                    "description": "Optional collection (folder) id to file it under, e.g. the 'Weekly Reports' folder. Must be an existing folder in this institution's vault. Omit for the vault root.",
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "Default true (preview only, writes nothing). Set false to actually save.",
+                },
+            },
+            "required": ["filename", "content"],
         },
     },
 ]
@@ -214,6 +252,8 @@ class ToolHandler:
             return self._search_knowledge(tool_input)
         if name == TOOL_SEARCH_HISTORY:
             return self._search_history(tool_input)
+        if name == TOOL_SAVE_TO_VAULT:
+            return self._save_to_vault(tool_input)
         return _tool_error(f"unknown tool: {name}")
 
     def _search_knowledge(self, inp: dict) -> dict:
@@ -259,3 +299,40 @@ class ToolHandler:
         except (OSError, Exception) as exc:  # noqa: BLE001
             return _tool_error("network_error", str(exc))
         return _normalize_history_results(raw)
+
+    def _save_to_vault(self, inp: dict) -> dict:
+        filename = (inp.get("filename") or "").strip()
+        content = inp.get("content")
+        if not filename:
+            return _tool_error("filename is required")
+        if not isinstance(content, str) or not content:
+            return _tool_error("content is required (non-empty string)")
+        content_type = (inp.get("content_type") or "text/html").strip()
+        collection = (inp.get("collection") or None)
+        # WRITE SAFETY: dry-run unless explicitly set to boolean False. Any other
+        # value (missing, true, the string "false", etc.) stays dry-run.
+        dry_run = inp.get("dry_run", True)
+        if dry_run is not False:
+            dry_run = True
+
+        client, err = self._get_client()
+        if err:
+            return err
+        try:
+            raw = client.save_to_vault(
+                filename=filename,
+                content=content,
+                content_type=content_type,
+                collection=collection,
+                dry_run=dry_run,
+            )
+        except AuthError as exc:
+            self._reset_client()
+            return _tool_error("authentication failed", str(exc))
+        except RateLimitError as exc:
+            return _tool_error("rate_limit", str(exc))
+        except APIError as exc:
+            return _tool_error(f"api_error (HTTP {exc.status})", str(exc))
+        except (OSError, Exception) as exc:  # noqa: BLE001
+            return _tool_error("network_error", str(exc))
+        return raw
