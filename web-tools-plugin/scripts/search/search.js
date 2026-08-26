@@ -97,8 +97,8 @@ if (!query) {
 	console.log("  --domain <domain>     Include domain (repeatable)");
 	console.log("  --exclude <domain>    Exclude domain (repeatable)");
 	console.log("\nEnvironment:");
-	console.log("  EXA_API_KEY           Required. Your Exa API key.");
-	console.log("                        Set live, or in ~/.config/synaps/web-tools.env");
+	console.log("  EXA_API_KEY           Optional. Your Exa API key for richer ranking/content.");
+	console.log("                        If unset, falls back to a free DuckDuckGo search.");
 	console.log("\nExamples:");
 	console.log('  search.js "javascript async await"');
 	console.log('  search.js "rust programming" -n 10 --content');
@@ -122,14 +122,11 @@ for (const d of includeDomains) {
 recallAndEmit(query, { host: HOST, op: OP, tags: recallTags });
 
 const apiKey = process.env.EXA_API_KEY;
-if (!apiKey) {
-	failAndExit({
-		host: HOST, op: OP,
-		err: new Error("EXA_API_KEY environment variable is required. Get your API key at: https://dashboard.exa.ai/api-keys"),
-		err_class: "no_api_key",
-		cmd: `search.js ${query.slice(0, 60)}`,
-	});
-}
+// Keyless fallback: when no Exa key is configured, degrade to a free
+// DuckDuckGo HTML search instead of hard-failing. Exa (when keyed) gives
+// richer ranking/freshness/content; DDG covers the no-key case with the SAME
+// output contract so downstream agents don't care which backend answered.
+const useExa = !!apiKey;
 
 function parseFreshness(value) {
 	const now = new Date();
@@ -191,9 +188,76 @@ async function searchExa() {
 	return response.json();
 }
 
+// ── Keyless DuckDuckGo fallback ──────────────────────────────────────────────
+// Scrapes the DDG HTML endpoint (no API key). Returns the SAME { results: [...] }
+// shape searchExa() produces so the emit loop below is backend-agnostic. This is
+// the same engine jawz-web uses; good enough for discovery + snippets, and the
+// agent can always fetch the returned URLs for full content.
+function stripHtml(s) {
+	return String(s || "")
+		.replace(/<[^>]+>/g, "")
+		.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+		.replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&nbsp;/g, " ")
+		.replace(/\s+/g, " ").trim();
+}
+
+function decodeDdgUrl(href) {
+	if (!href) return "";
+	const m = href.match(/[?&]uddg=([^&]+)/);
+	if (m) { try { return decodeURIComponent(m[1]); } catch { return m[1]; } }
+	if (href.startsWith("//")) return "https:" + href;
+	return href;
+}
+
+async function searchDdg() {
+	// DDG supports site: operators inline; fold domain include/exclude into the query.
+	let q = query;
+	if (includeDomains.length > 0) q += " " + includeDomains.map((d) => `site:${d}`).join(" OR ");
+	for (const d of excludeDomains) q += ` -site:${d}`;
+
+	const dfMap = { pd: "d", pw: "w", pm: "m", py: "y" };
+	const df = freshness && dfMap[freshness] ? dfMap[freshness] : "";
+
+	const form = new URLSearchParams({ q, kl: "us-en" });
+	if (df) form.set("df", df);
+
+	const response = await fetch("https://html.duckduckgo.com/html/", {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/x-www-form-urlencoded",
+			"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
+		},
+		body: form.toString(),
+	});
+	if (!response.ok) {
+		const e = new Error(`HTTP ${response.status}: ${response.statusText}`);
+		e.statusCode = response.status;
+		throw e;
+	}
+	const html = await response.text();
+
+	// Each organic result: an anchor with class result__a (title+link) followed by
+	// a result__snippet. Walk the anchors in order and pair the nearest snippet.
+	const results = [];
+	const anchorRe = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+	const snippetRe = /<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/g;
+	const snippets = [];
+	let sm;
+	while ((sm = snippetRe.exec(html)) !== null) snippets.push(stripHtml(sm[1]));
+	let am, i = 0;
+	while ((am = anchorRe.exec(html)) !== null && results.length < numResults) {
+		const url = decodeDdgUrl(am[1]);
+		const title = stripHtml(am[2]);
+		if (!url || !title) { i++; continue; }
+		results.push({ url, title, text: snippets[i] || "" });
+		i++;
+	}
+	return { results };
+}
+
 // Main
 try {
-	const data = await searchExa();
+	const data = useExa ? await searchExa() : await searchDdg();
 	const results = data.results || [];
 
 	if (results.length === 0) {
