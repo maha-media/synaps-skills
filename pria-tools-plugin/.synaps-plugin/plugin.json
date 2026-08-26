@@ -1,7 +1,7 @@
 {
   "name": "pria-tools",
   "version": "0.1.0",
-  "description": "Pria agentic-VM in-VM tool extension: exposes search_knowledge (RAG/KAG vault search) and search_history (conversation history) to in-VM agents by calling Praxis's public REST API. Tier-1 prototype — no Pria backend code, stdlib only, API-key authenticated.",
+  "description": "Pria agentic-VM in-VM tool extension: search_knowledge (RAG/KAG vault search), search_history (conversation history), and save_to_vault (WRITE a document into the IP vault, into a chosen folder, indexed \u2014 dry-run by default). Calls Praxis's Capability Gateway, machine-token authenticated.",
   "author": {
     "name": "Pria",
     "url": "https://github.com/maha-media"
