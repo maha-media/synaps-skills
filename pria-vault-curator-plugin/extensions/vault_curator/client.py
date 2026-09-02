@@ -34,7 +34,26 @@ class PriaGatewayClient:
   req=request.Request(self.base_url+"/internal/agent-tool-call",data=body,method="POST",headers={"Authorization":"Bearer "+self.token,"Content-Type":"application/json","Accept":"application/json"})
   try:
    with self.opener(req,timeout=REQUEST_TIMEOUT_SECONDS) as response: raw=response.read(MAX_RESPONSE_BYTES+1)
-  except error.HTTPError as exc: raise GatewayError("upstream_http_error","Pria gateway rejected the request",status=exc.code) from exc
+  except error.HTTPError as exc:
+   detail=""
+   try:
+    raw_err=exc.read(2048) if hasattr(exc,"read") else b""
+    text=raw_err.decode("utf-8","replace") if raw_err else ""
+    try:
+     j=json.loads(text) if text else None
+     if isinstance(j,dict):
+      for key in ("message","error","detail"):
+       v=j.get(key)
+       if isinstance(v,str) and v.strip(): detail=v.strip(); break
+       if isinstance(v,dict):
+        vm=v.get("message")
+        if isinstance(vm,str) and vm.strip(): detail=vm.strip(); break
+    except (ValueError,json.JSONDecodeError): pass
+    if not detail: detail=text.strip()
+   except Exception: detail=""
+   if len(detail)>300: detail=detail[:297]+"..."
+   msg=f"Pria gateway rejected the request (HTTP {exc.code}): {detail}" if detail else f"Pria gateway rejected the request (HTTP {exc.code})"
+   raise GatewayError("upstream_http_error",msg,status=exc.code) from None
   except (error.URLError,TimeoutError,OSError) as exc: raise GatewayError("upstream_unavailable","Pria gateway is unavailable") from exc
   if len(raw)>MAX_RESPONSE_BYTES: raise GatewayError("response_too_large","Pria gateway response exceeded the size limit")
   try: value=json.loads(raw)
