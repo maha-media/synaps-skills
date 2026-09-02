@@ -67,7 +67,8 @@ def main():
         except ValidationError as exc:
             write_frame(sys.stdout.buffer, req["id"], error={"code": -32602, "message": str(exc)})
         except GatewayError as exc:
-            write_frame(sys.stdout.buffer, req["id"], error={"code": -32010, "message": "gateway request failed", "data": exc.as_dict()})
+            _m=str(exc); _m=_m[:497]+"..." if len(_m)>500 else _m
+            write_frame(sys.stdout.buffer, req["id"], error={"code": -32010, "message": _m or "gateway request failed", "data": exc.as_dict()})
         except (ValueError, RuntimeError) as exc:
             write_frame(sys.stdout.buffer, req["id"], error={"code": -32602, "message": str(exc)})
         except Exception:

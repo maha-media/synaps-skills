@@ -68,11 +68,55 @@ class Tests(unittest.TestCase):
   for bad in ({},{"query":" "},{"query":"q","vault_id":"v"},{"query":3}):
    with self.assertRaises(ValidationError):validate_input("audit_vault",bad)
   self.assertEqual(validate_input("list_collections",{}),{})
-  self.assertEqual(validate_input("list_collections",{"vault":"instance"}),{"vault":"instance"})
-  with self.assertRaises(ValidationError):validate_input("list_collections",{"vault":"invalid"})
+  with self.assertRaises(ValidationError) as c:validate_input("list_collections",{"vault":"personal"})
+  self.assertIn("unexpected argument",str(c.exception))
+  with self.assertRaises(ValidationError) as c:validate_input("list_collections",{"vault":"instance"})
+  self.assertIn("unexpected argument",str(c.exception))
+  for bad_cursor in (" ","start","zzzzzzzzzzzzzzzzzzzzzzzz","abc","0"*23,"0"*25):
+   with self.subTest(cursor=bad_cursor),self.assertRaises(ValidationError) as c:validate_input("list_collections",{"cursor":bad_cursor})
+   self.assertIn("24-char hex ObjectId",str(c.exception))
+  self.assertEqual(validate_input("list_collections",{"cursor":"0123456789abcdef01234567"}),{"cursor":"0123456789abcdef01234567"})
   self.assertEqual(validate_input("list_uploads",{"collectionId":"c1"}),{"collectionId":"c1"})
   self.assertEqual(validate_input("list_uploads",{"status":"selected"}),{"status":"selected"})
   with self.assertRaises(ValidationError):validate_input("list_uploads",{"status":"deleted"})
+  with self.assertRaises(ValidationError) as c:validate_input("list_uploads",{"cursor":" "})
+  self.assertIn("24-char hex ObjectId",str(c.exception))
+  self.assertEqual(validate_input("list_uploads",{"cursor":"AABBCCDDEEFF00112233445F"}),{"cursor":"AABBCCDDEEFF00112233445F"})
   with self.assertRaises(ValidationError):validate_input("read_upload",{})
   self.assertEqual(validate_input("read_upload",{"uploadId":"u1"}),{"uploadId":"u1"})
+ @patch.dict(os.environ,{"PRIA_AGENT_TOOL_TOKEN":"token"},clear=True)
+ def test_http_error_body_surfaces_detail_bounded(self):
+  import io as _io
+  body=json.dumps({"message":"Unsupported vault filter: personal"}).encode()
+  def opener(req,timeout):raise error.HTTPError(req.full_url,400,"Bad Request",{},_io.BytesIO(body))
+  with self.assertRaises(GatewayError) as c:PriaGatewayClient("https://x.test",opener=opener).call("LIST_COLLECTIONS",{})
+  self.assertEqual(c.exception.status,400);self.assertIn("HTTP 400",str(c.exception));self.assertIn("Unsupported vault filter: personal",str(c.exception));self.assertEqual(c.exception.as_dict()["code"],"upstream_http_error")
+  huge=("x"*5000).encode()
+  def opener2(req,timeout):raise error.HTTPError(req.full_url,502,"Bad Gateway",{},_io.BytesIO(huge))
+  with self.assertRaises(GatewayError) as c:PriaGatewayClient("https://x.test",opener=opener2).call("LIST_COLLECTIONS",{})
+  self.assertLessEqual(len(str(c.exception)),400);self.assertIn("HTTP 502",str(c.exception))
+  def opener3(req,timeout):raise error.HTTPError(req.full_url,500,"Server Error",{},_io.BytesIO(b"<html>oops</html>"))
+  with self.assertRaises(GatewayError) as c:PriaGatewayClient("https://x.test",opener=opener3).call("LIST_COLLECTIONS",{})
+  self.assertIn("<html>oops</html>",str(c.exception))
+  self.assertNotIn("token",str(c.exception).lower())
+ def test_gateway_error_message_flows_to_frame(self):
+  import importlib.util, io as _io
+  main_path=os.path.join(os.path.dirname(__file__),"..","extensions","main.py")
+  spec=importlib.util.spec_from_file_location("vault_curator_main2",main_path); mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+  captured={}
+  orig=mod.write_frame
+  def cap(stream,req_id,*,result=None,error=None):
+   if error is not None: captured["error"]=error
+   orig(stream,req_id,result=result,error=error)
+  mod.write_frame=cap
+  class FakeClient:
+   def call(self,subject,args):raise GatewayError("upstream_http_error","Pria gateway rejected the request (HTTP 400): Unsupported vault filter: personal",status=400)
+  init=json.dumps({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"config":{"pria_base_url":"https://pria.test"}}}).encode()
+  call=json.dumps({"jsonrpc":"2.0","id":2,"method":"tool.call","params":{"name":"list_collections","input":{}}}).encode()
+  frames=b"Content-Length: "+str(len(init)).encode()+b"\r\n\r\n"+init+b"Content-Length: "+str(len(call)).encode()+b"\r\n\r\n"+call
+  fake_stdin=type("S",(),{"buffer":_io.BytesIO(frames)})()
+  fake_stdout=type("S",(),{"buffer":_io.BytesIO()})()
+  with patch.dict(os.environ,{"PRIA_AGENT_TOOL_TOKEN":"token"},clear=True),patch.object(mod,"PriaGatewayClient",lambda *a,**kw:FakeClient()),patch.object(mod.sys,"stdin",fake_stdin),patch.object(mod.sys,"stdout",fake_stdout):
+   mod.main()
+  self.assertIn("error",captured);self.assertIn("Unsupported vault filter: personal",captured["error"]["message"]);self.assertEqual(captured["error"]["data"]["status"],400)
 if __name__=="__main__":unittest.main()
