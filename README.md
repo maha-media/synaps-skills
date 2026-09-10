@@ -85,6 +85,12 @@ Skills are bundled into plugins. Each plugin lives in its own directory and decl
 |-------|-------------|----------|
 | **[tode](tode-plugin/skills/tode/SKILL.md)** | Keeps Synaps work visible in terminal-code: opens files, locations, diffs, and Source Control in the current workbench and diagnoses the shared runtime safely | [terminal-code](https://terminal-code.com) |
 
+### 🔔 bell-plugin
+
+| Extension | What it does | Requires |
+|-----------|-------------|----------|
+| **[bell](bell-plugin/README.md)** | Rings the terminal bell + tab badge and plays a sound when the assistant's turn completes (streaming → ready); Ghostty-friendly, terminal-agnostic | Python 3.8+; optional `pw-play`/`paplay` for audio |
+
 ## 🔧 Install Script
 
 `install.sh` handles all setup. Run it anytime to check or fix your environment:
