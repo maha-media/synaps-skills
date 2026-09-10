@@ -1,0 +1,43 @@
+{
+  "name": "bell",
+  "version": "0.1.0",
+  "description": "Rings the terminal bell (BEL) when the assistant's turn completes, so your terminal tab shows an attention indicator and plays a sound.",
+  "license": "MIT",
+  "extension": {
+    "protocol_version": 1,
+    "runtime": "process",
+    "command": "python3",
+    "args": ["main.py"],
+    "permissions": ["privacy.llm_content"],
+    "hooks": [
+      { "hook": "before_message" },
+      { "hook": "on_message_complete" }
+    ],
+    "config": [
+      {
+        "key": "enabled",
+        "type": "bool",
+        "description": "Master switch; false keeps the plugin loaded but silent.",
+        "default": true
+      },
+      {
+        "key": "settle_ms",
+        "type": "number",
+        "description": "Grace window after a final message; a new provider request within it cancels the bell (turn is continuing).",
+        "default": 400
+      },
+      {
+        "key": "min_interval_ms",
+        "type": "number",
+        "description": "Minimum spacing between rings.",
+        "default": 1000
+      },
+      {
+        "key": "tty",
+        "type": "string",
+        "description": "Output device path; empty means the controlling terminal (/dev/tty). Test/diagnostic override only.",
+        "default": ""
+      }
+    ]
+  }
+}
