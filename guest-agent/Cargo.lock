@@ -805,6 +805,8 @@ dependencies = [
  "hex",
  "hmac",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "libc",
  "reqwest",
  "serde",

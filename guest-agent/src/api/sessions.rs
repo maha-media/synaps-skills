@@ -296,7 +296,7 @@ pub async fn start(
         args,
         uid: req.uid,
         gid: req.gid,
-        groups,
+        groups: groups.clone(),
         cwd: Some(req.workspace_dir.clone()),
         env,
         context_path: written.path.clone(),
@@ -408,6 +408,8 @@ pub async fn start(
         instance_id: req.instance_id.clone(),
         user_id: req.user_id.clone(),
         uid: req.uid,
+        gid: req.gid,
+        groups,
         pid,
         started_at: created.clone(),
         context_path: context_path.clone(),
@@ -539,6 +541,7 @@ pub async fn cancel(
         .map_err(|e| GuestAgentError::internal(e.to_string()))?;
     // Gate state dies with the session (F6.2f): pending queue dropped, no
     // posthumous flush of buffered turns into a killed process.
+    state.services.stop_session_dev(&session_id).await;
     state.gate.teardown(&session_id);
     // Teardown clears any fleet binding: exactly-once session_closed result +
     // heartbeat abort (review 9 finding 1); silent when unbound.
@@ -581,6 +584,7 @@ pub async fn close(
     state.sessions.remove(&session_id);
     // Gate state dies with the session (F6.2f): pending queue dropped, no
     // posthumous flush of buffered turns into a closed process.
+    state.services.stop_session_dev(&session_id).await;
     state.gate.teardown(&session_id);
     // Teardown clears any fleet binding: exactly-once session_closed result +
     // heartbeat abort (review 9 finding 1); silent when unbound.

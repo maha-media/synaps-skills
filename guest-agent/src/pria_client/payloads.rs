@@ -7,6 +7,8 @@ use serde_json::{json, Value};
 /// Heartbeat payload (spec §7.1).
 #[derive(Debug, Clone, Serialize)]
 pub struct HeartbeatPayload {
+    #[serde(rename = "skillPack", skip_serializing_if = "Option::is_none")]
+    pub skill_pack: Option<crate::services::skill_pack::SkillPack>,
     pub account_id: String,
     pub vm_id: String,
     pub replica_id: String,
@@ -92,6 +94,55 @@ pub struct FleetCallbackPayload {
     /// `ack` / `heartbeat` / `result`.
     pub kind: String,
     pub payload: Value,
+}
+
+/// VM-Sites app-service lifecycle event — POSTed to
+/// `/internal/agentic-vm/app-service` (Pria `agenticVmCallbacks.js`
+/// `POST /app-service`, scope `app-service`, generation-fenced
+/// `registry.updateHealth`). Wire shape is camelCase per the RC plan; the
+/// session identity rides the signed `x-pria-session-id` header, not the body.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppServiceEventPayload {
+    pub service_id: String,
+    pub generation: u64,
+    /// `ready` / `exited` / `failed` / `stopped` (guest supervisor vocabulary).
+    pub state: String,
+    /// Process exit code when the event is terminal. Signal deaths are
+    /// reported shell-style as `128 + signal`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// RFC 3339 UTC (millisecond precision) guest observation time.
+    pub observed_at: String,
+    /// The private loopback port the service was handed (present while the
+    /// record still owns it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+}
+
+/// One captured stdout/stderr line inside an [`AppLogPayload`] (and the
+/// `GET /services/:id/logs` page). `seq` is the per-generation monotonic
+/// cursor.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppLogEntry {
+    pub seq: u64,
+    pub ts: String,
+    /// `stdout` / `stderr`.
+    pub stream: String,
+    pub line: String,
+}
+
+/// VM-Sites app-service log batch — POSTed to `/internal/agentic-vm/app-log`
+/// (Pria `POST /app-log` → `appServiceLogs.append`). Batched by the guest
+/// (≤ `log_batch_max_entries` or `log_batch_interval_ms`); best-effort, the
+/// pull path (`GET /services/:id/logs`) remains the source of truth.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppLogPayload {
+    pub service_id: String,
+    pub generation: u64,
+    pub entries: Vec<AppLogEntry>,
 }
 
 /// Credential request payload (spec §7.4).

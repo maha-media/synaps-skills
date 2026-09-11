@@ -16,8 +16,9 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 pub use payloads::{
-    kinds, AuditEventBuilder, CredentialRequestPayload, FleetCallbackPayload, HeartbeatPayload,
-    HeartbeatVnc, SessionEventPayload, UsageEvent, UsagePayload, VncSessionEntry,
+    kinds, AppLogEntry, AppLogPayload, AppServiceEventPayload, AuditEventBuilder,
+    CredentialRequestPayload, FleetCallbackPayload, HeartbeatPayload, HeartbeatVnc,
+    SessionEventPayload, UsageEvent, UsagePayload, VncSessionEntry,
 };
 pub use signer::OutboundSigner;
 
@@ -98,6 +99,24 @@ pub trait PriaCallbackClient: Send + Sync {
         session_id: &str,
         bundle: &[u8],
     ) -> Result<GitPush, CallbackError>;
+    /// VM-Sites: report an app-service lifecycle transition (`ready` /
+    /// `exited` / `failed` / `stopped`). Signed + POSTed to
+    /// `/internal/agentic-vm/app-service` with the owning session id in the
+    /// header. Best-effort: the supervisor never blocks on it. Default no-op so
+    /// non-HTTP impls need no change.
+    async fn app_service_event(
+        &self,
+        _session_id: &str,
+        _p: &AppServiceEventPayload,
+    ) -> Result<(), CallbackError> {
+        Ok(())
+    }
+    /// VM-Sites: forward a batch of captured service log lines. Signed +
+    /// POSTed to `/internal/agentic-vm/app-log`. Best-effort; a failed batch is
+    /// dropped (the guest ring remains readable via `GET /services/:id/logs`).
+    async fn app_log(&self, _session_id: &str, _p: &AppLogPayload) -> Result<(), CallbackError> {
+        Ok(())
+    }
 }
 
 /// Endpoint paths (configurable prefix defaults to `/internal/agentic-vm`).
@@ -110,6 +129,8 @@ const FLEET_GIT_PUSH_PATH: &str = "/internal/agentic-vm/fleet-git-push";
 const USAGE_PATH: &str = "/internal/agentic-vm/usage";
 const CREDENTIAL_PATH: &str = "/internal/agentic-vm/credential-request";
 const SESSION_OUTPUT_PATH: &str = "/internal/agentic-vm/session-output";
+const APP_SERVICE_PATH: &str = "/internal/agentic-vm/app-service";
+const APP_LOG_PATH: &str = "/internal/agentic-vm/app-log";
 
 /// The fleet-git-fetch answer (F7). `Bundle` carries the base-bundle bytes on
 /// a 200 octet-stream; `Refused` carries the typed reason on a 200 JSON
@@ -308,13 +329,18 @@ impl PriaCallbackClient for HttpPriaClient {
     ) -> Result<GitFetch, CallbackError> {
         // Signed GET: the query rides the HMAC canonical string; the body is
         // EMPTY (there is nothing to POST). x-pria-session-id is the header.
-        let query = format!("handle_id={}&generation={}", query_encode(handle_id), generation);
-        let signed = self
-            .signer
-            .sign_request("GET", FLEET_GIT_FETCH_PATH, &query, b"", Some(session_id));
-        let mut req = self
-            .http
-            .get(format!("{}{}?{}", self.base_url, FLEET_GIT_FETCH_PATH, query));
+        let query = format!(
+            "handle_id={}&generation={}",
+            query_encode(handle_id),
+            generation
+        );
+        let signed =
+            self.signer
+                .sign_request("GET", FLEET_GIT_FETCH_PATH, &query, b"", Some(session_id));
+        let mut req = self.http.get(format!(
+            "{}{}?{}",
+            self.base_url, FLEET_GIT_FETCH_PATH, query
+        ));
         for (k, v) in &signed.headers {
             req = req.header(*k, v);
         }
@@ -372,12 +398,19 @@ impl PriaCallbackClient for HttpPriaClient {
             generation,
             query_encode(ref_name)
         );
-        let signed =
-            self.signer
-                .sign_request("POST", FLEET_GIT_PUSH_PATH, &query, bundle, Some(session_id));
+        let signed = self.signer.sign_request(
+            "POST",
+            FLEET_GIT_PUSH_PATH,
+            &query,
+            bundle,
+            Some(session_id),
+        );
         let mut req = self
             .http
-            .post(format!("{}{}?{}", self.base_url, FLEET_GIT_PUSH_PATH, query))
+            .post(format!(
+                "{}{}?{}",
+                self.base_url, FLEET_GIT_PUSH_PATH, query
+            ))
             .header("content-type", "application/octet-stream")
             .body(bundle.to_vec());
         for (k, v) in &signed.headers {
@@ -438,6 +471,27 @@ impl PriaCallbackClient for HttpPriaClient {
         self.post_signed(CREDENTIAL_PATH, &body, Some(&p.session_id))
             .await
     }
+
+    async fn app_service_event(
+        &self,
+        session_id: &str,
+        p: &AppServiceEventPayload,
+    ) -> Result<(), CallbackError> {
+        let body = serde_json::to_vec(p).map_err(|e| CallbackError::Network(e.to_string()))?;
+        self.post_signed(APP_SERVICE_PATH, &body, Some(session_id))
+            .await?;
+        Ok(())
+    }
+
+    async fn app_log(&self, session_id: &str, p: &AppLogPayload) -> Result<(), CallbackError> {
+        if p.entries.is_empty() {
+            return Ok(());
+        }
+        let body = serde_json::to_vec(p).map_err(|e| CallbackError::Network(e.to_string()))?;
+        self.post_signed(APP_LOG_PATH, &body, Some(session_id))
+            .await?;
+        Ok(())
+    }
 }
 
 /// Build the dynamic client used in `AppState`.
@@ -478,6 +532,12 @@ pub mod fake {
         pub fleet_git_pushes: Mutex<Vec<Value>>,
         pub fleet_git_fetch_answer: Mutex<Option<GitFetch>>,
         pub fleet_git_push_answer: Mutex<Option<GitPush>>,
+        /// VM-Sites app-service recorders: `(session_id, payload)` per call.
+        pub app_service_events: Mutex<Vec<(String, AppServiceEventPayload)>>,
+        pub app_logs: Mutex<Vec<(String, AppLogPayload)>>,
+        /// When set, `app_service_event` / `app_log` answer with this failure
+        /// (proves the supervisor never blocks on a failing callback).
+        pub app_callback_failure: Mutex<Option<u16>>,
     }
 
     #[async_trait]
@@ -502,13 +562,16 @@ pub mod fake {
             kind: &str,
             payload: Value,
         ) -> Result<(), CallbackError> {
-            self.fleet_callbacks.lock().unwrap().push(serde_json::json!({
-                "session_id": session_id,
-                "handle_id": handle_id,
-                "generation": generation,
-                "kind": kind,
-                "payload": payload,
-            }));
+            self.fleet_callbacks
+                .lock()
+                .unwrap()
+                .push(serde_json::json!({
+                    "session_id": session_id,
+                    "handle_id": handle_id,
+                    "generation": generation,
+                    "kind": kind,
+                    "payload": payload,
+                }));
             Ok(())
         }
         async fn usage(&self, p: &UsagePayload) -> Result<(), CallbackError> {
@@ -528,11 +591,14 @@ pub mod fake {
             generation: u64,
             session_id: &str,
         ) -> Result<GitFetch, CallbackError> {
-            self.fleet_git_fetches.lock().unwrap().push(serde_json::json!({
-                "handle_id": handle_id,
-                "generation": generation,
-                "session_id": session_id,
-            }));
+            self.fleet_git_fetches
+                .lock()
+                .unwrap()
+                .push(serde_json::json!({
+                    "handle_id": handle_id,
+                    "generation": generation,
+                    "session_id": session_id,
+                }));
             Ok(self
                 .fleet_git_fetch_answer
                 .lock()
@@ -548,19 +614,46 @@ pub mod fake {
             session_id: &str,
             bundle: &[u8],
         ) -> Result<GitPush, CallbackError> {
-            self.fleet_git_pushes.lock().unwrap().push(serde_json::json!({
-                "handle_id": handle_id,
-                "generation": generation,
-                "ref": ref_name,
-                "session_id": session_id,
-                "bundle_bytes": bundle.len(),
-            }));
+            self.fleet_git_pushes
+                .lock()
+                .unwrap()
+                .push(serde_json::json!({
+                    "handle_id": handle_id,
+                    "generation": generation,
+                    "ref": ref_name,
+                    "session_id": session_id,
+                    "bundle_bytes": bundle.len(),
+                }));
             Ok(self
                 .fleet_git_push_answer
                 .lock()
                 .unwrap()
                 .clone()
                 .unwrap_or(GitPush::Accepted))
+        }
+        async fn app_service_event(
+            &self,
+            session_id: &str,
+            p: &AppServiceEventPayload,
+        ) -> Result<(), CallbackError> {
+            self.app_service_events
+                .lock()
+                .unwrap()
+                .push((session_id.to_string(), p.clone()));
+            match *self.app_callback_failure.lock().unwrap() {
+                Some(status) => Err(CallbackError::Status(status)),
+                None => Ok(()),
+            }
+        }
+        async fn app_log(&self, session_id: &str, p: &AppLogPayload) -> Result<(), CallbackError> {
+            self.app_logs
+                .lock()
+                .unwrap()
+                .push((session_id.to_string(), p.clone()));
+            match *self.app_callback_failure.lock().unwrap() {
+                Some(status) => Err(CallbackError::Status(status)),
+                None => Ok(()),
+            }
         }
     }
 }

@@ -39,21 +39,37 @@ See `config.example.yaml` (spec §14). The HMAC secret is read from
 | `POST /sessions/start` · `/sessions/:id/{send,cancel,close}` · `GET /sessions/:id/status` | GA-B6 | HMAC (status: none) |
 | `POST /policy/apply` | GA-B7 | HMAC |
 | `GET /fsmon/status` · `POST /fsmon/reload` | GA-B8 | reload: HMAC |
+| `POST /services/start` · `/services/:id/stop` · `GET /services/:id/{status,logs}` · `POST /artifacts/seal` | VM-Sites | HMAC (GETs sign an empty body) |
 
-Callbacks to Pria (`/internal/agentic-vm/{heartbeat,audit,session-event,credential-request}`)
+Callbacks to Pria (`/internal/agentic-vm/{heartbeat,audit,session-event,credential-request,app-service,app-log}`)
 are all signed (GA-B4).
+
+## App services (VM-Sites)
+
+`/services/*` runs managed dev/release processes for a project workspace:
+allowlisted executable (`app_services.command_allowlist`), allowlisted env
+(`PATH HOME NODE_ENV PORT HOST REVISION_BASE CI VITE_*`), `workdir` jailed
+under `app_services.workspace_root` (default `paths.efs_root`, symlink-safe),
+own process group (`setsid`, SIGTERM→SIGKILL on stop), a persisted loopback
+port from `app_services.port_range_*` injected as `PORT`/`HOST` (and the
+`${PORT}`/`${HOST}` argv tokens), HTTP readiness probe, bounded stdout/stderr
+ring with cursor pagination, generation-fenced stop, and `app-service` /
+`app-log` callbacks. `/artifacts/seal` hashes a build output dir into a sorted
+`{path,size,sha256}` manifest. Full contract, states, error codes and config
+keys: `docs/app-services.md`.
 
 ## Layout
 
 ```
 src/
   config.rs error.rs ids.rs paths.rs runtime.rs versions.rs
-  hmac.rs                     # SignedJson extractor + nonce replay cache (GA-B2)
-  api/{mod,health,principals,sessions,policy,fsmon}.rs
+  hmac.rs                     # SignedJson/SignedGet extractors + nonce replay cache (GA-B2)
+  api/{mod,health,principals,sessions,policy,fsmon,desktop,usage,services}.rs
+  services/{mod,ports,logs,seal,validate}.rs  # app-service supervisor (VM-Sites)
   pria_client/{mod,payloads,signer}.rs   # signed callbacks + spool (GA-B4)
   os/{mod,users}.rs           # abstract principal layer (GA-B5)
   synaps/{launcher,session_context}.rs   # drop-priv launch + context file (GA-B6)
   fsmon/{client,compile,types,relay}.rs  # control + policy + audit relay (GA-B7/B8)
   supervisor/mod.rs           # guest-emitted heartbeat loop (HS-3)
-docs/{contract.md,integration.md}
+docs/{contract.md,integration.md,app-services.md}
 ```

@@ -33,8 +33,14 @@ BODY_SHA256_HEX
 
 - `METHOD` — upper-case HTTP method (`GET`, `POST`, …).
 - `PATH` — the request path, no query (e.g. `/guest/v1/health`).
-- `QUERY_STRING_CANONICAL` — query params sorted by key, `k=v` joined by `&`,
-  empty string when there is no query.
+- `QUERY_STRING_CANONICAL` — the raw wire query without the leading `?`,
+  split on `&`, each pair split at the first `=`, STABLE-sorted by key only
+  (byte order; a repeated key keeps request order), rejoined `k=v` with `&`
+  (a bare key is `k=`); no percent-decoding; empty string when there is no
+  query. Byte-identical to Pria `agenticVmHmac.js` `canonicalQuery`
+  (`guest-agent-hmac.md` §2); the signed-GET vector in `src/hmac.rs`
+  (`signed_get_cross_language_vector`) is mirrored by Pria
+  `test/contracts/guestAgentHmac.signedGet.contract.test.js`.
 - `TIMESTAMP_MS` — milliseconds since epoch, decimal string.
 - `NONCE` — the `X-Pria-Nonce` value (base64url random).
 - `ACCOUNT_ID`, `VM_ID` — the bound identifiers.

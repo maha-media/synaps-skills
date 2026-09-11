@@ -73,12 +73,15 @@ fn test_state() -> AppState {
         fleet.clone(),
         sessions.clone(),
     ));
+    let pria: Arc<dyn pria_guest_agent::pria_client::PriaCallbackClient> =
+        Arc::new(pria_guest_agent::pria_client::fake::FakePriaClient::default());
+    let services = pria_guest_agent::test_support::fake_service_store(&cfg, pria.clone());
     AppState {
         config: Arc::new(cfg),
         hmac: Arc::new(hmac),
         runtime,
         versions: Arc::new(versions),
-        pria: Arc::new(pria_guest_agent::pria_client::fake::FakePriaClient::default()),
+        pria,
         os: Arc::new(pria_guest_agent::os::FakeUserManager::default()),
         synaps: Arc::new(pria_guest_agent::synaps::launcher::FakeLauncher::default()),
         sessions,
@@ -86,6 +89,7 @@ fn test_state() -> AppState {
         desktops: pria_guest_agent::test_support::fake_desktop_store(),
         fleet,
         gate,
+        services,
     }
 }
 

@@ -49,6 +49,11 @@ pub fn build_heartbeat(state: &AppState) -> HeartbeatPayload {
     };
 
     HeartbeatPayload {
+        skill_pack: crate::services::skill_pack::verify(
+            state.config.app_services.skill_pack_root.as_deref(),
+        )
+        .ok()
+        .map(|p| p.identity),
         account_id: cfg.account_id.to_string(),
         vm_id: cfg.vm_id.to_string(),
         replica_id: cfg.replica_id.clone(),
@@ -81,6 +86,13 @@ pub fn spawn_heartbeat_loop(state: AppState) -> tokio::task::JoinHandle<()> {
         let mut ticker = tokio::time::interval(Duration::from_secs(interval));
         loop {
             ticker.tick().await;
+            let retained = state.services.clone();
+            if let Ok(Err(_)) =
+                tokio::task::spawn_blocking(move || retained.retained.collect_expired_candidates())
+                    .await
+            {
+                tracing::warn!("retained candidate collection deferred");
+            }
             let payload = build_heartbeat(&state);
             if let Err(e) = state.pria.heartbeat(&payload).await {
                 tracing::warn!(error = %e, "heartbeat callback failed");
@@ -185,6 +197,7 @@ mod tests {
     fn heartbeat_serialises_vnc_field() {
         use crate::pria_client::payloads::{HeartbeatVnc, VncSessionEntry};
         let hb = HeartbeatPayload {
+            skill_pack: None,
             account_id: "acct_1".into(),
             vm_id: "vm_1".into(),
             replica_id: "r0".into(),
@@ -229,6 +242,7 @@ mod tests {
     fn heartbeat_serialises_no_vnc_field_when_none() {
         use crate::pria_client::payloads::HeartbeatPayload;
         let hb = HeartbeatPayload {
+            skill_pack: None,
             account_id: "a".into(),
             vm_id: "v".into(),
             replica_id: "r".into(),

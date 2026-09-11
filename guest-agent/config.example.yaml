@@ -27,3 +27,28 @@ heartbeat:
 security:
   max_timestamp_skew_seconds: 300
   nonce_cache_seconds: 300
+# VM-Sites app-service supervisor (/guest/v1/services/*, /guest/v1/artifacts/seal).
+# Every key is optional; the values below are the defaults (docs/app-services.md).
+app_services:
+  # Supported source builds fail closed unless ALL trusted resources are configured.
+  # Provision offline by OS owner, never from model request or this installer.
+  # skill_pack_root: /opt/pria/app-builder       # verified pack.json + actual payload
+  # source_build_dependencies: /opt/pria/bundles/LOCK_SHA/node_modules
+  # Above directory requires sibling bundle.json (docs/app-services.md).
+  # source_build_cgroup_root: /sys/fs/cgroup/pria-builds # predelegated cpu,memory,pids
+  # retained_root: /var/lib/pria-guest-agent/app-artifacts # private owner, flock fenced
+  port_range_start: 43000          # loopback ports handed to services (PORT/HOST=127.0.0.1)
+  port_range_end: 43999
+  command_allowlist: [npm, pnpm, yarn, node, npx, python3, vite, serve]
+  # workspace_root: /efs/accounts/acct_local_123   # default: paths.efs_root
+  stop_grace_ms: 5000              # SIGTERM -> SIGKILL escalation window
+  start_wait_ms: 1500              # inline readiness wait before answering `starting`
+  max_readiness_timeout_ms: 120000 # ceiling for readiness.timeoutMs
+  max_runtime_sec: 21600           # ceiling/default for limits.maxRuntimeSec
+  max_services: 16                 # concurrent non-terminal services
+  log_ring_max_bytes: 1048576      # per-service log ring caps (limits.maxLogBytes <= this)
+  log_ring_max_entries: 5000
+  log_batch_max_entries: 200       # app-log callback batching
+  log_batch_interval_ms: 1000
+  seal_max_files: 4096             # /artifacts/seal ceilings
+  seal_max_bytes: 67108864

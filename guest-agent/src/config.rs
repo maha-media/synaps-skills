@@ -137,6 +137,165 @@ impl Default for SecurityConfig {
     }
 }
 
+fn default_app_port_range_start() -> u16 {
+    43000
+}
+
+fn default_app_port_range_end() -> u16 {
+    43999
+}
+
+/// Default executable allowlist for `/services/start` `command[0]`.
+pub fn default_app_command_allowlist() -> Vec<String> {
+    [
+        "npm", "pnpm", "yarn", "node", "npx", "python3", "vite", "serve",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
+fn default_app_stop_grace_ms() -> u64 {
+    5000
+}
+
+fn default_app_start_wait_ms() -> u64 {
+    1500
+}
+
+fn default_app_max_readiness_timeout_ms() -> u64 {
+    120_000
+}
+
+fn default_app_max_runtime_sec() -> u64 {
+    21_600
+}
+
+fn default_app_max_services() -> usize {
+    16
+}
+
+fn default_app_log_ring_max_bytes() -> usize {
+    1024 * 1024
+}
+
+fn default_app_log_ring_max_entries() -> usize {
+    5000
+}
+
+fn default_app_log_batch_max_entries() -> usize {
+    200
+}
+
+fn default_app_log_batch_interval_ms() -> u64 {
+    1000
+}
+
+fn default_app_seal_max_files() -> usize {
+    4096
+}
+
+fn default_app_seal_max_bytes() -> u64 {
+    64 * 1024 * 1024
+}
+
+/// App-service supervisor config (VM-Sites: managed dev/release processes,
+/// `/guest/v1/services/*` + `/guest/v1/artifacts/seal`). Every value has a
+/// bounded default so an omitted block is safe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppServicesConfig {
+    /// Trusted installed plugin payload, production root-owned and not group writable.
+    #[serde(default)]
+    pub skill_pack_root: Option<PathBuf>,
+    /// Trusted prepared dependencies; never selected by the request.
+    #[serde(default)]
+    pub source_build_dependencies: Option<PathBuf>,
+    /// Predelegated cgroup v2 parent; never modifies its controller policy.
+    #[serde(default)]
+    pub source_build_cgroup_root: Option<PathBuf>,
+
+    /// Trusted OS-owner storage, outside disposable sessions and /run.
+    #[serde(default = "default_retained_root")]
+    pub retained_root: PathBuf,
+    /// First port (inclusive) of the private loopback range handed to services.
+    #[serde(default = "default_app_port_range_start")]
+    pub port_range_start: u16,
+    /// Last port (inclusive) of the range.
+    #[serde(default = "default_app_port_range_end")]
+    pub port_range_end: u16,
+    /// Bare executable names accepted as `command[0]` (never shell-interpreted).
+    #[serde(default = "default_app_command_allowlist")]
+    pub command_allowlist: Vec<String>,
+    /// Root every `workdir` must resolve under (symlinks resolved). Defaults to
+    /// `paths.efs_root` when omitted.
+    #[serde(default)]
+    pub workspace_root: Option<PathBuf>,
+    /// SIGTERM → SIGKILL escalation window for stop/readiness-failure kills.
+    #[serde(default = "default_app_stop_grace_ms")]
+    pub stop_grace_ms: u64,
+    /// How long `/services/start` waits for a readiness verdict before
+    /// answering `starting` (keeps the caller under its own request timeout).
+    #[serde(default = "default_app_start_wait_ms")]
+    pub start_wait_ms: u64,
+    /// Ceiling for the request's `readiness.timeoutMs`.
+    #[serde(default = "default_app_max_readiness_timeout_ms")]
+    pub max_readiness_timeout_ms: u64,
+    /// Ceiling (and default) for the request's `limits.maxRuntimeSec`.
+    #[serde(default = "default_app_max_runtime_sec")]
+    pub max_runtime_sec: u64,
+    /// Maximum number of concurrently live (non-terminal) services.
+    #[serde(default = "default_app_max_services")]
+    pub max_services: usize,
+    /// Per-service log ring byte cap (ceiling for `limits.maxLogBytes`).
+    #[serde(default = "default_app_log_ring_max_bytes")]
+    pub log_ring_max_bytes: usize,
+    /// Per-service log ring entry cap.
+    #[serde(default = "default_app_log_ring_max_entries")]
+    pub log_ring_max_entries: usize,
+    /// `app-log` callback batching: flush at this many entries…
+    #[serde(default = "default_app_log_batch_max_entries")]
+    pub log_batch_max_entries: usize,
+    /// …or after this many milliseconds since the first buffered entry.
+    #[serde(default = "default_app_log_batch_interval_ms")]
+    pub log_batch_interval_ms: u64,
+    /// Ceiling for `/artifacts/seal` `maxFiles`.
+    #[serde(default = "default_app_seal_max_files")]
+    pub seal_max_files: usize,
+    /// Ceiling for `/artifacts/seal` `maxBytes`.
+    #[serde(default = "default_app_seal_max_bytes")]
+    pub seal_max_bytes: u64,
+}
+
+fn default_retained_root() -> PathBuf {
+    PathBuf::from("/var/lib/pria-guest-agent/retained-artifacts")
+}
+
+impl Default for AppServicesConfig {
+    fn default() -> Self {
+        Self {
+            skill_pack_root: None,
+            source_build_dependencies: None,
+            source_build_cgroup_root: None,
+            retained_root: default_retained_root(),
+            port_range_start: default_app_port_range_start(),
+            port_range_end: default_app_port_range_end(),
+            command_allowlist: default_app_command_allowlist(),
+            workspace_root: None,
+            stop_grace_ms: default_app_stop_grace_ms(),
+            start_wait_ms: default_app_start_wait_ms(),
+            max_readiness_timeout_ms: default_app_max_readiness_timeout_ms(),
+            max_runtime_sec: default_app_max_runtime_sec(),
+            max_services: default_app_max_services(),
+            log_ring_max_bytes: default_app_log_ring_max_bytes(),
+            log_ring_max_entries: default_app_log_ring_max_entries(),
+            log_batch_max_entries: default_app_log_batch_max_entries(),
+            log_batch_interval_ms: default_app_log_batch_interval_ms(),
+            seal_max_files: default_app_seal_max_files(),
+            seal_max_bytes: default_app_seal_max_bytes(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub mode: String,
@@ -157,6 +316,9 @@ pub struct Config {
     pub fleet: FleetConfig,
     #[serde(default)]
     pub security: SecurityConfig,
+    /// App-service supervisor (VM-Sites). Omitted block → bounded defaults.
+    #[serde(default)]
+    pub app_services: AppServicesConfig,
 }
 
 impl Config {
@@ -265,5 +427,48 @@ fsmon:
         assert_eq!(cfg.listen.port, 47831);
         assert_eq!(cfg.heartbeat.interval_seconds, 15);
         assert_eq!(cfg.security.nonce_cache_seconds, 300);
+        // app_services block omitted → bounded defaults.
+        assert_eq!(cfg.app_services.port_range_start, 43000);
+        assert_eq!(cfg.app_services.port_range_end, 43999);
+        assert!(cfg
+            .app_services
+            .command_allowlist
+            .iter()
+            .any(|c| c == "vite"));
+        assert!(cfg.app_services.workspace_root.is_none());
+        assert_eq!(cfg.app_services.stop_grace_ms, 5000);
+        assert_eq!(cfg.app_services.max_services, 16);
+    }
+
+    #[test]
+    fn example_config_parses_with_app_services_defaults() {
+        let raw = include_str!("../config.example.yaml");
+        let cfg = Config::from_yaml(raw).unwrap();
+        assert_eq!(cfg.app_services, AppServicesConfig::default());
+    }
+
+    #[test]
+    fn app_services_block_overrides_defaults() {
+        let yaml = format!(
+            "{SAMPLE}
+app_services:
+  port_range_start: 50000
+  port_range_end: 50010
+  command_allowlist: [node, sleep]
+  workspace_root: /efs/ws
+  stop_grace_ms: 250
+"
+        );
+        let cfg = Config::from_yaml(&yaml).unwrap();
+        assert_eq!(cfg.app_services.port_range_start, 50000);
+        assert_eq!(cfg.app_services.port_range_end, 50010);
+        assert_eq!(cfg.app_services.command_allowlist, vec!["node", "sleep"]);
+        assert_eq!(
+            cfg.app_services.workspace_root.as_deref(),
+            Some(Path::new("/efs/ws"))
+        );
+        assert_eq!(cfg.app_services.stop_grace_ms, 250);
+        // Untouched keys keep their defaults.
+        assert_eq!(cfg.app_services.max_readiness_timeout_ms, 120_000);
     }
 }

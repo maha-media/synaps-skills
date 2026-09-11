@@ -41,7 +41,7 @@ echo "[pria]   sbin  pria-kasm-setpw"
 PLUGIN_SOURCE="${PRIA_EXTENSION_BUNDLE_DIR:-/tmp/pria-extension-bundles}"
 PLUGIN_DEST="${DESTDIR}/opt/synaps/plugins"
 if [ "${PRIA_SKIP_EXTENSION_BUNDLES:-0}" != "1" ]; then
-for plugin in pria-tools-plugin pria-vault-medic-plugin; do
+for plugin in pria-tools-plugin pria-vault-medic-plugin pria-app-builder-plugin; do
   src="${PLUGIN_SOURCE}/${plugin}"
   dest_name="${plugin%-plugin}"
   manifest="${src}/.synaps-plugin/plugin.json"

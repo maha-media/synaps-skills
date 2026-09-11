@@ -37,6 +37,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
+# Already locked transitive HTTP dependencies; raw upgrade avoids downloading
+# the unavailable tungstenite version required by axum 0.8.9's ws feature.
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 
@@ -48,3 +53,7 @@ http-body-util = "0.1"
 opt-level = 3
 lto = "thin"
 strip = true
+
+[[example]]
+name = "vm_sites_fixture"
+required-features = ["test-fakes"]

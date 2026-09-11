@@ -167,6 +167,7 @@ fsmon:
         sessions.clone(),
     ));
 
+    let services = pria_guest_agent::test_support::fake_service_store(&config, pria.clone());
     let state = AppState {
         config: Arc::new(config),
         hmac: Arc::new(HmacVerifier::new(SECRET.to_vec(), ACCOUNT, VM, 300, 300)),
@@ -180,6 +181,7 @@ fsmon:
         desktops: pria_guest_agent::test_support::fake_desktop_store(),
         fleet,
         gate,
+        services,
     };
 
     let app = build_router(state);

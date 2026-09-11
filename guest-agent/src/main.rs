@@ -42,7 +42,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.vm_id.to_string(),
         config.security.max_timestamp_skew_seconds,
         config.security.nonce_cache_seconds,
-    );
+    )
+    .with_key_id(config.pria.hmac_key_id.clone());
     let pria = pria_guest_agent::pria_client::http_client(&config, secret);
     let os: std::sync::Arc<dyn pria_guest_agent::os::OsUserManager> =
         std::sync::Arc::new(pria_guest_agent::os::users::LinuxUserManager::new());
@@ -126,6 +127,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         fleet.clone(),
         sessions.clone(),
     ));
+    // VM-Sites app-service supervisor: persisted port state under run_root,
+    // signed app-service/app-log callbacks through the same Pria client.
+    let services = Arc::new(pria_guest_agent::services::ServiceStore::new(
+        &config.paths.run_root,
+        config.app_services.clone(),
+        pria.clone(),
+    ));
     let state = AppState {
         config: Arc::new(config),
         hmac: Arc::new(hmac),
@@ -139,6 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         desktops,
         fleet,
         gate,
+        services,
     };
 
     let _heartbeat = pria_guest_agent::supervisor::spawn_heartbeat_loop(state.clone());
@@ -150,6 +159,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let restored = state.desktops.rehydrate().await;
     if restored > 0 {
         tracing::info!(restored, "rehydrated desktop sessions on startup");
+    }
+    // Reconcile persisted app-service port ownership: slots whose process is
+    // gone are released; live orphans keep their port until superseded.
+    let (released, live) = state.services.rehydrate();
+    if released > 0 || live > 0 {
+        tracing::info!(released, live, "rehydrated app-service port state");
     }
 
     // Spawn the fsmon audit-forward relay if a forward socket is configured.

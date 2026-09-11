@@ -13,6 +13,7 @@ use crate::hmac::HmacVerifier;
 use crate::os::OsUserManager;
 use crate::pria_client::PriaCallbackClient;
 use crate::runtime::RuntimeState;
+use crate::services::ServiceStore;
 use crate::sessions::SessionStore;
 use crate::synaps::launcher::SynapsLauncher;
 use crate::turn_gate::TurnGate;
@@ -23,6 +24,8 @@ pub mod fsmon;
 pub mod health;
 pub mod policy;
 pub mod principals;
+pub mod service_proxy;
+pub mod services;
 pub mod sessions;
 pub mod usage;
 
@@ -46,6 +49,8 @@ pub struct AppState {
     /// Per-session turn gate (F6.2): busy/pending state so a prompt is never
     /// written to the SynapsCLI stdin mid-turn (the CLI silently drops it).
     pub gate: Arc<TurnGate>,
+    /// VM-Sites app-service supervisor (`/services/*`, `/artifacts/seal`).
+    pub services: Arc<ServiceStore>,
 }
 
 /// Build the axum router for the configured route prefix.
@@ -54,6 +59,10 @@ pub fn build_router(state: AppState) -> Router {
     let prefix = state.config.route_prefix.clone();
     Router::new()
         .route(&format!("{prefix}/health"), get(health::health))
+        .route(
+            &format!("{prefix}/app-builder/attestation"),
+            get(health::skill_pack),
+        )
         .route(
             &format!("{prefix}/principals/reconcile"),
             post(principals::reconcile),
@@ -98,5 +107,39 @@ pub fn build_router(state: AppState) -> Router {
             post(desktop::stop_desktop),
         )
         .route(&format!("{prefix}/desktops"), get(desktop::list_desktops))
+        // VM-Sites app services (managed dev/release processes) + artifact seal
+        .route(&format!("{prefix}/services/start"), post(services::start))
+        .route(
+            &format!("{prefix}/services/{{service_id}}/adopt"),
+            post(services::adopt),
+        )
+        .route(
+            &format!("{prefix}/services/{{service_id}}/proxy/{{generation}}"),
+            get(service_proxy::proxy),
+        )
+        .route(
+            &format!("{prefix}/services/{{service_id}}/proxy/{{generation}}/"),
+            get(service_proxy::proxy),
+        )
+        .route(
+            &format!("{prefix}/services/{{service_id}}/proxy/{{generation}}/{{*path}}"),
+            get(service_proxy::proxy),
+        )
+        .route(
+            &format!("{prefix}/services/{{service_id}}/stop"),
+            post(services::stop),
+        )
+        .route(
+            &format!("{prefix}/services/{{service_id}}/status"),
+            get(services::status),
+        )
+        .route(
+            &format!("{prefix}/services/{{service_id}}/logs"),
+            get(services::logs),
+        )
+        .route(
+            &format!("{prefix}/artifacts/seal"),
+            post(services::seal_artifact),
+        )
         .with_state(state)
 }

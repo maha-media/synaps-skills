@@ -32,19 +32,33 @@ pub fn body_sha256_hex(body: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Canonicalise a raw query string: split into `k=v` pairs, sort by key, rejoin
-/// with `&`. Empty input yields an empty string.
+/// Canonicalise a raw query string (contract `guest-agent-hmac.md` §2, the
+/// byte-for-byte peer of `agenticVmHmac.js` `canonicalQuery`): drop a leading
+/// `?`, split on `&` (empty segments skipped), split each segment at the FIRST
+/// `=` into key/value, STABLE-sort by key only (byte order) so values of a
+/// repeated key keep request order, and rejoin as `k=v` with `&` — a bare key
+/// is emitted as `k=`. Empty input yields an empty string. No percent
+/// decoding: the on-the-wire bytes are what both peers sign.
 pub fn canonical_query(raw: &str) -> String {
+    let raw = raw.strip_prefix('?').unwrap_or(raw);
     if raw.is_empty() {
         return String::new();
     }
-    let mut pairs: Vec<&str> = raw.split('&').filter(|s| !s.is_empty()).collect();
-    pairs.sort_by(|a, b| {
-        let ka = a.split('=').next().unwrap_or(a);
-        let kb = b.split('=').next().unwrap_or(b);
-        ka.cmp(kb).then_with(|| a.cmp(b))
-    });
-    pairs.join("&")
+    let mut pairs: Vec<(&str, &str)> = raw
+        .split('&')
+        .filter(|s| !s.is_empty())
+        .map(|seg| match seg.find('=') {
+            Some(i) => (&seg[..i], &seg[i + 1..]),
+            None => (seg, ""),
+        })
+        .collect();
+    // `sort_by` is stable: equal keys keep their request order.
+    pairs.sort_by(|a, b| a.0.cmp(b.0));
+    pairs
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 /// The fields covered by the signature.
@@ -145,6 +159,7 @@ pub struct VerifiedPrincipal {
 /// Holds the secret + expected binding + nonce cache. Shared via `AppState`.
 pub struct HmacVerifier {
     secret: Vec<u8>,
+    expected_key_id: Option<String>,
     account_id: String,
     vm_id: String,
     max_skew_seconds: u64,
@@ -154,6 +169,28 @@ pub struct HmacVerifier {
 }
 
 impl HmacVerifier {
+    pub fn with_key_id(mut self, key_id: impl Into<String>) -> Self {
+        self.expected_key_id = Some(key_id.into());
+        self
+    }
+    /// Proof over exactly the bytes delivered (HEAD and WS101 use empty body).
+    pub fn service_proof(
+        &self,
+        nonce: &str,
+        id: &str,
+        generation: u64,
+        status: u16,
+        body: &[u8],
+    ) -> String {
+        let message = format!(
+            "VM-SITES/1\n{nonce}\n{id}\n{generation}\n{status}\n{}",
+            hex::encode(Sha256::digest(body))
+        );
+        let mut mac = HmacSha256::new_from_slice(&self.secret).expect("HMAC key");
+        mac.update(message.as_bytes());
+        hex::encode(mac.finalize().into_bytes())
+    }
+
     pub fn new(
         secret: Vec<u8>,
         account_id: impl Into<String>,
@@ -163,6 +200,7 @@ impl HmacVerifier {
     ) -> Self {
         Self {
             secret,
+            expected_key_id: None,
             account_id: account_id.into(),
             vm_id: vm_id.into(),
             max_skew_seconds,
@@ -213,6 +251,14 @@ impl HmacVerifier {
         let session_id = header(headers, "x-pria-session-id");
         let key_id = header(headers, "x-pria-key-id");
 
+        if let Some(expected) = &self.expected_key_id {
+            if key_id.as_ref() != Some(expected) {
+                return Err(GuestAgentError::new(
+                    ErrorCode::UnauthorizedHmacInvalid,
+                    "unknown HMAC key id",
+                ));
+            }
+        }
         // 1. Body hash must match.
         let actual_body_hash = body_sha256_hex(body);
         if !bool::from(actual_body_hash.as_bytes().ct_eq(body_hash.as_bytes())) {
@@ -339,6 +385,45 @@ where
     }
 }
 
+/// An axum extractor for body-less signed requests (`GET`): verifies the same
+/// spec §5 canonical string (method, path, canonical query, empty-body hash)
+/// and exposes the verified principal. Used by the VM-Sites app-service
+/// read routes (`/services/:id/{status,logs}`), whose payloads (ports, logs)
+/// must not be readable by an unauthenticated in-VM peer.
+pub struct SignedGet {
+    pub principal: VerifiedPrincipal,
+}
+
+impl<S> FromRequest<S> for SignedGet
+where
+    S: Send + Sync,
+    crate::api::AppState: axum::extract::FromRef<S>,
+{
+    type Rejection = GuestAgentError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        use axum::extract::FromRef;
+        let app_state = crate::api::AppState::from_ref(state);
+
+        let method = req.method().as_str().to_string();
+        let path = req.uri().path().to_string();
+        let query = req.uri().query().unwrap_or("").to_string();
+        let headers = req.headers().clone();
+
+        // A GET carries no body; whatever arrived is still hashed so a smuggled
+        // body cannot pass under an empty-body signature.
+        let body = Bytes::from_request(req, state)
+            .await
+            .map_err(|_| GuestAgentError::invalid_request("failed to read request body"))?;
+
+        let principal = app_state
+            .hmac
+            .verify(&method, &path, &query, &headers, &body)?;
+
+        Ok(SignedGet { principal })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,8 +431,55 @@ mod tests {
     #[test]
     fn canonical_query_sorts_pairs() {
         assert_eq!(canonical_query(""), "");
+        assert_eq!(canonical_query("?"), "");
         assert_eq!(canonical_query("b=2&a=1"), "a=1&b=2");
-        assert_eq!(canonical_query("z=1&z=0"), "z=0&z=1");
+        // Contract §2: sort by key only; within a key values keep REQUEST order
+        // (Node's stable sort), a bare key is `k=`, empty segments and a
+        // leading `?` are dropped, values are not decoded or re-split.
+        assert_eq!(canonical_query("z=1&z=0"), "z=1&z=0");
+        assert_eq!(canonical_query("b&a=1"), "a=1&b=");
+        assert_eq!(canonical_query("?b=2&a=1&&"), "a=1&b=2");
+        assert_eq!(canonical_query("a=x%3Dy&a==z"), "a=x%3Dy&a==z");
+    }
+
+    /// Cross-language vector for the VM-Sites signed GET
+    /// (`GET /guest/v1/services/:id/logs?cursor&limit`): the Node peer
+    /// (`test/contracts/guestAgentHmac.signedGet.contract.test.js`) produces
+    /// the SAME signature from the same fixed inputs. The wire query is
+    /// deliberately unsorted (`limit` before `cursor`) so the sort matters;
+    /// the body is empty (its hash is the well-known empty SHA-256).
+    #[test]
+    fn signed_get_cross_language_vector() {
+        let empty_hash = body_sha256_hex(b"");
+        assert_eq!(
+            empty_hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        let canonical = build_canonical_string(&CanonicalParts {
+            method: "get",
+            path: "/guest/v1/services/svc_0123456789abcdef01234567/logs",
+            query: "limit=200&cursor=eyJnIjoxLCJzIjo0Mn0",
+            timestamp_ms: "1790000000000",
+            nonce: "vm-sites-nonce-1",
+            account_id: "acct_local_123",
+            vm_id: "vm_local_456",
+            session_id: "sess_abc",
+            body_sha256_hex: &empty_hash,
+        });
+        assert_eq!(
+            canonical,
+            "GET\n/guest/v1/services/svc_0123456789abcdef01234567/logs\ncursor=eyJnIjoxLCJzIjo0Mn0&limit=200\n1790000000000\nvm-sites-nonce-1\nacct_local_123\nvm_local_456\nsess_abc\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        let sig = sign(b"vm-sites-logs-secret-0001", &canonical);
+        assert_eq!(
+            sig,
+            "002d339eb0275094bfc3604507decd189c257d9d3c001fab8986b2929f0136e3"
+        );
+        assert!(verify_signature(
+            b"vm-sites-logs-secret-0001",
+            &canonical,
+            &sig
+        ));
     }
 
     #[test]

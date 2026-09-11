@@ -32,6 +32,22 @@ pub enum ErrorCode {
     SynapsLaunchFailed,
     FsmonUnavailable,
     PolicyApplyFailed,
+    /// VM-Sites app services (`/services/*`): unknown `serviceId`.
+    ServiceNotFound,
+    /// A `stop` carried a `generation` that is not the live one (fenced;
+    /// the caller holds a stale record and must re-read status first).
+    ServiceGenerationStale,
+    /// The service is mid-transition (e.g. `stopping`) and cannot accept the
+    /// requested operation yet — retry after the transition settles.
+    ServiceBusy,
+    /// The configured concurrent-service cap is reached.
+    ServiceLimitExceeded,
+    /// The child process could not be spawned (executable missing, exec
+    /// refused, privilege drop failed…).
+    ServiceStartFailed,
+    /// `/artifacts/seal`: the output tree exceeds the requested/configured
+    /// file-count or byte bounds.
+    ArtifactBoundsExceeded,
     InternalError,
 }
 
@@ -52,6 +68,12 @@ impl ErrorCode {
             ErrorCode::SynapsLaunchFailed => "synaps_launch_failed",
             ErrorCode::FsmonUnavailable => "fsmon_unavailable",
             ErrorCode::PolicyApplyFailed => "policy_apply_failed",
+            ErrorCode::ServiceNotFound => "service_not_found",
+            ErrorCode::ServiceGenerationStale => "service_generation_stale",
+            ErrorCode::ServiceBusy => "service_busy",
+            ErrorCode::ServiceLimitExceeded => "service_limit_exceeded",
+            ErrorCode::ServiceStartFailed => "service_start_failed",
+            ErrorCode::ArtifactBoundsExceeded => "artifact_bounds_exceeded",
             ErrorCode::InternalError => "internal_error",
         }
     }
@@ -65,11 +87,19 @@ impl ErrorCode {
                 StatusCode::FORBIDDEN
             }
             ErrorCode::InvalidRequest | ErrorCode::InvalidPolicy => StatusCode::BAD_REQUEST,
-            ErrorCode::PrincipalNotFound | ErrorCode::SessionNotFound => StatusCode::NOT_FOUND,
-            ErrorCode::SessionAlreadyRunning | ErrorCode::BindingConflict => StatusCode::CONFLICT,
+            ErrorCode::PrincipalNotFound
+            | ErrorCode::SessionNotFound
+            | ErrorCode::ServiceNotFound => StatusCode::NOT_FOUND,
+            ErrorCode::SessionAlreadyRunning
+            | ErrorCode::BindingConflict
+            | ErrorCode::ServiceGenerationStale
+            | ErrorCode::ServiceBusy => StatusCode::CONFLICT,
+            ErrorCode::ServiceLimitExceeded => StatusCode::TOO_MANY_REQUESTS,
+            ErrorCode::ArtifactBoundsExceeded => StatusCode::PAYLOAD_TOO_LARGE,
             ErrorCode::FsmonUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             ErrorCode::SynapsLaunchFailed
             | ErrorCode::PolicyApplyFailed
+            | ErrorCode::ServiceStartFailed
             | ErrorCode::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -78,10 +108,15 @@ impl ErrorCode {
     /// `BindingConflict` is retryable BY DESIGN: the dispatch leg fails
     /// closed, the job row stays queued server-side, and the same directive
     /// may succeed once the live binding clears (result or teardown).
+    /// `ServiceBusy` is retryable for the same reason: the transition it
+    /// collided with (a stop draining) settles on its own.
     pub fn retryable(self) -> bool {
         matches!(
             self,
-            ErrorCode::FsmonUnavailable | ErrorCode::InternalError | ErrorCode::BindingConflict
+            ErrorCode::FsmonUnavailable
+                | ErrorCode::InternalError
+                | ErrorCode::BindingConflict
+                | ErrorCode::ServiceBusy
         )
     }
 }
@@ -174,5 +209,33 @@ mod tests {
     fn fsmon_unavailable_is_retryable() {
         assert!(ErrorCode::FsmonUnavailable.retryable());
         assert!(!ErrorCode::InvalidPolicy.retryable());
+    }
+
+    #[test]
+    fn service_codes_map_to_expected_status() {
+        assert_eq!(ErrorCode::ServiceNotFound.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            ErrorCode::ServiceGenerationStale.status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(ErrorCode::ServiceBusy.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            ErrorCode::ServiceLimitExceeded.status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(
+            ErrorCode::ArtifactBoundsExceeded.status(),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+        assert_eq!(
+            ErrorCode::ServiceStartFailed.status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert!(ErrorCode::ServiceBusy.retryable());
+        assert!(!ErrorCode::ServiceGenerationStale.retryable());
+        assert_eq!(
+            ErrorCode::ServiceGenerationStale.as_str(),
+            "service_generation_stale"
+        );
     }
 }

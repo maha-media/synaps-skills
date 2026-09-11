@@ -14,6 +14,12 @@ pub struct SessionEntry {
     pub instance_id: String,
     pub user_id: String,
     pub uid: u32,
+    /// Primary gid + the resolved supplementary group list the Synaps child was
+    /// dropped to. Reused by the app-service supervisor so a dev/release
+    /// process runs under the SAME workload identity as its session (never
+    /// the agent's root identity).
+    pub gid: u32,
+    pub groups: Vec<u32>,
     pub pid: u32,
     pub started_at: String,
     pub context_path: String,
@@ -91,6 +97,17 @@ impl SessionStore {
             .unwrap()
             .get(session_id)
             .map(|e| (e.workspace_dir.clone(), e.uid))
+    }
+
+    /// VM-Sites: the full Linux identity `(uid, gid, groups)` a session's
+    /// child processes were dropped to, so an app service started for that
+    /// session runs under the identical workload identity.
+    pub fn identity(&self, session_id: &str) -> Option<(u32, u32, Vec<u32>)> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .map(|e| (e.uid, e.gid, e.groups.clone()))
     }
 
     /// Snapshot of status info for `status` endpoint.
@@ -173,6 +190,8 @@ mod tests {
             instance_id: "inst_1".to_string(),
             user_id: "user_1".to_string(),
             uid: 1001,
+            gid: 1001,
+            groups: vec![1001],
             pid: 99999,
             started_at: "2026-01-01T00:00:00Z".to_string(),
             context_path: "/tmp/ctx.json".to_string(),
@@ -291,6 +310,8 @@ mod tests {
             instance_id: "inst_test".to_string(),
             user_id: "user_test".to_string(),
             uid,
+            gid: uid,
+            groups: vec![uid],
             pid: 1000,
             started_at: "2026-01-01T00:00:00Z".to_string(),
             context_path: "/tmp/ctx.json".to_string(),

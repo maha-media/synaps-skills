@@ -11,6 +11,7 @@ use crate::hmac::HmacVerifier;
 use crate::os::{FakeUserManager, OsUserManager};
 use crate::pria_client::PriaCallbackClient;
 use crate::runtime::RuntimeState;
+use crate::services::ServiceStore;
 use crate::sessions::SessionStore;
 use crate::synaps::launcher::{FakeLauncher, SynapsLauncher};
 use crate::versions::Versions;
@@ -52,7 +53,9 @@ pub fn test_state_sessions(
     os: Arc<dyn OsUserManager>,
     synaps: Arc<dyn SynapsLauncher>,
 ) -> AppState {
-    let cfg = Config::from_yaml(TEST_CONFIG).unwrap();
+    let mut cfg = Config::from_yaml(TEST_CONFIG).unwrap();
+    cfg.app_services.retained_root =
+        std::env::temp_dir().join(format!("ga-retained-{}", uuid::Uuid::new_v4()));
     assemble(cfg, pria, os, synaps)
 }
 
@@ -78,6 +81,7 @@ pub fn test_env(
     std::fs::create_dir_all(&run_root).unwrap();
 
     let mut cfg = Config::from_yaml(TEST_CONFIG).unwrap();
+    cfg.app_services.retained_root = base.join("retained");
     cfg.paths.efs_root = efs_root.clone();
     cfg.paths.run_root = run_root.clone();
     // Point the Synaps socket root at the temp tree too: the real /run/user
@@ -117,7 +121,15 @@ fn assemble(
         )
         .with_sessions(sessions.clone()),
     );
-    let gate = Arc::new(crate::turn_gate::TurnGate::new(fleet.clone(), sessions.clone()));
+    let gate = Arc::new(crate::turn_gate::TurnGate::new(
+        fleet.clone(),
+        sessions.clone(),
+    ));
+    let services = Arc::new(ServiceStore::new(
+        &cfg.paths.run_root,
+        cfg.app_services.clone(),
+        pria.clone(),
+    ));
     AppState {
         config: Arc::new(cfg),
         hmac: Arc::new(HmacVerifier::disabled("acct_123", "vm_456")),
@@ -131,7 +143,17 @@ fn assemble(
         desktops,
         fleet,
         gate,
+        services,
     }
+}
+
+/// Build a fresh [`ServiceStore`] over a temp run root, the given Pria client
+/// and the config's `app_services` block. Integration tests that construct
+/// `AppState` directly should use this for the `services` field.
+pub fn fake_service_store(cfg: &Config, pria: Arc<dyn PriaCallbackClient>) -> Arc<ServiceStore> {
+    let root = std::env::temp_dir().join(format!("ga-services-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    Arc::new(ServiceStore::new(&root, cfg.app_services.clone(), pria))
 }
 
 /// Build a fresh [`DesktopStore`] backed by a [`FakeSystemctl`] and a temp dir.
@@ -140,4 +162,30 @@ fn assemble(
 pub fn fake_desktop_store() -> Arc<DesktopStore> {
     let root = std::env::temp_dir().join(format!("ga-desktop-{}", uuid::Uuid::new_v4()));
     Arc::new(DesktopStore::new(root, Arc::new(FakeSystemctl::default())))
+}
+
+/// Seed a real store identity backed only by a fake Synaps process. The normal
+/// signed close handler owns teardown; this helper never simulates close.
+pub fn seed_fixture_session(state: &AppState, workspace: PathBuf) {
+    state.sessions.insert(crate::sessions::SessionEntry {
+        session_id: "fixture".into(),
+        account_id: state.config.account_id.to_string(),
+        instance_id: "fixture_instance".into(),
+        user_id: "fixture_user".into(),
+        uid: unsafe { libc::geteuid() },
+        gid: unsafe { libc::getegid() },
+        groups: vec![],
+        pid: 12345,
+        started_at: "2026-01-01T00:00:00Z".into(),
+        context_path: state
+            .config
+            .paths
+            .run_root
+            .join("fixture-context.json")
+            .display()
+            .to_string(),
+        session_dir: state.config.paths.run_root.join("fixture-session"),
+        workspace_dir: workspace,
+        process: Arc::new(crate::synaps::launcher::FakeProcess::new(12345)),
+    });
 }
