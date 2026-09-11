@@ -1,0 +1,2054 @@
+{
+ "_source": "routes/services/appOperations.js (VM-Sites RC, feat/vm-sites-rc-20260911): verdicts of allowedCommand/allowedEnv/relPath/readinessOf/expectedHeadOf/OBJECT_ID_RE/LOG_CURSOR_RE, captured by evaluating the pure validator functions on this corpus",
+ "_law": "the plugin may be stricter than the server but must never accept a value the server rejects",
+ "cases": [
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "--host",
+    "127.0.0.1",
+    "--strictPort"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "--host",
+    "127.0.0.1",
+    "--strictPort"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--host"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--host"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "--",
+    "x"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "--",
+    "x"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "build",
+    "--",
+    "--base",
+    "/p/r/x/"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "build",
+    "--",
+    "--base",
+    "/p/r/x/"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "build",
+    "--base=/p/r/x/"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "build",
+    "--base=/p/r/x/"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "pnpm",
+    "run",
+    "dev"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "pnpm",
+    "run",
+    "dev"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "yarn",
+    "run",
+    "dev"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "yarn",
+    "run",
+    "dev"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "pnpm",
+    "dev"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "pnpm",
+    "dev"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "yarn",
+    "dev"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "yarn",
+    "dev"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "ci"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "ci"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "ci",
+    "--",
+    "--x"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "ci",
+    "--",
+    "--x"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "install"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "install"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "pnpm",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "pnpm",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "yarn",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "yarn",
+    "install",
+    "--frozen-lockfile"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "test"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "test"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "test",
+    "--",
+    "--run"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "test",
+    "--",
+    "--run"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "bad script"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "bad script"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--port=${PORT}"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--port=${PORT}"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "$PORT"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "$PORT"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "node",
+    "server.js"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "node",
+    "server.js"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "node",
+    "scripts/dev.mjs",
+    "--flag"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "node",
+    "scripts/dev.mjs",
+    "--flag"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "node",
+    "server.js",
+    "--",
+    "x"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "node",
+    "server.js",
+    "--",
+    "x"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "node",
+    "./server.js"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "node",
+    "./server.js"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "node",
+    "../x.js"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "node",
+    "../x.js"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "node",
+    "x.ts"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "node",
+    "x.ts"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "node",
+    "-e",
+    "1"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "node",
+    "-e",
+    "1"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "node"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "node"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "vite"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "vite"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "vite",
+    "dev"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "vite",
+    "dev"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "vite",
+    "serve"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "vite",
+    "serve"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "vite",
+    "build"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "vite",
+    "build"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "vite",
+    "--host",
+    "127.0.0.1"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "vite",
+    "--host",
+    "127.0.0.1"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "vite",
+    "preview"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "vite",
+    "preview"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npx",
+    "vite"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npx",
+    "vite"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npx",
+    "vite",
+    "build"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npx",
+    "vite",
+    "build"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npx",
+    "vite",
+    "dev",
+    "--strictPort"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npx",
+    "vite",
+    "dev",
+    "--strictPort"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npx",
+    "serve"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npx",
+    "serve"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npx"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npx"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "corepack",
+    "pnpm",
+    "dev"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "corepack",
+    "pnpm",
+    "dev"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "sh",
+    "-c",
+    "npm run dev"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "sh",
+    "-c",
+    "npm run dev"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "/usr/bin/npm",
+    "run",
+    "dev"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "/usr/bin/npm",
+    "run",
+    "dev"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "a;b"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "a;b"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "a b"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "a b"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "-x"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "-x"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "x=y:z@w/./_-"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "x=y:z@w/./_-"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "'q'"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "'q'"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    ""
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    ""
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x",
+    "x"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "--"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "--"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "vite",
+    "dev",
+    "--"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "vite",
+    "dev",
+    "--"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "node",
+    "a.js",
+    "--"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "node",
+    "a.js",
+    "--"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "./x"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "./x"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "-"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "-"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "--"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev",
+    "--",
+    "--"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "run",
+    "dev\n"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "run",
+    "dev\n"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "yarn",
+    "test",
+    "--",
+    "--run"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "yarn",
+    "test",
+    "--",
+    "--run"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "pnpm",
+    "test"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "pnpm",
+    "test"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "npm",
+    "ci",
+    "extra"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "npm",
+    "ci",
+    "extra"
+   ],
+   "server": true
+  },
+  {
+   "kind": "command",
+   "mode": "dev",
+   "value": [
+    "yarn",
+    "install",
+    "--",
+    "--x"
+   ],
+   "server": false
+  },
+  {
+   "kind": "command",
+   "mode": "build",
+   "value": [
+    "yarn",
+    "install",
+    "--",
+    "--x"
+   ],
+   "server": true
+  },
+  {
+   "kind": "env",
+   "value": {
+    "VITE_X": "1"
+   },
+   "server": true
+  },
+  {
+   "kind": "env",
+   "value": {
+    "NODE_ENV": "production"
+   },
+   "server": true
+  },
+  {
+   "kind": "env",
+   "value": {
+    "CI": ""
+   },
+   "server": true
+  },
+  {
+   "kind": "env",
+   "value": {
+    "REACT_APP_X": "1"
+   },
+   "server": true
+  },
+  {
+   "kind": "env",
+   "value": {
+    "BROWSER": "none"
+   },
+   "server": true
+  },
+  {
+   "kind": "env",
+   "value": {
+    "PORT": "3"
+   },
+   "server": false
+  },
+  {
+   "kind": "env",
+   "value": {
+    "HOST": "x"
+   },
+   "server": false
+  },
+  {
+   "kind": "env",
+   "value": {
+    "REVISION_BASE": "/x/"
+   },
+   "server": false
+  },
+  {
+   "kind": "env",
+   "value": {
+    "PATH": "/tmp"
+   },
+   "server": false
+  },
+  {
+   "kind": "env",
+   "value": {
+    "lower": "x"
+   },
+   "server": false
+  },
+  {
+   "kind": "env",
+   "value": {
+    "VITE_X": 1
+   },
+   "server": false
+  },
+  {
+   "kind": "env",
+   "value": {
+    "VITE_X": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   "server": true
+  },
+  {
+   "kind": "env",
+   "value": {
+    "VITE_X": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   "server": false
+  },
+  {
+   "kind": "env",
+   "value": {
+    "VITE_X": "a\nb"
+   },
+   "server": false
+  },
+  {
+   "kind": "env",
+   "value": {
+    "VITE_0": "v",
+    "VITE_1": "v",
+    "VITE_2": "v",
+    "VITE_3": "v",
+    "VITE_4": "v",
+    "VITE_5": "v",
+    "VITE_6": "v",
+    "VITE_7": "v",
+    "VITE_8": "v",
+    "VITE_9": "v",
+    "VITE_10": "v",
+    "VITE_11": "v",
+    "VITE_12": "v",
+    "VITE_13": "v",
+    "VITE_14": "v",
+    "VITE_15": "v",
+    "VITE_16": "v",
+    "VITE_17": "v",
+    "VITE_18": "v",
+    "VITE_19": "v",
+    "VITE_20": "v",
+    "VITE_21": "v",
+    "VITE_22": "v",
+    "VITE_23": "v",
+    "VITE_24": "v",
+    "VITE_25": "v",
+    "VITE_26": "v",
+    "VITE_27": "v",
+    "VITE_28": "v",
+    "VITE_29": "v",
+    "VITE_30": "v",
+    "VITE_31": "v"
+   },
+   "server": true
+  },
+  {
+   "kind": "env",
+   "value": {
+    "VITE_0": "v",
+    "VITE_1": "v",
+    "VITE_2": "v",
+    "VITE_3": "v",
+    "VITE_4": "v",
+    "VITE_5": "v",
+    "VITE_6": "v",
+    "VITE_7": "v",
+    "VITE_8": "v",
+    "VITE_9": "v",
+    "VITE_10": "v",
+    "VITE_11": "v",
+    "VITE_12": "v",
+    "VITE_13": "v",
+    "VITE_14": "v",
+    "VITE_15": "v",
+    "VITE_16": "v",
+    "VITE_17": "v",
+    "VITE_18": "v",
+    "VITE_19": "v",
+    "VITE_20": "v",
+    "VITE_21": "v",
+    "VITE_22": "v",
+    "VITE_23": "v",
+    "VITE_24": "v",
+    "VITE_25": "v",
+    "VITE_26": "v",
+    "VITE_27": "v",
+    "VITE_28": "v",
+    "VITE_29": "v",
+    "VITE_30": "v",
+    "VITE_31": "v",
+    "VITE_32": "v"
+   },
+   "server": false
+  },
+  {
+   "kind": "env",
+   "value": {},
+   "server": true
+  },
+  {
+   "kind": "env",
+   "value": {
+    "VITE_": "x"
+   },
+   "server": true
+  },
+  {
+   "kind": "env",
+   "value": {
+    "VITE_a": "x"
+   },
+   "server": false
+  },
+  {
+   "kind": "env",
+   "value": {
+    "NODE_OPTIONS": "x"
+   },
+   "server": false
+  },
+  {
+   "kind": "env",
+   "value": {
+    "PUBLIC_URL": "/"
+   },
+   "server": true
+  },
+  {
+   "kind": "relPath",
+   "value": "",
+   "allowEmpty": true,
+   "server": true
+  },
+  {
+   "kind": "relPath",
+   "value": "",
+   "allowEmpty": false,
+   "server": false
+  },
+  {
+   "kind": "relPath",
+   "value": "worktree",
+   "allowEmpty": false,
+   "server": true
+  },
+  {
+   "kind": "relPath",
+   "value": "worktree/app",
+   "allowEmpty": false,
+   "server": true
+  },
+  {
+   "kind": "relPath",
+   "value": "/abs",
+   "allowEmpty": false,
+   "server": false
+  },
+  {
+   "kind": "relPath",
+   "value": "a/../b",
+   "allowEmpty": false,
+   "server": false
+  },
+  {
+   "kind": "relPath",
+   "value": "..",
+   "allowEmpty": false,
+   "server": false
+  },
+  {
+   "kind": "relPath",
+   "value": ".",
+   "allowEmpty": false,
+   "server": false
+  },
+  {
+   "kind": "relPath",
+   "value": "a/./b",
+   "allowEmpty": false,
+   "server": false
+  },
+  {
+   "kind": "relPath",
+   "value": "dist/",
+   "allowEmpty": false,
+   "server": false
+  },
+  {
+   "kind": "relPath",
+   "value": "./dist",
+   "allowEmpty": false,
+   "server": false
+  },
+  {
+   "kind": "relPath",
+   "value": ".hidden",
+   "allowEmpty": false,
+   "server": false
+  },
+  {
+   "kind": "relPath",
+   "value": "a/.b",
+   "allowEmpty": false,
+   "server": false
+  },
+  {
+   "kind": "relPath",
+   "value": "a\\b",
+   "allowEmpty": false,
+   "server": false
+  },
+  {
+   "kind": "relPath",
+   "value": "a b",
+   "allowEmpty": false,
+   "server": false
+  },
+  {
+   "kind": "relPath",
+   "value": "a\u0000b",
+   "allowEmpty": false,
+   "server": false
+  },
+  {
+   "kind": "relPath",
+   "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "allowEmpty": false,
+   "server": true
+  },
+  {
+   "kind": "relPath",
+   "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "allowEmpty": false,
+   "server": false
+  },
+  {
+   "kind": "relPath",
+   "value": "s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s",
+   "allowEmpty": false,
+   "server": true
+  },
+  {
+   "kind": "relPath",
+   "value": "s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s",
+   "allowEmpty": false,
+   "server": false
+  },
+  {
+   "kind": "relPath",
+   "value": "a-b_c.d",
+   "allowEmpty": false,
+   "server": true
+  },
+  {
+   "kind": "relPath",
+   "value": "-x",
+   "allowEmpty": false,
+   "server": true
+  },
+  {
+   "kind": "relPath",
+   "value": "_x",
+   "allowEmpty": false,
+   "server": true
+  },
+  {
+   "kind": "relPath",
+   "value": "a//b",
+   "allowEmpty": false,
+   "server": false
+  },
+  {
+   "kind": "relPath",
+   "value": "dist",
+   "allowEmpty": false,
+   "server": true
+  },
+  {
+   "kind": "readiness",
+   "value": {},
+   "server": true
+  },
+  {
+   "kind": "readiness",
+   "value": {
+    "path": "/"
+   },
+   "server": true
+  },
+  {
+   "kind": "readiness",
+   "value": {
+    "path": "/health"
+   },
+   "server": true
+  },
+  {
+   "kind": "readiness",
+   "value": {
+    "path": "health"
+   },
+   "server": false
+  },
+  {
+   "kind": "readiness",
+   "value": {
+    "path": "/a b"
+   },
+   "server": false
+  },
+  {
+   "kind": "readiness",
+   "value": {
+    "path": "/../x"
+   },
+   "server": false
+  },
+  {
+   "kind": "readiness",
+   "value": {
+    "path": "//x"
+   },
+   "server": true
+  },
+  {
+   "kind": "readiness",
+   "value": {
+    "path": "/a?b=c"
+   },
+   "server": false
+  },
+  {
+   "kind": "readiness",
+   "value": {
+    "path": "/x",
+    "timeoutMs": 1000
+   },
+   "server": true
+  },
+  {
+   "kind": "readiness",
+   "value": {
+    "timeoutMs": 999
+   },
+   "server": false
+  },
+  {
+   "kind": "readiness",
+   "value": {
+    "timeoutMs": 180000
+   },
+   "server": true
+  },
+  {
+   "kind": "readiness",
+   "value": {
+    "timeoutMs": 180001
+   },
+   "server": false
+  },
+  {
+   "kind": "readiness",
+   "value": {
+    "timeoutMs": 1000.5
+   },
+   "server": false
+  },
+  {
+   "kind": "readiness",
+   "value": {
+    "path": "/",
+    "extra": 1
+   },
+   "server": false
+  },
+  {
+   "kind": "readiness",
+   "value": {
+    "path": ""
+   },
+   "server": false
+  },
+  {
+   "kind": "readiness",
+   "value": {
+    "path": "/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   "server": true
+  },
+  {
+   "kind": "readiness",
+   "value": {
+    "path": "/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   "server": false
+  },
+  {
+   "kind": "readiness",
+   "value": [],
+   "server": false
+  },
+  {
+   "kind": "readiness",
+   "value": "x",
+   "server": false
+  },
+  {
+   "kind": "expectedHead",
+   "value": {
+    "revisionId": "0123456789abcdef0123456789abcdef",
+    "generation": 3
+   },
+   "server": true
+  },
+  {
+   "kind": "expectedHead",
+   "value": {
+    "revisionId": "",
+    "generation": 0
+   },
+   "server": true
+  },
+  {
+   "kind": "expectedHead",
+   "value": {
+    "revisionId": "0123456789abcdef0123456789abcdef",
+    "generation": 0
+   },
+   "server": true
+  },
+  {
+   "kind": "expectedHead",
+   "value": {
+    "revisionId": "",
+    "generation": 1
+   },
+   "server": true
+  },
+  {
+   "kind": "expectedHead",
+   "value": {
+    "generation": 1
+   },
+   "server": true
+  },
+  {
+   "kind": "expectedHead",
+   "value": {
+    "revisionId": "0123456789abcdef0123456789abcdef"
+   },
+   "server": true
+  },
+  {
+   "kind": "expectedHead",
+   "value": {},
+   "server": true
+  },
+  {
+   "kind": "expectedHead",
+   "value": {
+    "revisionId": null,
+    "generation": 0
+   },
+   "server": true
+  },
+  {
+   "kind": "expectedHead",
+   "value": {
+    "revisionId": "0123456789ABCDEF0123456789ABCDEF",
+    "generation": 1
+   },
+   "server": false
+  },
+  {
+   "kind": "expectedHead",
+   "value": {
+    "revisionId": "0123456789abcdef0123456789abcdef",
+    "generation": -1
+   },
+   "server": false
+  },
+  {
+   "kind": "expectedHead",
+   "value": {
+    "revisionId": "0123456789abcdef0123456789abcdef",
+    "generation": "3"
+   },
+   "server": false
+  },
+  {
+   "kind": "expectedHead",
+   "value": {
+    "revisionId": "0123456789abcdef0123456789abcdef",
+    "generation": 1,
+    "x": 1
+   },
+   "server": false
+  },
+  {
+   "kind": "expectedHead",
+   "value": "0123456789abcdef0123456789abcdef",
+   "server": false
+  },
+  {
+   "kind": "expectedHead",
+   "value": null,
+   "server": false
+  },
+  {
+   "kind": "expectedHead",
+   "value": [],
+   "server": false
+  },
+  {
+   "kind": "expectedHead",
+   "value": {
+    "revisionId": "0123456789abcdef0123456789abcdef",
+    "generation": true
+   },
+   "server": false
+  },
+  {
+   "kind": "expectedHead",
+   "value": {
+    "revisionId": "0123456789abcdef0123456789abcdef",
+    "generation": 1.5
+   },
+   "server": false
+  },
+  {
+   "kind": "serviceId",
+   "value": "64b0c0ffee00000000000001",
+   "server": true
+  },
+  {
+   "kind": "serviceId",
+   "value": "64B0C0FFEE00000000000001",
+   "server": false
+  },
+  {
+   "kind": "serviceId",
+   "value": "svc_1",
+   "server": false
+  },
+  {
+   "kind": "serviceId",
+   "value": "",
+   "server": false
+  },
+  {
+   "kind": "serviceId",
+   "value": "xxxxxxxxxxxxxxxxxxxxxxxx",
+   "server": false
+  },
+  {
+   "kind": "serviceId",
+   "value": "64b0c0ffee0000000000000",
+   "server": false
+  },
+  {
+   "kind": "serviceId",
+   "value": 5,
+   "server": false
+  },
+  {
+   "kind": "cursor",
+   "value": "MTI",
+   "server": true
+  },
+  {
+   "kind": "cursor",
+   "value": "a-b_c",
+   "server": true
+  },
+  {
+   "kind": "cursor",
+   "value": "",
+   "server": false
+  },
+  {
+   "kind": "cursor",
+   "value": "a b",
+   "server": false
+  },
+  {
+   "kind": "cursor",
+   "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "server": true
+  },
+  {
+   "kind": "cursor",
+   "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "server": false
+  },
+  {
+   "kind": "cursor",
+   "value": "c:17",
+   "server": false
+  },
+  {
+   "kind": "cursor",
+   "value": 12,
+   "server": false
+  },
+  {
+   "kind": "cursor",
+   "value": null,
+   "server": false
+  }
+ ]
+}

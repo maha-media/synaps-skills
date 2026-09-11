@@ -257,7 +257,7 @@ EOF
   ok "yt-dlp config created ($YTDLP_CONF)"
 fi
 
-# Python (transcribe skill)
+# Python (transcribe skill, pria-app-builder extension)
 if command -v python3 &>/dev/null; then
   PY_VER=$(python3 --version | awk '{print $2}')
   PY_MINOR=$(echo "$PY_VER" | cut -d. -f2)
@@ -267,12 +267,29 @@ if command -v python3 &>/dev/null; then
     warn "python3 $PY_VER — transcribe skill needs ≥ 3.10"
   fi
 else
-  warn "python3 not found — needed for transcribe skill"
+  warn "python3 not found — needed for transcribe skill and the pria-app-builder extension"
   case "$OS" in
     mac)     info "Install: brew install python" ;;
     windows) info "Install: https://python.org or winget install Python.Python.3.12" ;;
     *)       info "Install: sudo apt install python3 python3-pip" ;;
   esac
+fi
+
+# pria-app-builder extension bundle (python3 stdlib only, no pip deps).
+# In-VM delivery is the image bake list in guest-agent/packaging/install.sh;
+# this only verifies the bundle in the checkout is loadable.
+PAB_DIR="$REPO_DIR/pria-app-builder-plugin"
+if [ -f "$PAB_DIR/.synaps-plugin/plugin.json" ] && command -v python3 &>/dev/null; then
+  if python3 -c 'import ast,json,sys; json.load(open(sys.argv[1])); [ast.parse(open(p).read()) for p in sys.argv[2:]]' \
+       "$PAB_DIR/.synaps-plugin/plugin.json" "$PAB_DIR/main.py" "$PAB_DIR/app_builder_tools.py" 2>/dev/null; then
+    if python3 "$PAB_DIR/scripts/pack.py" --check >/dev/null 2>&1; then
+      ok "pria-app-builder extension bundle and adapter payload OK"
+    else
+      issue "pria-app-builder payload descriptor missing or mismatched"
+    fi
+  else
+    issue "pria-app-builder extension bundle is broken (plugin.json / main.py / app_builder_tools.py)"
+  fi
 fi
 
 # ffmpeg (transcribe skill)

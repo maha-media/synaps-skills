@@ -1,0 +1,76 @@
+{
+  "name": "pria-app-builder",
+  "version": "0.2.0",
+  "profile": "react-spa-relative-v1",
+  "protocolVersion": 1,
+  "digestAlgorithm": "sha256-path-content-tuples-v1",
+  "digest": "51b9e22967a3a8792843c3e7f4eb3227022d97b67eea8f00e60e842768ee72cb",
+  "toolchain": {
+    "node": ">=22.12 <23 || >=24",
+    "vite": "8.2.0",
+    "@vitejs/plugin-react": "6.0.5",
+    "parse5": "7.3.0"
+  },
+  "files": [
+    [
+      ".synaps-plugin/plugin.json",
+      "6ea52f64bc839c714c0600d2ef5f3d56db3397e03eeb33f43bbe5516530cc710"
+    ],
+    [
+      "README.md",
+      "06aae1c6cb5363d140924536cc1d2490dd8c20c198855cccfc81dba360bf65a4"
+    ],
+    [
+      "adapters/opaque-dev-runtime.js",
+      "beb7b5d55493bb7e61ef76430001dcf4b0f4f6c6254c2bc96be81af680e4743c"
+    ],
+    [
+      "adapters/vite-react.mjs",
+      "b2b1f18e2d83ef5ff907cbbf8dd32f195d92e7d8b90681cad27314b7d88d6515"
+    ],
+    [
+      "app_builder_tools.py",
+      "c64d89d480a2f6406a096d4fb2f4db4843289de5e890e0e4353cbeb068dad9de"
+    ],
+    [
+      "main.py",
+      "03b88c4b7bec0251dc998d49c2384d5e5e372a776c5b9cec10f90a92a88fd0c7"
+    ],
+    [
+      "profile/vite.config.mjs",
+      "1624461cd48273b76ce6cba8c7a3394addcaccd5bc79cdf39c9a73d49480f9d3"
+    ],
+    [
+      "scripts/pack.py",
+      "e0bcd237b053a360a02a253a3be819595e8aa744fcf991a93b11bfde332db4a1"
+    ],
+    [
+      "scripts/prepare-profile.py",
+      "0847197b7e766e07593c6c2d4bace4eeb8dacbc0975fd2281e356d4e42a030b3"
+    ],
+    [
+      "scripts/stdio_harness.py",
+      "a3e33f99a6d74cc9188d36f206f37521d2c1097b944b44899be9f27a831828b3"
+    ],
+    [
+      "scripts/test.sh",
+      "ff62ad393124904dcfbf7b96ecfe1df070d676fda9b2558b07a52f4edb7ee505"
+    ],
+    [
+      "skills/pria-app-dev/SKILL.md",
+      "aa80349a2b9ecd353254d2272659baaf63f2e51c14af662deb4cb2216168da26"
+    ],
+    [
+      "skills/pria-app-test-build/SKILL.md",
+      "298de6df34f4f50b294bdbf2cc71b6755ef672d9544f3b5d2148d04a0dc3d35a"
+    ],
+    [
+      "skills/pria-sites-deploy/SKILL.md",
+      "a6c5787f09749e2c013b6bb7454116c06c756d14f92e4bc9cb21e9e40ae4914c"
+    ],
+    [
+      "skills/pria-sites-operate/SKILL.md",
+      "5fa63eaccc939922ef6d24647871aa6c3b0722d5126a614829329adb82b34dc5"
+    ]
+  ]
+}
