@@ -890,6 +890,53 @@ supply replacement prose. Every candidate passes a local decode roundtrip first.
 Status tracks `compress.call/questions/skip/keep/fold/error`. Successful folds
 alone add `compress.input_bytes/output_bytes/saved_bytes`; these are actual UTF-8
 byte totals, not tokens or dollar benefits. Estimated actual Jev API cost remains
-under `op=compress`; no economic savings estimate or benchmark is claimed.
+under `op=compress`; no economic savings estimate is claimed. The offline
+synthetic benchmark below measures payload bytes, not end-to-end savings.
 Compression audit records contain local numeric byte counts only, never output,
 model responses, commands or goals; logs contain fixed text/numeric counts only.
+
+### Synthetic lossless compression benchmark
+
+[`scripts/benchmark_compress.py`](scripts/benchmark_compress.py) reuses production
+`compress.handle`, encoder and strict decoder. Run offline (stdlib only):
+
+```bash
+python3 -B jev-plugin/scripts/benchmark_compress.py
+python3 -B -m unittest discover -s jev-plugin/tests -p 'test_benchmark_compress.py' -v
+```
+
+The script prints metadata-only JSON and writes no files. Its public `fixtures()`
+API returns four fresh synthetic bash envelopes: 2,000 progress lines, 1,000
+status lines, repeated blocks with a unique middle observation and Unicode final
+line without newline, and CRLF/Unicode runs with a unique middle observation.
+All are 6–64 KiB and meet production's pre-API gate (at least 1 KiB reduction and
+encoded size at most 70% of original). No fixture commands or workers execute.
+Every fold must decode to the original UTF-8 bytes; every keep is unchanged.
+
+Baselines are raw/no fold and a **forced compact readability decision** passed
+through the same production safety/profit checks, not a separate encoder or API
+call. Deterministic RLE may be sufficient: Jev adds a readability veto, not unique
+savings or demonstrated accuracy. `expected=None` deliberately avoids treating
+fixed readability preferences as ground truth. Free small, nonrepetitive,
+failure-at-beginning/middle/tail, JSON, truncated, existing-envelope,
+missing-client and wrong-tool variants must make zero decisions; extension
+feature-off dispatch is also tested.
+
+Default execution discovers no key, constructs no API client and performs no
+network I/O; `jev` and offline hook latencies are `null`. An explicit `--live`
+opt-in uses production `DecisionClient.decide`, bounded deadline and transport,
+pinned to `jev-1.13.0`: four eligible cases, one question each, at most four wire
+attempts, no retries, cache or repeats even after errors. No live run is included
+in this change. Returned model metadata is allowlisted; missing usage remains
+`null`. Usage is recorded separately without altering the response passed to
+production validation: its current strict schema accepts standard token fields
+but conservatively keeps output on extra usage fields or malformed answers.
+Broader API metadata compatibility is not established by these offline mocks.
+
+Reports include actual fold/keep counts, raw and transmitted-output UTF-8 bytes,
+and signed delta (output minus raw). These are payload bytes **within the
+host/downstream boundary**, not end-to-end traffic, token or dollar savings.
+Estimated Jev input-token cost is separate, and unknown when usage is absent.
+Live hook and network medians/p95 use linear interpolation at `(n-1)*p`; four
+samples are descriptive, not a latency SLA. No upstream exception text, fixture
+bodies or tool-input traces are printed.
