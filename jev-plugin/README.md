@@ -732,6 +732,15 @@ activation or automation occurs. Counters are
 
 ### Synthetic evidence benchmark
 
+[Supplied live evidence and sanitized results](scripts/evidence-benchmark/README.md)
+document four batches / twelve optional questions with pinned and returned
+`jev-1.13.0`: 2,872 input tokens, estimated $0.000120624 at $0.042/M input tokens,
+390.17 ms median hook latency. Weak-label inspect-first recall was 3/5 (60%) and
+precision 3/3 (100%); 8/12 remained review and only 4/12 were decisive. Missed
+parser-edge and keyboard priorities, tiny synthetic labels and a deliberately
+weak first-optional comparator limit this to advisory evidence, not savings or
+truth certification. Default-off and the >=0.8 gate are unchanged.
+
 [`scripts/benchmark_evidence.py`](scripts/benchmark_evidence.py) runs offline by
 default: no key discovery, client construction or network; live measurements are
 `null`. Run `python3 -B jev-plugin/scripts/benchmark_evidence.py` from the repo root.
@@ -743,7 +752,8 @@ off and no-key variants at zero API cost. No source contents are read or fetched
 For a separately authorized live run, append `--live --model jev-1.13.0` (the pinned
 default and only accepted model). This explicitly discovers a configured key;
 production `DecisionClient.decide` and deadlines remain in use, with at most four
-wire attempts, no retries. No live run is claimed here. `fixtures()` returns the
+wire attempts, no retries. The supplied live run is documented above; it was not
+rerun for documentation. `fixtures()` returns the
 exact reusable API fixtures: foreman protocol runs should submit each `data` to
 `jev_evidence` with evidence enabled, retaining `expected` locally, never sending
 labels. Sources/IDs are synthetic path, `mem-FAKE` and `example.invalid` labels,
@@ -756,12 +766,13 @@ Optional recall, precision, wrong inspect-first priorities, non-review coverage
 and unknown counts are separate from exact required/reference preservation.
 Weak fixed labels do not tune the unchanged >=0.8 gate; unknowns are not successes.
 Live reports include actual input usage and estimated Jev cost (missing usage is
-`null`), hook/network total/p50/p95 milliseconds and serialized output-byte
-overhead. Model metadata is allowlisted; arbitrary upstream text is not printed.
+`null`), hook/network total/p50/p95 milliseconds and total serialized output
+bytes. Model metadata is allowlisted; arbitrary upstream text is not printed.
 No cache results: session context is unknown. **No savings claim**: main-model
-tool-turn cost and downstream output growth costs are not measured. The output
-bytes describe added hint overhead, not saved work. No large report artifact is
-written. Offline tests:
+tool-turn cost and downstream output growth costs are not measured. Output bytes
+are total response size, not incremental bytes, incremental cost or saved work.
+The benchmark writes no large artifact itself; the supplied public synthetic
+report is retained at the link above. Offline tests:
 
 ```bash
 python3 -B -m unittest discover -s jev-plugin/tests -p 'test_benchmark_evidence.py' -v
