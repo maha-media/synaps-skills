@@ -20,13 +20,22 @@ python3 jev-plugin/scripts/evaluate_heldout.py --output /path/to/new-summary.jso
 ```
 
 Default execution validates frozen bytes, canonical payload hashes, split
-counts, and production input bounds, then exercises disabled, no-key and
+counts, exact case/label keys, permitted feature label values, and production input
+bounds. It verifies threshold snapshots against production function defaults and
+diagnosis constants before any live key access, then exercises disabled, no-key and
 deterministic structural clients. It constructs no DecisionClient, discovers
 no credentials, reads no descriptors/sources, fetches nothing, and writes no
 artifacts by default. Offline `measurement` is null: mock agreement is **not**
 classifier quality or calibration. Structural choices depend only on production
 question criteria, never expected labels. Reports use two genuine choice
 questions; diagnosis uses the production hypothesis/check choice maps.
+Structural checks compare every original report JSON field after removing only
+`jev_advisory`, require exact action/advisory keys, locally safe flags and the
+production note, and reject input mutation. Continue preserves the raw output.
+Diagnosis references preserve each input's ID, kind and required flag; verification
+returns decisions for exactly the optional IDs (its decision format has no required
+flag), with required IDs separately preserved. Corrupt-hook regression tests prove
+these checks reject changes; they do not establish classifier quality.
 
 Live requires explicit `--live`. Only then, after validation, the script checks
 the environment variable; it does not discover config files. The only model is

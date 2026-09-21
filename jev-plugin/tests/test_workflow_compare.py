@@ -27,7 +27,12 @@ def digest(value):
 assert digest({p.name: p.read_text() for p in ws.iterdir()}) == t['result_template']['input_sha']
 assert digest(t['task']) == t['result_template']['task_sha']
 c = t['mode_config']
-assert not c['guard'] and not c['diagnosis']
+expected_config = dict.fromkeys(('guard', 'router', 'triage', 'reports', 'evidence',
+                                 'verification', 'discovery', 'diagnosis', 'compress'), False)
+expected_config['compress_mode'] = 'jev'
+if a.mode == 'selected': expected_config.update(router=True, triage=True)
+if a.mode == 'deterministic': expected_config.update(compress=True, compress_mode='deterministic')
+assert c == expected_config
 assert c['router'] == c['triage'] == (a.mode == 'selected')
 assert c['compress'] == (a.mode == 'deterministic')
 assert set(os.environ) <= {'PATH', 'LANG', 'HOME', 'SYNAPS_BASE_DIR', 'LC_CTYPE', 'PUBLIC_TEST_TOKEN'}
@@ -188,3 +193,32 @@ def test_output_explicit_and_exclusive(tmp_path, capsys):
     assert json.loads(path.read_text())['executed'] is False
     assert capsys.readouterr().out == ''
     with pytest.raises(FileExistsError): w.main(['--output', str(path)])
+
+
+@pytest.mark.parametrize('mode', w.MODES)
+def test_real_extension_mode_contract(mode, monkeypatch):
+    sys.path.insert(0, str(Path(__file__).parents[1] / 'extensions'))
+    from jev_ext import Extension
+    from jev import compress
+    from jev.client import DecisionClient
+    import socket
+    def forbidden(*args, **kwargs):
+        pytest.fail('network/key discovery forbidden')
+    monkeypatch.setattr(socket, 'socket', forbidden)
+    monkeypatch.setattr(DecisionClient, '_post', forbidden)
+    monkeypatch.setattr('jev_ext.keys.discover', forbidden)
+    ext = Extension()
+    ext.initialize({'config': dict(w.CONFIGS[mode], api_key='offline-fixture')})
+    assert set(w.FEATURES) == set(ext.FEATURE_DEFAULTS)
+    assert ext.features == {**{k: w.CONFIGS[mode][k] for k in w.FEATURES}, 'tools': True}
+    assert ext.compress_cfg.mode == w.CONFIGS[mode]['compress_mode']
+    monkeypatch.setattr(ext, 'maybe_pick_up_key', forbidden)
+    raw = 'routine progress\n' * 600
+    # _hook avoids key refresh; initialization has already exercised real config parsing.
+    if mode == 'deterministic':
+        ext.client = None
+        ext.recompute_features()
+        out = ext._hook({'kind': 'after_tool_call', 'tool_runtime_name': 'bash', 'tool_output': raw})
+        assert compress.decode_output(out['output']) == raw
+        assert ext.audit.counters['compress.local'] == 1
+        assert not ext.audit.counters.get('compress.call')

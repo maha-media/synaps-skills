@@ -3,6 +3,7 @@
 import argparse
 import copy
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -41,11 +42,17 @@ def require(condition):
 
 
 def load_dataset(path=ROOT / 'jev-evaluation-v1.json'):
+    for feature, function in (("evidence", evidence._choice), ("verification", verify._choice),
+                              ("reports", reports.choice)):
+        require(inspect.signature(function).parameters['threshold'].default == THRESHOLDS[feature])
+    require(diagnose.HYPOTHESIS_THRESHOLD == THRESHOLDS['diagnosis_hypothesis'])
+    require(diagnose.CHECK_THRESHOLD == THRESHOLDS['diagnosis_check'])
     raw = Path(path).read_bytes()
     manifest = json.loads((ROOT / 'manifest.json').read_text())
     if hashlib.sha256(raw).hexdigest() != manifest['sha256']:
         raise ValueError('frozen dataset digest mismatch')
     data = json.loads(raw)
+    require(set(data) == {'version', 'provenance', 'cases'})
     require(data['version'] == manifest['version'] == 1)
     cases = data['cases']
     require(len(cases) == 24 and len({c['id'] for c in cases}) == 24)
@@ -54,6 +61,7 @@ def load_dataset(path=ROOT / 'jev-evaluation-v1.json'):
         for feature in ('evidence', 'verification', 'reports', 'diagnosis'):
             require(sum(c['split'] == split and c['feature'] == feature for c in cases) == 3)
     for c in cases:
+        require(set(c) == {'id', 'split', 'feature', 'payload', 'input_sha256', 'expected'})
         require(digest(c['payload']) == c['input_sha256'])
         f, p = c['feature'], c['payload']
         if f == 'reports':
@@ -62,6 +70,9 @@ def load_dataset(path=ROOT / 'jev-evaluation-v1.json'):
         else:
             {'evidence': evidence, 'verification': verify, 'diagnosis': diagnose}[f]._validate(p)
             require(set(c['expected']) == {i for _, i, _, _ in mappings(c)})
+    for c in cases:
+        for _, ident, criteria, norm in mappings(c):
+            require(c['expected'][ident] in {norm.get(k, k) for k in criteria})
     return cases
 
 
@@ -137,9 +148,26 @@ def observe(case, client, enabled=True):
     f = case['feature']
     if f == 'reports':
         out = reports.Reports().handle(p, capture, enabled, audit)
-        flags = json.loads(out['output'])['jev_advisory']['flags'] if out['action'] == 'replace' else []
+        require(isinstance(out, dict) and out.get('action') in ('continue', 'replace'))
+        original = json.loads(case['payload']['tool_output'])
+        flags = []
+        if out['action'] == 'replace':
+            require(set(out) == {'action', 'output'})
+            replacement = json.loads(out['output'])
+            advisory = replacement.pop('jev_advisory')
+            preserved = canonical(replacement) == canonical(original)
+            require(preserved)
+            require(isinstance(advisory, dict) and set(advisory) == {'flags', 'note'})
+            flags = advisory['flags']
+            require(isinstance(flags, list) and all(isinstance(x, str) for x in flags))
+            safe = set(reports.FLAGS.values()) | {'worker_failed', 'worker_timed_out', 'worker_cancelled'}
+            require(bool(flags) and len(flags) == len(set(flags)) and set(flags) <= safe)
+            require(advisory == {'flags': flags, 'note': reports.NOTE})
+        else:
+            require(out == {'action': 'continue'})
+            preserved = p['tool_output'] == case['payload']['tool_output']
+            require(preserved)
         actual = {flag: flag in flags for flag in reports.FLAGS.values()}
-        preserved = True
     else:
         hook = {'evidence': evidence.call_evidence, 'verification': verify.call_verify,
                 'diagnosis': diagnose.call_diagnose}[f]
@@ -157,9 +185,19 @@ def observe(case, client, enabled=True):
             require(out['fetched'] is False and out['trust_certified'] is False)
         else:
             require(out['executed'] is False)
+            if f == 'diagnosis':
+                require(canonical([{k: r[k] for k in ('id', 'kind', 'required')} for r in rows]) ==
+                        canonical([dict(id=x['id'], kind=kind, required=x.get('required', False))
+                         for group, kind in (('hypotheses', 'hypothesis'), ('checks', 'check'))
+                         for x in p[group]]))
+            else:
+                # Verification has no required field on decisions: only optional IDs belong here.
+                require([r['id'] for r in rows] == [x['id'] for x in p['checks'] if not x['required']])
+                require(all(set(r) == {'id', 'priority',
+                            'fallback_reason' if r['priority'] == 'review' else 'status'} for r in rows))
         if f != 'verification':
             require(all(actual[i] == 'required' for i in required))
-    require(p == case['payload'] and preserved)
+    require(canonical(p) == canonical(case['payload']) and preserved)
     response = capture.response if capture else None
     answers = response.get('answers') if isinstance(response, dict) else None
     envelope = isinstance(answers, dict) and not set(answers) - {q for q, _, _, _ in mappings(case)}

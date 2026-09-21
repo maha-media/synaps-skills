@@ -67,15 +67,21 @@ is intentionally tiny; publicly inspectable labels are not a blind evaluation.
 
 ### Modes and resets
 
-| Mode | Enabled optional features | Remote decisions |
+| Mode | Enabled optional features | `compress_mode` |
 |---|---|---|
-| `off` | none | false |
-| `selected` | router, triage | true |
-| `deterministic` | compress, compression mode `deterministic` | false |
+| `off` | none | `jev` |
+| `selected` | router, triage | `jev` |
+| `deterministic` | compress only | `deterministic` |
 
-Guard is explicitly false in every mode (not inherited). Reports, evidence,
-verification assistance, discovery, diagnosis, generic decisions and tools are
-false. These are adapter protocol settings, not changes to the host configuration.
+`mode_config` uses actual plugin configuration keys: guard, router, triage,
+reports, evidence, verification, discovery, diagnosis, compress, and compress_mode.
+Adapters must accept only the exact `CONFIGS[mode]` constant, not arbitrary mode
+configurations. All feature toggles not listed as enabled are false. Guard=false
+is for this isolated benchmark only, never a recommendation to change host-global
+guard settings. Tools are always available in the plugin; there are no `tools`,
+`decisions`, or `remote_decisions` config toggles. The selected mode needs a client
+for router/triage activation; deterministic compression can operate without one.
+These settings apply only to the adapter's isolated plugin instance.
 The local grader runs regardless of the optional verification-assistance setting.
 The adapter is responsible for implementing the settings faithfully; the harness
 cannot independently verify its internal feature use or model calls. The main LLM
@@ -117,6 +123,9 @@ stdin/stdout/stderr of the runner are discarded, not captured or retained. Repor
 contain only fixed labels, validated metrics and public metadata; arbitrary error
 messages and extra adapter fields are never included. The adapter identity is a
 hash of the fixed CLI executable/arguments, not attestation of executable contents.
+This hash does not identify a plugin revision or detect changed runner/script bytes.
+For real measurements, record the plugin revision and runner revision separately
+in the experiment record; neither is attested by this protocol.
 No adapter assertion grants source authority or certifies provenance.
 
 ## Result contract and accounting

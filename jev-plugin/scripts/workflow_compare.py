@@ -14,11 +14,10 @@ import tempfile
 import time
 
 MODES = ("off", "selected", "deterministic")
-FEATURES = ("router", "triage", "reports", "evidence", "verification", "discovery", "diagnosis", "compress", "decisions", "tools")
-CONFIGS = {mode: {**{k: False for k in FEATURES}, "guard": False,
-                  "compression_mode": "off", "remote_decisions": False} for mode in MODES}
-CONFIGS["selected"].update(router=True, triage=True, remote_decisions=True)
-CONFIGS["deterministic"].update(compress=True, compression_mode="deterministic")
+FEATURES = ("guard", "router", "triage", "reports", "evidence", "verification", "discovery", "diagnosis", "compress")
+CONFIGS = {mode: {**{k: False for k in FEATURES}, "compress_mode": "jev"} for mode in MODES}
+CONFIGS["selected"].update(router=True, triage=True)
+CONFIGS["deterministic"].update(compress=True, compress_mode="deterministic")
 TASKS = [
     {"task_id": "parser", "instruction": "Strip surrounding whitespace from each string; preserve all internal whitespace. Write {outputs: [...]} to solution.json.",
      "vectors": ["  alpha  beta \n", "\t gamma\tdelta \t", "   ", "x\ny"]},

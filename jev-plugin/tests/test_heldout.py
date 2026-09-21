@@ -116,7 +116,7 @@ def test_wire_budget_retry_and_usage(monkeypatch):
     calls=[]
     def post(*a,**kw):
         calls.append(1)
-        raise _Retryable(0)
+        raise _Retryable('synthetic', 0)
     monkeypatch.setattr(h.DecisionClient,'_post',post)
     client=h.BudgetClient('fake-public-test-key',1)
     for _ in range(2):
@@ -207,3 +207,84 @@ def test_high_confidence_flag_set():
     assert s['accepted_priorities']['tp']==2
     assert s['accepted_priorities']['fp']==0
     assert s['confidence_bins_decision_agreement'][2]['count']==2
+
+
+@pytest.mark.parametrize('corruption', ['field', 'extra', 'note', 'flag', 'advisory_extra', 'action_extra', 'mutate', 'type'])
+def test_reports_corrupt_hook_rejected(monkeypatch, corruption):
+    case = next(c for c in h.load_dataset() if c['id'] == 'dev-reports-2')
+    def corrupt(self, p, *args):
+        data = json.loads(p['tool_output'])
+        data['jev_advisory'] = {'flags': ['verification_gap'], 'note': h.reports.NOTE}
+        if corruption == 'type': data['collected'] = int(data['collected'])
+        if corruption == 'field': data['authorization'] = 'corrupted'
+        if corruption == 'extra': data['extra'] = True
+        if corruption == 'note': data['jev_advisory']['note'] = 'authority'
+        if corruption == 'flag': data['jev_advisory']['flags'] = ['approved']
+        if corruption == 'advisory_extra': data['jev_advisory']['executed'] = True
+        out = {'action': 'replace', 'output': json.dumps(data)}
+        if corruption == 'action_extra': out['execute'] = True
+        if corruption == 'mutate': p['tool_output'] = '{}'
+        return out
+    monkeypatch.setattr(h.reports.Reports, 'handle', corrupt)
+    with pytest.raises(ValueError): h.observe(case, h.StructuralClient())
+
+
+@pytest.mark.parametrize('field,value', [('required', True), ('kind', 'check'), ('id', 'wrong')])
+def test_diagnosis_corrupt_metadata_rejected(monkeypatch, field, value):
+    case = next(c for c in h.load_dataset() if c['feature'] == 'diagnosis')
+    hook = h.diagnose.call_diagnose
+    def corrupt(*args, **kwargs):
+        result = hook(*args, **kwargs)
+        data = json.loads(result['content'])
+        data['references'][0][field] = value
+        return {**result, 'content': json.dumps(data)}
+    monkeypatch.setattr(h.diagnose, 'call_diagnose', corrupt)
+    with pytest.raises(ValueError): h.observe(case, h.StructuralClient())
+
+
+def test_verification_required_not_optional(monkeypatch):
+    case = next(c for c in h.load_dataset() if c['feature'] == 'verification')
+    hook = h.verify.call_verify
+    def corrupt(*args, **kwargs):
+        result = hook(*args, **kwargs)
+        data = json.loads(result['content'])
+        data['decisions'][0]['id'] = data['required_ids'][0]
+        return {**result, 'content': json.dumps(data)}
+    monkeypatch.setattr(h.verify, 'call_verify', corrupt)
+    with pytest.raises(ValueError): h.observe(case, h.StructuralClient())
+
+
+@pytest.mark.parametrize('feature', ['evidence', 'verification', 'reports', 'diagnosis_hypothesis', 'diagnosis_check'])
+def test_threshold_drift_rejected_before_live(monkeypatch, feature):
+    monkeypatch.setitem(h.THRESHOLDS, feature, .123)
+    with pytest.raises(ValueError): h.load_dataset()
+    monkeypatch.setattr(h, 'os', SimpleNamespace(environ=None))
+    with pytest.raises(SystemExit) as exc: h.main(['--live'])
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize('metadata', [{'extra': 'x' * 4097}, {'extra': float('nan')}, {'extra': '\ud800'}])
+def test_response_metadata_bounds(metadata):
+    class Metadata(h.StructuralClient):
+        def decide(self, *args, **kwargs):
+            return {**super().decide(*args, **kwargs), **metadata}
+    for case in h.load_dataset():
+        obs = h.observe(case, Metadata())
+        assert all(row['choice'] is None for row in obs['raw'])
+
+
+def test_invalid_labels_and_extra_keys_without_editing_frozen_data(monkeypatch):
+    original = h.json.loads
+    for corruption in ('label', 'key'):
+        def loads(raw, **kwargs):
+            data = original(raw, **kwargs)
+            if 'cases' in data:
+                if corruption == 'label':
+                    key = next(iter(data['cases'][0]['expected']))
+                    data['cases'][0]['expected'][key] = 'not-a-class'
+                else:
+                    data['cases'][0]['unexpected'] = True
+            return data
+        with monkeypatch.context() as m:
+            m.setattr(h.json, 'loads', loads)
+            with pytest.raises(ValueError): h.load_dataset()
