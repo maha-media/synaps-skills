@@ -109,7 +109,6 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_malformed_error_and_outside_id_preserve_original_json(self):
         for response in ({}, {'answers': {'recommendation': {'choice': 'outside_id', 'confidence': 1}}},
-                         {'answers': {'recommendation': {'choice': 'option_0', 'confidence': .2}}},
                          RuntimeError('synthetic failure')):
             with self.subTest(response=type(response).__name__):
                 j = b.measure(Stub(response))['jev']
@@ -119,6 +118,16 @@ class BenchmarkTests(unittest.TestCase):
                     self.assertTrue(row['evidence_preserved'])
                     self.assertEqual(row['appended_bytes'], 0)
                     self.assertIsNone(row['predicted_recommended_id'])
+
+    def test_low_confidence_repeat_is_cached_without_recommendation(self):
+        j = b.measure(Stub({'answers': {'recommendation': {
+            'choice': 'option_0', 'confidence': .4}}}))['jev']
+        self.assertEqual(j['calls'], 7)
+        self.assertEqual(j['repeat'], dict(status='executed', cache_hit=True, zero_cost=True))
+        for row in j['results']:
+            self.assertTrue(row['evidence_preserved'])
+            self.assertEqual(row['appended_bytes'], 0)
+            self.assertIsNone(row['predicted_recommended_id'])
 
     def test_wrong_confident_choices_are_not_successes(self):
         j = b.measure(Stub({'answers': {'recommendation': {'choice': 'option_0', 'confidence': 1}}}))['jev']

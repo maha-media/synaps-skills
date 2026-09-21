@@ -1,7 +1,7 @@
 {
   "name": "jev",
   "version": "0.3.0",
-  "description": "Calibrated Jev decisions: safety guard, routing, opt-in compression and discovery advice, automatic advisory bash failure triage, batched jev_decide and candidate-only jev_select.",
+  "description": "Calibrated Jev decisions: safety guard, routing, opt-in compression and experimental discovery advice, automatic advisory bash failure triage, batched jev_decide and candidate-only jev_select.",
   "author": {
     "name": "JR Morton",
     "url": "https://github.com/maha-media"

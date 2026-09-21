@@ -139,11 +139,11 @@ class Discovery:
                     raise ValueError("answer size")
                 answers = response.get("answers") if isinstance(response, dict) else None
                 answer = answers.get("recommendation") if isinstance(answers, dict) else None
-                choice = valid_choice(answer, criteria, threshold=MIN_CONFIDENCE)
+                choice = valid_choice(answer, criteria, threshold=0)
                 if choice is None:
                     audit.bump("discovery.abstain")
-                    return dict(CONTINUE)  # malformed/low-confidence answers are not cached
-                if choice == "abstain":
+                    return dict(CONTINUE)  # malformed answers are not cached
+                if choice == "abstain" or answer["confidence"] < MIN_CONFIDENCE:
                     choice = None
                 if key is not None:
                     self.cache[key] = choice

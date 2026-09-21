@@ -96,16 +96,44 @@ class DiscoveryTests(unittest.TestCase):
     def test_malformed_answers_and_errors(self):
         for answer in [None, [], {}, {'choice': 'invented', 'confidence': 1},
                        {'choice': 'alpha', 'confidence': 1}, {'choice': 'option_0', 'confidence': True},
-                       {'choice': 'option_0', 'confidence': .799}, {'choice': 'option_0', 'confidence': float('nan')},
-                       {'choice': 'option_0', 'confidence': 1, 'probabilities': []}]:
+                       {'choice': 'option_0', 'confidence': float('nan')},
+                       {'choice': 'option_0', 'confidence': .4, 'probabilities': []},
+                       {'choice': 'option_0', 'confidence': .4, 'probabilities': {'option_0': float('inf')}},
+                       {'choice': 'option_0', 'confidence': -1},
+                       {'choice': 'option_0', 'confidence': 1.1}]:
             self.c.decide.return_value = {'answers': {'recommendation': answer}}
+            count = self.c.decide.call_count
             self.assertEqual(self.run_hook(), discovery.CONTINUE)
+            self.assertEqual(self.run_hook(), discovery.CONTINUE)
+            self.assertEqual(self.c.decide.call_count, count + 2)
             self.assertFalse(self.d.cache)
         for error in [TimeoutError('private'), RuntimeError('secret')]:
             self.c.decide.side_effect = error
+            count = self.c.decide.call_count
             self.assertEqual(self.run_hook(), discovery.CONTINUE)
+            self.assertEqual(self.run_hook(), discovery.CONTINUE)
+            self.assertEqual(self.c.decide.call_count, count + 2)
             self.assertFalse(self.d.cache)
         self.assertGreaterEqual(self.a.counters['discovery.error'], 2)
+
+    def test_valid_low_confidence_cached_as_session_abstention(self):
+        for choice in ('option_0', 'abstain'):
+            with self.subTest(choice=choice):
+                self.d = discovery.Discovery()
+                self.c.decide.reset_mock()
+                self.c.decide.return_value = {'answers': {'recommendation': {
+                    'choice': choice, 'confidence': .4,
+                    'probabilities': {'option_0': .5, 'option_1': .3, 'abstain': .2}}}}
+                self.assertEqual(self.run_hook(), discovery.CONTINUE)
+                self.assertEqual(self.run_hook(), discovery.CONTINUE)
+                self.assertEqual(self.c.decide.call_count, 1)
+                self.assertEqual(list(self.d.cache.values()), [None])
+                self.assertEqual(self.run_hook(session_id='other'), discovery.CONTINUE)
+                self.assertEqual(self.run_hook(session_id='other'), discovery.CONTINUE)
+                self.assertEqual(self.c.decide.call_count, 2)
+                self.assertEqual(self.run_hook(session_id=None), discovery.CONTINUE)
+                self.assertEqual(self.run_hook(session_id=None), discovery.CONTINUE)
+                self.assertEqual(self.c.decide.call_count, 4)
 
     def test_confidence_boundary_and_invalid_high(self):
         self.assertEqual(discovery.MIN_CONFIDENCE, .8)

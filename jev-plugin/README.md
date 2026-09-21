@@ -328,10 +328,11 @@ timer bounds blocking DNS/response reads as well as socket operations; unavailab
 or already-owned timers fail without making a request. This process extension's
 supported execution path is the POSIX main-thread stdio loop.
 
-## Optional discovery recommendations (0.3)
+## Experimental discovery recommendations (0.3)
 
 Underlying `search_tools` and `search_skills` discovery is **pure local**. The
-`discovery` feature defaults to **false**. `/jev discovery on|off [--save]`
+`discovery` experiment defaults to **false** and is **not recommended as a
+savings technique yet**. `/jev discovery on|off [--save]`
 controls it independently of guard; without `--save` the override is session-only.
 `/jev on` enables **all five** hooks, including this opt-in API cost/privacy
 contract (and compression); `/jev off` disables them. Explicit Jev tools remain
@@ -356,7 +357,7 @@ Unknown host fields remain unchanged semantically and local.
 Jev must abstain for generic keywords such as `memory`, `test`, or `search`,
 equally plausible matches, and any ambiguity. Candidate order is not intent.
 Only a supplied opaque option at confidence ≥0.8 (`discovery.MIN_CONFIDENCE`) can map locally to a supplied
-ID. Confidence 0.8 does **not certify truth**: the lower gate can recommend a
+ID. Confidence 0.8 does **not certify truth**: the gate can recommend a
 mistaken result, but grants no permissions and causes no activation. All
 validation, privacy and scope boundaries remain unchanged. The original machine-readable JSON and every descriptor remain intact;
 only bounded `jev_advisory` metadata is added, with `recommended_id`,
@@ -364,11 +365,13 @@ only bounded `jev_advisory` metadata is added, with `recommended_id`,
 reranking, activation, permission change or automatic follow-up occurs.
 Errors and abstentions return exact Continue, without rewriting output.
 
-A process-local LRU of 128 entries caches recommendations and explicit
-abstentions, keyed by a digest of session, query, runtime tool, entire original
+A process-local LRU of 128 entries caches recommendations and valid
+abstentions (including confidence below 0.8), keyed by a digest of session, query, runtime tool, entire original
 output and client model. No session means no cache. Cache values are opaque
 options, never raw catalogs; metadata is reapplied to the current original
-payload. Malformed answers, low confidence and errors are not cached. Discovery
+payload. Valid low-confidence answers are cached as abstentions, not advice.
+Malformed/unknown/nonfinite answers (including invalid probabilities) and errors
+are not cached and may be retried. Discovery
 never writes payloads or exception text to audit/logs. Status exposes
 `discovery.skip/call/cache/recommend/abstain/error` counters and `op=discovery`
 estimated Jev costs/tokens/latency. These are advisory measurements, not savings.
@@ -392,8 +395,8 @@ It validates fixed public synthetic fixtures and emits deterministic no-hint
 (zero incremental overhead) and explicit-order first-candidate baselines. Jev
 fields are `not_executed`/null, not fabricated measurements. `--live` resolves
 an existing key through `keys.discover`; it never prints the key or its source.
-The initial live result supplied by the foreman is recorded below; no new live
-measurement was performed for this revision.
+Supplied live results are recorded below; no live requests were made while
+implementing this revision.
 
 The fixture shapes follow the host's `tools/catalog.rs` discovery entries and
 `skills/tool.rs` search results: every candidate contains the query in searchable
@@ -436,7 +439,7 @@ foreman-supplied historical observations, not measurements rerun here.
 the existing `jev_select` validation gate. The change is an advisory-policy
 alignment motivated by those observations, not evidence of improved coverage,
 accuracy or savings. Held-out cases were added **after** choosing this threshold
-and were not used to tune it. No positive live result at 0.8 is claimed.
+and were not used to tune it.
 
 `--suite heldout` loads the separate public fixture file
 `scripts/fixtures/discovery_heldout.json`: PDF merge versus receipt listing,
@@ -457,3 +460,29 @@ threshold decision, not a statistically representative or permanently unseen set
 Printed measured statistics include skips separately, abstentions, repeats, all
 six discovery audit counters (including zeros), and the client statistics snapshot.
 Offline counters remain null rather than implying an executed run.
+
+Supplied held-out live measurement at **0.8** (`jev-1.13.0`), retained as
+[`reports/discovery-heldout-live.json`](reports/discovery-heldout-live.json):
+**8 calls**, **4,421 input tokens**, estimated **$0.000185682**, **375 ms** mean
+API latency. One correct recommendation / eight eligible cases (**12.5% coverage**),
+zero wrong confident results, and seven abstentions: two expected, five missed
+recommendations under the weak labels. All evidence was preserved; the cached
+PDF repeat added zero calls/tokens/cost. Reversed PDF abstained even with the
+correct candidate first, unlike the original PDF case. This flags order
+sensitivity (not a controlled causal finding); limited keyword intent and tiny
+synthetic samples preclude improved-accuracy or net-savings claims. The repeat
+measures recommendation caching, not the new low-confidence regression.
+
+### Plugin-only follow-up priorities (not implemented)
+
+1. Prefer richer, **user-authorized task-aware batch selection** through
+   `jev_select` over the keyword-only hook. Evidence needed: matched no-hint and
+   foreground baselines, held-out task outcomes, order permutations, coverage,
+   wrong selections, and end-to-end cost/latency including retries.
+2. Evaluate **opt-in worker-tier maps** using only already authorized model IDs;
+   preserve explicit choices and inheritance. Evidence needed: a matched
+   inherited-model quality/cost baseline, task success and rework rates, total
+   tokens/latency/cost, and fallback behavior before recommending cheaper tiers.
+
+These are evaluation priorities, not new tools, automatic routing authority, or
+proven savings. The registered tools remain `jev_decide`, `jev_select`, `jev_status`.

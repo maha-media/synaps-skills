@@ -109,10 +109,11 @@ cases abstain, and recognized failures never compress. No automatic retry.
 Use status for per-operation estimated Jev cost and triage cache/skip/abstain
 counts, not invented savings. Worker-tier optimization and compaction are deferred.
 
-### Optional discovery advice (0.3)
+### Experimental discovery advice (0.3)
 
 Local `search_tools`/`search_skills` remains pure local by default. Discovery
-recommendations are **off by default**, independent of guard. `/jev discovery
+recommendations are **off by default**, independent of guard, and **not
+recommended as a savings technique yet**. `/jev discovery
 on|off [--save]` opts into sending bounded, credential-pattern-redacted search
 query and descriptors to Jev, with API cost; `/jev on` enables this too. No prior
 goal, transcript or schemas are sent. Redaction is best-effort, not a secrecy
@@ -122,8 +123,21 @@ The query is substring keywords, not a task: generic words (memory/test/search),
 unstated intent and equally plausible matches must abstain. Never infer intent
 from order. `jev_advisory` is optional advice, **not activation/permission or
 authority**. All discovery fields/candidates stay intact and machine-readable;
-no filtering/reranking occurs. Confidence ≥0.85 only maps a supplied opaque
+no filtering/reranking occurs. Confidence ≥0.8 only maps a supplied opaque
 option to an exact returned ID. Invalid/oversized/truncated/exact-name results,
 off/no-key, failures and abstentions leave output unchanged. Cache is session-
-local, bounded to 128 digests/options; no raw payload audit. Check status for
+local, bounded to 128 digests/options; valid answers below 0.8 cache as
+abstentions. Malformed/unknown/nonfinite answers, invalid probabilities and
+errors remain uncacheable; no session ID means no cache. No raw payload audit. Check status for
 `discovery.*` counters and per-operation Jev cost, not assumed savings.
+
+Supplied held-out live evidence: 1/8 correct recommendations (12.5% coverage),
+zero wrong confident results, seven abstentions (two expected); 8 calls, 4,421
+input tokens, estimated $0.000185682, mean 375 ms. All evidence survived and the
+cached repeat cost zero. Reversed PDF abstained despite the correct option first:
+order sensitivity and limited keyword intent caution against accuracy/savings
+claims. See README for retained initial 0.85 evidence and the synthetic report.
+Follow-up is plugin-only evaluation, not new code: user-authorized task-aware
+`jev_select` batches versus keyword advice, then opt-in authorized worker-tier
+maps. Both need matched task-quality and total cost/latency baselines, including
+misses, rework and fallbacks, before savings recommendations.
