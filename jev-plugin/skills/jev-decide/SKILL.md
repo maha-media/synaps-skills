@@ -1,6 +1,6 @@
 ---
 name: jev-decide
-description: Use when a task is many small decisions — triage, classify, route, score, yes/no checks — or when the Jev safety gate asks for confirmation. Batched calibrated decisions via jev_decide in ~0.4 s.
+description: Use when batching typed decisions or supplied-candidate priorities; inspect Jev accounting, budgets and diagnostics without assuming savings.
 ---
 
 # jev-decide — calibrated decisions for the harness
@@ -18,7 +18,9 @@ through harness hooks and six explicit tools:
 | **`jev_decide`** tool | Ask many typed questions about one `state` in one request | Read the rest of this page. |
 | **`jev_select`** tool | Batch supplied-ID candidate choices | Use for uncertain choices, not execution or authorization. |
 | **`jev_verify`** tool | Preserve required IDs and advise optional-check priority (default off) | Supply task, changes and checks; see the example below. |
-| **`jev_status`** tool | Session accounting: calls, tokens, cost, verdict counts | Call it when asked about cost or when a verdict looks wrong. |
+| **`jev_evidence`** tool | Supplied descriptor relevance (default off), no fetch or trust certification | Preserve provenance and mandatory evidence. |
+| **`jev_diagnose`** tool | Supplied hypotheses/checks (default off), no fixes or execution | Verify against actual evidence; later is not skip. |
+| **`jev_status`** tool | Accounting, optional budgets, compression mode and local explanations | Call it when asked about cost or when a verdict looks wrong. |
 | **`/jev`** slash command (user-side) | `/jev key <apikey_…>` · `/jev status` · `/jev test` | If the user types `key …`/`status`/`help` as plain text, they meant `/jev …` — point them at it. |
 
 ## When to reach for `jev_decide`
@@ -311,3 +313,17 @@ priority advice, not truth/source authority, execution, retry, tool activation,
 fetch or approval. Consult actual evidence and project requirements yourself.
 
 Offline-first [frozen evaluation protocol](../../scripts/evaluation/README.md).
+
+
+## Optional budgets and local explanations (0.8.0)
+
+`/jev budget` displays optional API session budgets/circuit state; enforcement is
+opt-in and excludes guard and user-authorized key probes/self-tests. Estimated
+input-token cost is not a hard dollar cap or savings measurement. Missing usage
+is unknown, not free. Explicit tools share an unscoped ledger; supplied session
+IDs cannot grant fresh budgets. Cache hits and local operations need no API call.
+
+`/jev explain [clear]` shows a bounded 64-entry plugin-process diagnostic ring,
+shared across sessions. Clear affects only that ring, not accounting, budgets,
+circuits or caches. `jev_status` includes these local diagnostics; no seventh
+tool is introduced. See the README for configuration limits and reset semantics.

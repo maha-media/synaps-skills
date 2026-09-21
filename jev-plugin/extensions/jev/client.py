@@ -217,7 +217,7 @@ class DecisionClient:
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
-                "User-Agent": "synaps-jev-plugin/0.1",
+                "User-Agent": "synaps-jev-plugin",
             },
             method="POST",
         )

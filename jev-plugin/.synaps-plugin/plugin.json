@@ -1,7 +1,7 @@
 {
   "name": "jev",
-  "version": "0.7.0",
-  "description": "Calibrated Jev decisions: safety guard, sparse session-cached worker routing, opt-in lossless identical-line compression and experimental discovery advice, automatic advisory bash failure triage, batched jev_decide and candidate-only jev_select. Opt-in explicit verification prioritization via jev_verify. Opt-in evidence descriptor relevance via jev_evidence (no fetch or trust certification). Opt-in automatic worker-report claim triage (no lifecycle authority). Opt-in supplied-hypothesis/check prioritization via jev_diagnose; no fixes or execution.",
+  "version": "0.8.0",
+  "description": "Jev decision layer: safety guard, sparse cached worker routing, advisory failure/report triage, opt-in discovery advice and lossless compression. Six tools: jev_decide, jev_select, jev_status, jev_verify, jev_evidence and jev_diagnose (supplied hypotheses/checks only). Explicit economy preset, optional API budgets and local explain diagnostics; no execution authority or net-savings claim.",
   "author": {
     "name": "JR Morton",
     "url": "https://github.com/maha-media"

@@ -1,5 +1,8 @@
 # jev — calibrated decision layer for Synaps CLI
 
+Release **0.8.0**: six tools, supplied-candidate diagnosis, an explicit economy
+preset, optional API budgets, and local explanations. No net-savings claim.
+
 Puts [TypeSafe Jev](https://docs.typesafe.ai) — a fast, calibrated *System One*
 decision model that never writes, only picks — into the agent harness as a
 plugin. Decision policy stays plugin-only, using the existing extension hooks;
@@ -11,11 +14,14 @@ output replacement also depends on host runtime handling (see measurement limits
 | **Router** — fill omitted `role`, `write_policy` (→ `read_only` only), `model` (tier map) on `subagent_start` | `before_tool_call` → `modify` | on | open |
 | **Compress** — reversible identical-line runs for repetitive `bash` output | `after_tool_call` → `replace` | **off** | open |
 | **Triage** — preserve failures and append advisory diagnostic IDs | `after_tool_call` → `continue` / `replace` | on | open (abstain) |
+| **Reports** — append unverified worker-claim flags without lifecycle changes | `subagent_collect` → `continue` / `replace` | **off** | open |
+| **Discovery** — supplied search-result ID advice, not activation | `search_tools` / `search_skills` → `continue` / `replace` | **off** | open (abstain) |
+| **`jev_diagnose`** — prioritize supplied hypotheses/checks; no fixes or execution | tool (no hook) | advice **off** | review |
 | **`jev_evidence`** — supplied descriptor relevance; no fetch or trust certification | tool (no hook) | advice **off** | review |
 | **`jev_verify`** — explicit optional verification priority; preserves caller-required IDs | tool (no hook) | advice **off** | review |
 | **`jev_select`** — batch choices among supplied candidate IDs | tool | on | abstain / tool error |
 | **`jev_decide`** — up to 64 typed questions about one `state` in one ~0.4 s call | tool | on | tool error |
-| **`jev_status`** — calls, tokens, cost, verdict counters | tool | on | — |
+| **`jev_status`** — accounting, budgets, compression mode, local explanations | tool | on | — |
 
 Measured on 2026-09-20 (`jev-1.13.0`): 350–480 ms per request, ~$0.00003 per
 guarded tool call, 10 000 calls ≈ $0.27.
@@ -31,18 +37,26 @@ Jev reviews worker tool calls. Worker reviews require host hook wiring.
 ## Offline workflow comparison
 
 [Workflow comparison protocol and harness](docs/workflow-comparison.md) replays
-public toy tasks offline. Synthetic fixture results are not LLM benchmarks or
-evidence of production savings.
+public toy tasks through an **external adapter protocol**. The default is a
+no-execution offline plan; synthetic adapter fixtures exercise the protocol.
+There is **no built-in Synaps runner**. This is not an actual Synaps integration,
+an LLM benchmark, or evidence of real savings. Real adapters and end-to-end
+measurements require separate evaluation; the six tools are not all fully
+benchmarked by this protocol.
 
 ## Install
 
-```bash
-# from the marketplace (once merged to main)
-synaps → /plugins → jev → install
+Install the published snapshot through the Synaps marketplace:
 
-# or straight from the working tree
-ln -s ~/Projects/Maha-Media/synaps-skills/jev-plugin ~/.synaps-cli/plugins/jev
+```text
+/plugins → refresh marketplace → jev → install
 ```
+
+Installed plugins are git-snapshot copies, **not symlinks to a working tree**.
+After a release, refresh the marketplace, then explicitly update Jev with
+`/plugins → jev → u`. Refreshing availability alone does not update the installed
+snapshot or its frozen commit. Do not symlink this repository into the plugin
+directory; development symlinks bypass reproducible snapshot installation.
 
 Then, **inside synaps**:
 
@@ -162,6 +176,8 @@ All keys live under `extension.jev.*` in `~/.synaps-cli/config`, or as
 | `reports` | `false` | automatic worker-report claim triage; `/jev reports on\|off [--save]`; independent of guard |
 | `evidence` | `false` | descriptor relevance advice; `/jev evidence on\|off [--save]`; independent of guard |
 | `verification` | `false` | optional priority advice; `/jev verification on\|off [--save]`; independent of guard |
+| `diagnosis` | `false` | supplied hypotheses/checks only; `/jev diagnosis on\|off [--save]`; independent of guard |
+| `budget_*` | enforcement `false` | optional API budgets/circuit; see [defaults, limits and accounting](#optional-session-budgets-and-circuit-breaker) |
 | `triage` | `true` | advisory failure classification; `/jev triage on\|off [--save]`; independent of guard |
 | `compress_mode` | `jev` | Only `jev` or `deterministic`; mode alone does not enable compression |
 | `compress` | `false` | opt-in; `/jev compress on\|off [--save]` |
@@ -170,23 +186,22 @@ All keys live under `extension.jev.*` in `~/.synaps-cli/config`, or as
 | `compress_min_conf` | `0.85` | finite readability confidence 0.85..1; invalid uses default |
 | `compress_head` / `compress_tail` | `1500` / `1000` | deprecated, ignored (even zero/malformed values) |
 
-## Test
+## Offline tests
+
+From the repository root, run the hermetic suite sequentially (one worker):
 
 ```bash
-python3 -B tests/test_policy.py                     # pure policy, no network
-python3 -B -m unittest discover -s tests -p 'test_features_protocol.py' -v
-                                                    # real extension protocol, offline transport stub
-TYPESAFE_API_KEY=… python3 tests/e2e_protocol.py      # real process, real protocol, real API
-TYPESAFE_API_KEY=… python3 tests/e2e_keys.py          # inert start → /jev key → activation → lazy pickup
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q jev-plugin/tests > /tmp/jev-tests.log 2>&1
+# Inspect the exit code, then the summary:
+tail -n 12 /tmp/jev-tests.log
 ```
 
-Run the commands from the plugin directory. The offline protocol suite uses a
-fake key, blocks socket access in the child process, and confines fallback
-persistence to a temporary `SYNAPS_BASE_DIR`. It covers zero-call guard bypass,
-independent features/tools, command events, session reset, and saved toggles
-reloaded by a fake host. It does not test host UI approval handling or worker
-hook wiring. The two `e2e_*.py` scripts above are **live API tests**, not part of
-the offline suite; they require credentials and incur calls.
+This collects `test_*.py` only, with no xdist workers or third-party pytest plugin
+autoload. Protocol tests use fake keys, offline transport stubs/socket blocks,
+and temporary `SYNAPS_BASE_DIR` directories. No credentials or live API calls are
+required. The suite does not test host UI approval handling or worker hook wiring.
+`e2e_*.py`, `/jev test`, key validation, and benchmarks with `--live` are separate,
+explicitly authorized live operations, **not part of this offline command**.
 
 ## Design notes
 
@@ -587,11 +602,9 @@ cost counter is rounded to $0.00002).
 
 These measurements exclude worker/frontier costs and downstream task quality;
 they establish neither cheaper worker execution nor net money savings. The
-historical routing checkpoint reported **84 offline tests**, following
-the foreman's earlier 77-test verification. Latest verification is **105 offline
-tests** (foreman-supplied; the foreman will rerun). This documentation-only
-finalization did not rerun tests or live calls and changed no feature toggles,
-user configuration, or model mappings.
+historical routing checkpoint reported 84 offline tests, followed by a
+foreman-supplied 105-test checkpoint; these are historical counts, not the
+current full-suite total. No live measurements were rerun for the 0.8.0 release.
 
 ## Explicit verification priority (0.4.0)
 
