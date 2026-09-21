@@ -1,6 +1,8 @@
 """Bounded reversible identical-line runs; Jev chooses readability, never data loss."""
 from __future__ import annotations
 
+from .audit import classify_choice, explain_error
+
 import hashlib
 import json
 import re
@@ -127,7 +129,7 @@ def questions():
         'This is only a readability choice, never permission to drop data or certify success.'}}
 
 
-def should_compress(response, cfg):
+def should_compress(response, cfg, *, threshold=None, diagnostic=False):
     if not isinstance(response, dict) or set(response) - {'answers', 'usage', 'model'}:
         return False
     if len(dumps(response).encode('utf-8')) > 4096:
@@ -145,8 +147,8 @@ def should_compress(response, cfg):
     answer = answers['format']
     if (not isinstance(answer, dict) or set(answer) - {'type', 'choice', 'confidence', 'probabilities'}
             or ('type' in answer and answer['type'] != 'choice')
-            or answer.get('choice') != 'compact' or not finite_number(answer.get('confidence'))
-            or not cfg.min_conf <= answer['confidence'] <= 1):
+            or (answer.get('choice') not in tuple(CRITERIA) if diagnostic else answer.get('choice') != 'compact') or not finite_number(answer.get('confidence'))
+            or not (cfg.min_conf if threshold is None else threshold) <= answer['confidence'] <= 1):
         return False
     if 'probabilities' in answer:
         probs = answer['probabilities']
@@ -188,6 +190,7 @@ def handle(params, goal, client, cfg, audit, log):
             if len(dumps(state).encode('utf-8')) > MAX_ENCODED:
                 raise ValueError()
     except Exception:
+        audit.explain("compress", "nokey" if client is None and cfg.mode != "deterministic" else "noeconomiccandidate")
         audit.bump('compress.skip')
         return dict(CONTINUE)
     try:
@@ -195,10 +198,14 @@ def handle(params, goal, client, cfg, audit, log):
             audit.bump('compress.call')
             audit.bump('compress.questions')
             response = client.decide(state, questions(), op='compress')
+            answer = response.get('answers', {}).get('format') if isinstance(response, dict) and isinstance(response.get('answers'), dict) else None
+            audit.explain('compress', classify_choice(answer, CRITERIA, cfg.min_conf,
+                          validator=lambda a: a['choice'] if should_compress(response, cfg, threshold=0, diagnostic=True) else None))
             if not should_compress(response, cfg):
                 audit.bump('compress.keep')
                 return dict(CONTINUE)
         else:
+            audit.explain('compress', 'local')
             audit.bump('compress.local')
         audit.bump('compress.fold')
         for key, value in {'input_bytes': raw_bytes, 'output_bytes': size, 'saved_bytes': raw_bytes - size}.items():
@@ -207,7 +214,8 @@ def handle(params, goal, client, cfg, audit, log):
         audit.write({'input_bytes': raw_bytes, 'output_bytes': size, 'saved_bytes': raw_bytes - size})
         log(f'compress fold: {raw_bytes} -> {size} bytes')
         return {'action': 'replace', 'output': candidate}
-    except Exception:
+    except Exception as error:
+        explain_error(audit, "compress", error)
         audit.bump('compress.error')
         audit.bump('compress.keep')
         log('compress error: keep')

@@ -1,6 +1,8 @@
 """Sparse, fail-open worker defaults. Explicit fields always belong to the host."""
 from __future__ import annotations
 
+from .audit import classify_choice, explain_error
+
 from collections import OrderedDict
 import hashlib
 import json
@@ -151,6 +153,7 @@ class Router:
             original = params.get("tool_input")
             if not enabled or client is None or not isinstance(tool, str) or tool not in SUBAGENT_TOOLS or not valid_input(original):
                 audit.bump("router.skip")
+                audit.explain("router", "disabled" if not enabled else "nokey" if client is None else "noeconomiccandidate")
                 return dict(CONTINUE)
             canonical = json.dumps(original, sort_keys=True, allow_nan=False).encode()
             if len(canonical) > 32768:
@@ -158,6 +161,7 @@ class Router:
                 return dict(CONTINUE)
             q = questions(original, cfg)
             if not q:
+                audit.explain("router", "explicitfields")
                 audit.bump("router.skip")
                 return dict(CONTINUE)
             # Full input stays local; canonical ordering makes equivalent inputs reusable.
@@ -170,12 +174,20 @@ class Router:
                 self.cache.move_to_end(key)
                 fills = self.cache[key]
                 audit.bump("router.cache")
+                audit.explain("router", "cache")
             else:
                 state = {k: redact(original[k]) for k in ("task", "system_prompt") if k in original}
                 audit.bump("router.call")
                 for _ in q:
                     audit.bump("router.questions")
                 resp = client.decide(state, q, op="router")
+                answers = resp.get("answers") if isinstance(resp, dict) else None
+                for name, question in q.items():
+                    a = answers.get(name) if isinstance(answers, dict) else None
+                    reason = (classify_choice(a, question["criteria"], cfg.min_conf,
+                              validator=lambda a: a.get("choice") if valid_answer(a, question) else None)
+                              if question["type"] == "choice" else "review")
+                    audit.explain("router", reason)
                 fills, malformed = evaluated(original, resp.get("answers") if isinstance(resp, dict) else None, cfg)
                 if malformed:
                     audit.bump("router.error")
@@ -188,7 +200,8 @@ class Router:
             if fills:
                 return {"action": "modify", "input": {**original, **json.loads(json.dumps(fills))}}
             return dict(CONTINUE)
-        except Exception:
+        except Exception as error:
+            explain_error(audit, "router", error)
             audit.bump("router.error")
             return dict(CONTINUE)
 

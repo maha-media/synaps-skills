@@ -29,6 +29,7 @@ USAGE = (
     "| `/jev economy [--save]` | preset: guard unchanged; router+triage on, deterministic compression; optional advice off; no savings claim |\n"
     "| `/jev compress mode jev\\|deterministic [--save]` | choose compression mode without enabling it |\n"
     "| `/jev budget [on\\|off\\|reset]` | optional session API budgets; limits: calls, cost, latency, errors, cooldown; --save for settings |\n"
+    "| `/jev explain [clear]` | bounded local diagnostics; clear only the ring, not accounting |\n"
     "| `/jev status` | configuration + session stats |\n"
     "| `/jev test` | one live decision: latency + cost |\n"
     "| `/jev guard off` | stop reviewing tool calls for this session (`--save` persists) |\n"
@@ -97,6 +98,17 @@ def _handle(params: dict, ext, send, host_call) -> dict:
     try:
         if sub == "key":
             _cmd_key(args[1:], ext, out, host_call)
+        elif sub == "explain":
+            from .audit import GLOSS
+            if args[1:] not in ([], ["clear"]):
+                out.error("Usage: /jev explain [clear]")
+            else:
+                if args[1:]:
+                    ext.audit.clear_explanations()
+                out.text("Last 64 plugin-process explanations, shared across sessions; not source authority. Clear affects only this ring, not counters or budgets.")
+                out.table(["sequence", "op", "reason", "meaning"],
+                          [[str(r["sequence"]), r["op"], r["reason"], GLOSS[r["reason"]]]
+                           for r in ext.audit.explanations()])
         elif sub == "status":
             _cmd_status(ext, out)
         elif sub == "test":
@@ -288,6 +300,7 @@ def _cmd_status(ext, out: Emitter) -> None:
             ["per-op (estimated Jev cost only)", str(s["op_stats"])],
             ["verdicts", ", ".join(f"{k}={v}" for k, v in sorted(ext.audit.counters.items())) or "—"],
         ]
+    rows.append(["explanations", "Last 64 plugin-process rows: /jev explain [clear]; clear is not accounting reset"])
     rows.append(["budget", json.dumps(ext.policy.snapshot(), sort_keys=True)])
     out.table(["jev", ""], rows)
     out.text("/jev on [--save]: all features including guard, mode unchanged. "

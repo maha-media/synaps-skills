@@ -41,6 +41,10 @@ class Audit:
     def bump(self, name):
         self.counts[name] += 1
 
+    def explain(self, op, reason):
+        # Benchmark output deliberately excludes diagnostic rows.
+        pass
+
     def write(self, record):
         # Frozen baseline emits raw records; deliberately discard them.
         pass

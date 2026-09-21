@@ -1,4 +1,6 @@
 """Explicit verification priority advice. No execution, authority, or session cache."""
+from .audit import classify_choice, explain_error
+
 import json
 import re
 
@@ -65,7 +67,7 @@ def _validate(data):
         raise ToolError("jev_verify: invalid input; follow the strict bounded task/changes/checks schema")
 
 
-def _choice(answer):
+def _choice(answer, threshold=.8):
     # No upstream prose/extra fields are accepted or returned. A malformed sibling
     # affects only its own candidate, not the rest of a well-formed batch.
     if not isinstance(answer, dict) or not {"choice", "confidence"} <= set(answer):
@@ -82,7 +84,7 @@ def _choice(answer):
     c, confidence = answer["choice"], answer["confidence"]
     if not isinstance(c, str) or c not in CHOICES:
         return None
-    if not finite_number(confidence) or not .8 <= confidence <= 1:
+    if not finite_number(confidence) or not threshold <= confidence <= 1:
         return None
     if "score" in answer and not finite_number(answer["score"]):
         return None
@@ -111,6 +113,7 @@ def call_verify(data, client, audit, *, enabled=False):
     answers, reason = {}, None
     if not optional:
         audit.bump("verification.skip")
+        audit.explain("verification", "noeconomiccandidate")
     elif client is None:
         reason = "no_key: configure with /jev key"
     elif not enabled:
@@ -138,18 +141,23 @@ def call_verify(data, client, audit, *, enabled=False):
                 answers = response.get("answers") if isinstance(response, dict) else None
                 if not isinstance(answers, dict) or set(answers) - questions.keys():
                     answers, reason = {}, "invalid_response"
-            except Exception:
+            except Exception as error:
+                explain_error(audit, "verification", error)
                 answers, reason = {}, "upstream_error"
             if reason:
                 audit.bump("verification.error")
     if optional and (client is None or not enabled):
         audit.bump("verification.skip")
+    if reason and reason != "upstream_error":
+        audit.explain("verification", "nokey" if client is None else "disabled" if not enabled else "invalidresponse" if reason == "invalid_response" else "review")
     out = {"advisory": True, "executed": False, "coverage_certified": False,
            "required_ids": required, "recommended_optional_ids": [],
            "lower_priority_optional_ids": [], "review_optional_ids": [], "decisions": [], "note": NOTE}
     groups = {"prioritize": ("recommended_optional_ids", "recommend"),
               "defer": ("lower_priority_optional_ids", "defer"), "review": ("review_optional_ids", "review")}
     for i, c in enumerate(optional):
+        if not reason:
+            audit.explain("verification", classify_choice(answers.get(f"q{i}"), CHOICES, validator=lambda a: _choice(a, threshold=0)))
         choice = _choice(answers.get(f"q{i}"))
         priority = choice if choice in ("prioritize", "defer") else "review"
         group, counter = groups[priority]

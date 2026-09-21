@@ -143,7 +143,9 @@ class Extension:
     def activate(self, api_key: str, *, source: str) -> None:
         """Bring the decision layer up with this key (idempotent, no restart)."""
         self.clear_caches()
-        self.client = DecisionClient(api_key, model=self.model_name(), timeout_s=self.timeout_s(), policy=self.policy)
+        self.client = DecisionClient(
+            api_key, model=self.model_name(), timeout_s=self.timeout_s(), policy=self.policy,
+            diagnostic=lambda op, reason: self.audit.explain(op, reason) if op != "guard" else None)
         self.client.stats = self.stats
         self.key_source = source
         self.recompute_features()
@@ -253,6 +255,7 @@ class Extension:
                 if not self.audit.counters.get("guard.inert"):
                     log("guard inert: no API key")
                 self.audit.bump("guard.inert")
+            self.audit.explain("guard", "continue")
             return {"action": "continue"}
 
         if kind == "after_tool_call":
@@ -264,6 +267,7 @@ class Extension:
                 return self.triage.handle(params, self.client, self.features["triage"], self.audit)
             if self.features["compress"]:
                 return compress.handle(params, self.goal, self.client, self.compress_cfg, self.audit, log)
+            self.audit.explain("compress", "disabled")
             return {"action": "continue"}
 
         if kind == "before_message":
@@ -304,8 +308,10 @@ class Extension:
         self.maybe_pick_up_key()
         tool_input = params.get("input") or {}
         if name == "jev_status":
-            return tools.call_status(self.client, self.audit, self.features, self.key_source, policy=self.policy, stats=self.stats)
+            return tools.call_status(self.client, self.audit, self.features, self.key_source, policy=self.policy, stats=self.stats, compress_mode=self.compress_cfg.mode)
         if self.client is None:
+            if name in ("jev_select", "jev_decide"):
+                self.audit.explain(name[4:], "nokey")
             raise tools.ToolError(
                 "jev: no API key configured. Ask the user to run `/jev key <apikey_…>` in synaps "
                 f"(or `scripts/setup.sh --key …`); keys come from {keys.GET_KEY_URL}."

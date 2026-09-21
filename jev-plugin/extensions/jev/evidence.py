@@ -1,4 +1,6 @@
 """Explicit relevance prioritization of supplied descriptors; never access sources."""
+from .audit import classify_choice, explain_error
+
 import json
 
 from .tools import ToolError
@@ -90,7 +92,7 @@ def _validate(data):
         raise ToolError("jev_evidence: invalid input; follow strict bounded task/candidates schema and output size limit")
 
 
-def _choice(answer):
+def _choice(answer, threshold=.8):
     if not isinstance(answer, dict) or not {"choice", "confidence"} <= set(answer):
         return None
     if set(answer) - {"type", "choice", "confidence", "probabilities", "score"}:
@@ -103,7 +105,7 @@ def _choice(answer):
     except (ValueError, TypeError, UnicodeError, RecursionError):
         return None
     c, confidence = answer["choice"], answer["confidence"]
-    if not isinstance(c, str) or c not in CHOICES or not finite_number(confidence) or not .8 <= confidence <= 1:
+    if not isinstance(c, str) or c not in CHOICES or not finite_number(confidence) or not threshold <= confidence <= 1:
         return None
     if "score" in answer and not finite_number(answer["score"]):
         return None
@@ -126,6 +128,7 @@ def call_evidence(data, client, audit, *, enabled=False):
     answers, reason = {}, None
     if not optional:
         audit.bump("evidence.skip")
+        audit.explain("evidence", "noeconomiccandidate")
     elif client is None or not enabled:
         reason = REASONS[0 if client is None else 1]
         audit.bump("evidence.skip")
@@ -154,14 +157,19 @@ def call_evidence(data, client, audit, *, enabled=False):
                     raise ValueError()
             except ValueError:
                 answers, reason = {}, "invalid_response"
-            except Exception:
+            except Exception as error:
+                explain_error(audit, "evidence", error)
                 answers, reason = {}, "upstream_error"
             if reason:
                 audit.bump("evidence.error")
+    if reason and reason != "upstream_error":
+        audit.explain("evidence", "nokey" if client is None else "disabled" if not enabled else "invalidresponse" if reason == "invalid_response" else "review")
     priorities, i = [], 0
     for c in data["candidates"]:
         priority = "required"
         if not c["required"]:
+            if not reason:
+                audit.explain("evidence", classify_choice(answers.get(f"q{i}"), CHOICES, validator=lambda a: _choice(a, threshold=0)))
             choice = _choice(answers.get(f"q{i}"))
             i += 1
             priority = choice if choice in ("inspect_first", "later") else "review"

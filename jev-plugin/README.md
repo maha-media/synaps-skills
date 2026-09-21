@@ -1041,3 +1041,29 @@ Configuration keys are `budget_enabled`, `budget_calls`, `budget_cost_usd`,
 `budget_latency_ms`, `budget_error_streak`, `budget_cooldown_s`. Numeric settings
 must be finite: calls 1–1,000,000; cost .000001–1000; latency 1–86,400,000 ms;
 errors 1–1000; cooldown .001–86,400 seconds. Calls, latency and errors are integers.
+
+### Local explanations
+
+Use `/jev explain` to see the last **64 plugin-process** diagnostic entries,
+shared across sessions handled by that process. `/jev explain clear` clears only
+this in-memory ring—not counters, usage accounting, budgets, circuit state, or
+lifecycle caches. `jev_status` exposes the same rows in `explanations`, alongside
+budget state and compression mode. No additional tool is advertised.
+
+Each row contains only a monotonic `sequence`, a fixed operation name, and a fixed
+reason code. The command supplies fixed local glosses: `lowconfidence` means a
+valid answer below the local threshold; `modelabstention` means a supplied
+abstention option; `invalidresponse` means failed schema validation;
+`transporterror` means transport failure. Budget denials retain their specific
+`budget_*` or `circuit_open` reason. Other local reasons distinguish `cache`,
+`local`, `disabled`, `nokey`, `explicitfields`, and `noeconomiccandidate`.
+`review` deliberately leaves ambiguous outcomes unresolved. Batched calls can
+produce multiple rows (including valid and invalid siblings); a cached outcome
+is reported as `cache`, not as a fresh model decision. Guard rows describe only
+local `continue`, `confirm`, or `block` actions; guard remains budget-exempt.
+
+These diagnostics contain no payloads, candidate/session/model IDs, model prose,
+exception strings, or timing. They are not written to files, logs, or traces and
+do not change the existing audit configuration. Clearing them is not an
+accounting reset. They do not certify truth, source authority, execution, or
+permission to fetch/read/delete anything; they never authorize an action.

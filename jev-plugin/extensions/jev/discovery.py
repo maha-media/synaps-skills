@@ -1,5 +1,7 @@
 """Opt-in discovery advice. Never activates, filters, reorders, or authorizes."""
 from collections import OrderedDict
+from .audit import classify_choice, explain_error
+
 import hashlib
 import json
 import math
@@ -111,11 +113,13 @@ class Discovery:
     def handle(self, params, client, enabled, audit):
         if not enabled or client is None or not recognized(params):
             audit.bump("discovery.skip")
+            audit.explain("discovery", "disabled" if not enabled else "nokey" if client is None else "noeconomiccandidate")
             return dict(CONTINUE)
         try:
             tool, payload, ids, state = prepare(params)
         except Exception:
             audit.bump("discovery.skip")
+            audit.explain("discovery", "disabled" if not enabled else "nokey" if client is None else "noeconomiccandidate")
             return dict(CONTINUE)
         try:
             session = params.get("session_id")
@@ -125,6 +129,7 @@ class Discovery:
                 key = hashlib.sha256(json.dumps(material, ensure_ascii=False).encode()).digest()
             if key is not None and key in self.cache:
                 audit.bump("discovery.cache")
+                audit.explain("discovery", "cache")
                 self.cache.move_to_end(key)
                 choice = self.cache[key]
             else:
@@ -139,6 +144,7 @@ class Discovery:
                     raise ValueError("answer size")
                 answers = response.get("answers") if isinstance(response, dict) else None
                 answer = answers.get("recommendation") if isinstance(answers, dict) else None
+                audit.explain("discovery", classify_choice(answer, criteria, MIN_CONFIDENCE))
                 choice = valid_choice(answer, criteria, threshold=0)
                 if choice is None:
                     audit.bump("discovery.abstain")
@@ -159,7 +165,8 @@ class Discovery:
                 raise ValueError("replacement size")
             audit.bump("discovery.recommend")
             return {"action": "replace", "output": output}
-        except Exception:
+        except Exception as error:
+            explain_error(audit, "discovery", error)
             # No raw query, catalog, answer or exception text in logs/audit.
             audit.bump("discovery.error")
             return dict(CONTINUE)

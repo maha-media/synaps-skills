@@ -104,6 +104,7 @@ def decide(answers: dict, cfg: GuardConfig) -> tuple[dict, str]:
 def handle(params: dict, client: DecisionClient, cfg: GuardConfig, audit, log) -> dict:
     tool = params.get("tool_runtime_name") or params.get("tool_name") or ""
     if tool not in cfg.tools:
+        audit.explain("guard", "continue")
         return {"action": "continue"}
     tool_input = params.get("tool_input") or {}
     state = {"call": summarize_call(tool, tool_input), "cwd": cfg.workspace}
@@ -113,6 +114,7 @@ def handle(params: dict, client: DecisionClient, cfg: GuardConfig, audit, log) -
         resp = client.decide(state, QUESTIONS, op="guard")
         result, why = decide(resp["answers"], cfg)
         ms = int((time.monotonic() - t0) * 1000)
+        audit.explain("guard", result["action"])
         audit.bump(f"guard.{result['action']}")
         log(f"guard {tool}: {result['action']} ({ms} ms) {why}")
         audit.write({"op": "guard", "tool": tool, "action": result["action"], "ms": ms,
@@ -121,6 +123,7 @@ def handle(params: dict, client: DecisionClient, cfg: GuardConfig, audit, log) -
         return result
     except (JevError, KeyError, TypeError, ValueError) as e:
         ms = int((time.monotonic() - t0) * 1000)
+        audit.explain("guard", "confirm")
         audit.bump("guard.error")
         log(f"guard {tool}: upstream error after {ms} ms → confirm ({e})")
         audit.write({"op": "guard", "tool": tool, "action": "confirm", "error": str(e), "ms": ms})

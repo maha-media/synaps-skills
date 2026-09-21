@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .audit import classify_choice, explain_error
+
 import json
 
 from .client import DecisionClient, JevError, usage_tokens
@@ -89,8 +91,13 @@ def call_decide(tool_input: dict, client: DecisionClient, audit) -> dict:
     try:
         resp = client.decide(state, q, op="decide")
     except JevError as e:
+        explain_error(audit, "decide", e)
         audit.bump("decide.error")
         raise ToolError(f"jev_decide: upstream error: {e}") from e
+    for name, question in q.items():
+        answers = resp.get("answers")
+        audit.explain("decide", classify_choice(answers.get(name) if isinstance(answers, dict) else None,
+                      question["criteria"], 0) if question["type"] == "choice" else "review")
     audit.bump("decide.ok")
     usage = resp.get("usage")
     tokens = usage_tokens(resp)
@@ -104,12 +111,13 @@ def call_decide(tool_input: dict, client: DecisionClient, audit) -> dict:
     return {"content": json.dumps(out, separators=(",", ":"))}
 
 
-def call_status(client: DecisionClient | None, audit, features: dict, key_source: str = "none", *, policy=None, stats=None) -> dict:
+def call_status(client: DecisionClient | None, audit, features: dict, key_source: str = "none", *, policy=None, stats=None, compress_mode=None) -> dict:
     policy = policy or getattr(client, "policy", None)
     if client is None:
         from . import keys  # local import keeps tools.py free of file-system concerns otherwise
         snap = {
             "active": False,
+            "compress_mode": compress_mode,
             "reason": "no API key configured",
             "how_to_fix": [
                 "In synaps: /jev key <apikey_…>  (validates, saves, activates — no restart)",
@@ -120,6 +128,7 @@ def call_status(client: DecisionClient | None, audit, features: dict, key_source
             "get_a_key": keys.GET_KEY_URL,
             "features": features,
             "counters": dict(audit.counters),
+            "explanations": audit.explanations(),
         }
         if stats is not None:
             snap.update(stats.snapshot())
@@ -130,9 +139,11 @@ def call_status(client: DecisionClient | None, audit, features: dict, key_source
     if policy:
         snap["budget"] = policy.snapshot()
     snap["active"] = True
+    snap["compress_mode"] = compress_mode
     snap["key_source"] = key_source
     snap["features"] = features
     snap["counters"] = dict(audit.counters)
+    snap["explanations"] = audit.explanations()
     snap["audit_file"] = str(audit.path) if audit.path else None
     return {"content": json.dumps(snap, indent=1)}
 
@@ -189,10 +200,13 @@ def call_select(data, client, audit):
     try:
         response = client.decide(data["context"], questions, op="select")
         answers = response.get("answers", {})
+        for q, question in questions.items():
+            audit.explain("select", classify_choice(answers.get(q) if isinstance(answers, dict) else None, question["criteria"]))
         if not isinstance(answers, dict):
             answers = {}
         reason = "abstain_or_invalid_or_low_confidence"
-    except Exception:
+    except Exception as error:
+        explain_error(audit, "select", error)
         answers, reason = {}, "upstream_error"
     results = []
     for i, candidates in enumerate(allowed):

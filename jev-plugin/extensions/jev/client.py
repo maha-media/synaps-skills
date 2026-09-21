@@ -24,6 +24,10 @@ class JevError(Exception):
     """Any upstream failure: network, auth, validation, rate limit."""
 
 
+class InvalidResponse(JevError):
+    """Response envelope or decoding failed (no payload retained)."""
+
+
 def usage_tokens(resp):
     usage = resp.get("usage") if isinstance(resp, dict) else None
     tokens = usage.get("input_tokens") if isinstance(usage, dict) else None
@@ -81,6 +85,7 @@ class DecisionClient:
         timeout_s: float = 3.0,
         base_url: str = API_URL,
         policy=None,
+        diagnostic=None,
     ) -> None:
         if not api_key:
             raise JevError("api_key is empty")
@@ -90,6 +95,7 @@ class DecisionClient:
         self.base_url = base_url
         self.stats = Stats()
         self.policy = policy
+        self.diagnostic = diagnostic
 
     # ── public ──────────────────────────────────────────────────────────────
 
@@ -135,7 +141,7 @@ class DecisionClient:
                     if time.monotonic() > deadline:
                         raise JevError("deadline exceeded")
                     if not isinstance(resp, dict):
-                        raise JevError("invalid response")
+                        raise InvalidResponse("invalid response")
                     wire_failed = False
                 except _Retryable as e:
                     retry = e
@@ -158,15 +164,21 @@ class DecisionClient:
                 if attempt >= 2 or remaining < delay + 0.1:
                     raise JevError("retry budget exhausted") from retry
                 time.sleep(delay)
-        except PolicyDenied:
+        except PolicyDenied as e:
+            if self.diagnostic:
+                self.diagnostic(op, e.reason)
+                e.diagnosed = True
             denied = True
             raise
         except Exception as e:
             failed = True
             self.stats.errors += 1
-            if isinstance(e, JevError):
-                raise
-            raise JevError("decision transport or response failure") from None
+            if self.diagnostic:
+                self.diagnostic(op, "invalidresponse" if isinstance(e, (InvalidResponse, json.JSONDecodeError, UnicodeError)) else "transporterror")
+            if not isinstance(e, JevError):
+                e = JevError("decision transport or response failure")
+            e.diagnosed = bool(self.diagnostic)
+            raise e from None
         finally:
             if policy and attempt:
                 ledger.latency_ms += max(0, time.monotonic() - t0) * 1000
@@ -221,7 +233,7 @@ class DecisionClient:
                     ra_s = 0.3
                 raise _Retryable(f"HTTP {e.code}", ra_s) from e
             raise JevError(f"HTTP {e.code}") from e
-        except JevError:
+        except (JevError, json.JSONDecodeError, UnicodeError):
             raise
         except Exception:
             # Never surface upstream payloads, URLs, credentials or exception text.
