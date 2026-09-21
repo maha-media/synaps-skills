@@ -34,7 +34,7 @@ STEPS = {
 
 
 def recognized(params):
-    return ((params.get("tool_runtime_name") or params.get("tool_name")) == "bash"
+    return (isinstance(params, dict) and (params.get("tool_runtime_name") or params.get("tool_name")) == "bash"
             and isinstance(params.get("tool_output"), str)
             and bool(FAILURE.match(params["tool_output"])))
 
@@ -44,8 +44,21 @@ def redact(text):
                   "[REDACTED PRIVATE KEY]", text, flags=re.S)
     text = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", text)
     text = re.sub(r"\b(?:apikey_|sk-|ghp_|github_pat_|AKIA)[A-Za-z0-9_/-]+", "[REDACTED]", text)
-    return re.sub(r"(?i)\b[\w-]*(?:api[_-]?key|token|password|secret)[\w-]*\s*[:=]\s*[^\s,;]+",
-                  "[REDACTED CREDENTIAL]", text)
+    # Consume complete quoted values (including escaped quotes), not just their
+    # first word. Keys may be JSON strings or shell-style assignments.
+    return re.sub(
+        r"""(?ix)(?:["']?[\w-]*(?:api[_-]?key|token|password|secret)[\w-]*["']?)
+        \s*[:=]\s*(?:"(?:\\.|[^"\\])*(?:"|\Z)|'(?:\\.|[^'\\])*(?:'|\Z)|[^\s,;]+)""",
+        "[REDACTED CREDENTIAL]", text)
+
+
+def finite_number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except (OverflowError, ValueError, TypeError):
+        return False
 
 
 def valid_choice(answer, candidates, threshold=0.8):
@@ -56,13 +69,16 @@ def valid_choice(answer, candidates, threshold=0.8):
         return None
     if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
         return None
-    if not math.isfinite(confidence) or not threshold <= confidence <= 1:
+    if not finite_number(confidence) or not threshold <= confidence <= 1:
         return None
-    for field in ("score", "probabilities"):
-        if field in answer:
-            vals = answer[field].values() if isinstance(answer[field], dict) else [answer[field]]
-            if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in vals):
-                return None
+    if "score" in answer and not finite_number(answer["score"]):
+        return None
+    if "probabilities" in answer:
+        probs = answer["probabilities"]
+        if not isinstance(probs, dict) or not probs:
+            return None
+        if any(not finite_number(v) or not 0 <= v <= 1 for v in probs.values()):
+            return None
     return c
 
 
@@ -71,6 +87,9 @@ class Triage:
         self.cache = OrderedDict()
 
     def handle(self, params, client, enabled, audit):
+        if not recognized(params):
+            audit.bump("triage.skip")
+            return dict(CONTINUE)
         output = params["tool_output"]
         if not enabled or client is None or len(output) > MAX_OUTPUT or re.search(r"(?i)truncat|elided|omitted", output):
             audit.bump("triage.skip")

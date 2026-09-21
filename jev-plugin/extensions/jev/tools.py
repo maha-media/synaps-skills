@@ -1,4 +1,4 @@
-"""tools — model-callable tools: jev_decide and jev_status."""
+"""tools — model-callable tools: jev_decide, jev_select and jev_status."""
 
 from __future__ import annotations
 

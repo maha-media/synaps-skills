@@ -81,13 +81,13 @@ class DecisionClient:
         Raises JevError on any failure. Retries once on 429/529 if there is
         budget left; never sleeps past the hook deadline.
         """
-        body = json.dumps({"state": state, "model": self.model, "questions": questions}).encode("utf-8")
         t0 = time.monotonic()
         deadline = t0 + self.timeout_s
         attempt = 0
         resp = {}
         failed = False
         try:
+            body = json.dumps({"state": state, "model": self.model, "questions": questions}).encode("utf-8")
             while True:
                 attempt += 1
                 remaining = deadline - time.monotonic()
@@ -107,10 +107,12 @@ class DecisionClient:
                     if attempt >= 2 or remaining < delay + 0.1:
                         raise JevError("retry budget exhausted") from e
                     time.sleep(delay)
-        except JevError:
+        except Exception as e:
             failed = True
             self.stats.errors += 1
-            raise
+            if isinstance(e, JevError):
+                raise
+            raise JevError("decision transport or response failure") from None
         finally:
             self._record(op, resp if isinstance(resp, dict) else {}, t0, failed)
 
@@ -153,25 +155,19 @@ class DecisionClient:
             with urllib.request.urlopen(req, timeout=timeout_s) as r:
                 return json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            detail = ""
-            try:
-                detail = e.read().decode("utf-8", "replace")[:300]
-            except Exception:  # noqa: BLE001
-                pass
             if e.code in (429, 529):
                 ra = e.headers.get("retry-after") if e.headers else None
                 try:
                     ra_s = float(ra) if ra else 0.3
                 except ValueError:
                     ra_s = 0.3
-                raise _Retryable(f"HTTP {e.code}: {detail}", ra_s) from e
-            raise JevError(f"HTTP {e.code}: {detail}") from e
-        except urllib.error.URLError as e:
-            raise JevError(f"network: {e.reason}") from e
-        except (TimeoutError, OSError) as e:
-            raise JevError(f"timeout/io: {e}") from e
-        except json.JSONDecodeError as e:
-            raise JevError(f"bad json: {e}") from e
+                raise _Retryable(f"HTTP {e.code}", ra_s) from e
+            raise JevError(f"HTTP {e.code}") from e
+        except JevError:
+            raise
+        except Exception:
+            # Never surface upstream payloads, URLs, credentials or exception text.
+            raise JevError("transport or response decoding failure") from None
 
     def _record(self, op: str, resp: dict, t0: float, failed: bool = False) -> None:
         s = self.stats
@@ -179,9 +175,11 @@ class DecisionClient:
         s.total_ms += int((time.monotonic() - t0) * 1000)
         usage = resp.get("usage")
         tokens = usage.get("input_tokens", 0) if isinstance(usage, dict) else 0
-        tokens = tokens if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens >= 0 else 0
+        tokens = tokens if isinstance(tokens, int) and not isinstance(tokens, bool) and 0 <= tokens <= 2**53 - 1 else 0
         s.input_tokens += tokens
-        s.last_model = str(resp.get("model") or s.last_model)
+        model = resp.get("model")
+        if isinstance(model, str) and len(model) <= 256:
+            s.last_model = model
         s.by_op[op] = s.by_op.get(op, 0) + 1
         o = s.op_stats.setdefault(op, {"calls": 0, "errors": 0, "input_tokens": 0, "total_ms": 0, "mean_ms": 0, "cost_usd": 0.0})
         o["calls"] += 1

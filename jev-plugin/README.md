@@ -66,7 +66,7 @@ Get a key at https://typesafe.ai.
 /jev guard on             # back on
 /jev guard off --save     # persist to plugins/jev/config
 /jev router off           # same pattern for router / compress
-/jev off                  # guard + router + compress; jev_decide / jev_status stay
+/jev off                  # guard + router + compress + triage; all three tools stay
 /jev guard                # show now / source / saved
 ```
 
@@ -259,7 +259,7 @@ at session start, independent of guard, not each turn.
 Offline regressions (sequential):
 
 ```sh
-python3 -B -m unittest discover -s jev-plugin/tests -p 'test*.py' -v
+python3 -B -m unittest discover -s jev-plugin/tests -p 'test_*.py' -v
 ```
 
 Optional **LIVE** synthetic benchmark (not part of offline verification):
@@ -269,8 +269,9 @@ python3 -B jev-plugin/scripts/benchmark_synthetic.py --live
 ```
 
 It discovers the already configured key without printing it, runs at most eight
-fixed public synthetic cases, and reports correct/abstain counts, input tokens,
-estimated cost and latency. It never sends project files and never sets a key.
+fixed public synthetic cases, and reports per-case expected/predicted labels,
+abstention and timing, plus correct/abstain counts, input tokens, estimated cost
+and nearest-rank p50/p95 latency. Raw outputs and transport errors are not printed. It never sends project files and never sets a key.
 Synthetic correctness is not production calibration; wall time includes network
 variance. Worker-tier optimization remains future work (existing optional router
 mapping is unchanged); compaction integration is deferred. No host/core changes.

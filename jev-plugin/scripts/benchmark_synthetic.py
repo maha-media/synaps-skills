@@ -2,6 +2,8 @@
 """Opt-in LIVE synthetic measurement. Never reads project data or prints keys."""
 import argparse
 import json
+import math
+import re
 from pathlib import Path
 import sys
 import time
@@ -33,21 +35,34 @@ def main():
     if not key:
         parser.exit(2, 'Not run: no configured key.\n')
     client = DecisionClient(key)
+    print(json.dumps(measure(client), indent=2))
+
+
+def measure(client):
+    """Only fixed synthetic inputs; emit labels and timing, never raw errors."""
     runner, audit = triage.Triage(), Audit(None)
-    correct = abstain = 0
+    rows = []
     t0 = time.monotonic()
-    for output, expected in CASES:
-        params = {'tool_name': 'bash', 'tool_output': output}
-        result = runner.handle(params, client, True, audit) if triage.recognized(params) else triage.CONTINUE
-        if result == triage.CONTINUE:
-            abstain += 1
-            correct += expected is None
-        else:
-            correct += expected is not None and ('category=' + expected + ';') in result['output'][len(output):]
-    print(json.dumps({'cases': len(CASES), 'correct_including_expected_abstentions': correct,
-                      'abstain': abstain, 'total_latency_ms': round((time.monotonic()-t0)*1000),
-                      'stats': client.stats.snapshot(),
-                      'caveat': 'Synthetic labels only; estimated Jev cost, not actual savings or real-world accuracy.'}, indent=2))
+    for i, (output, expected) in enumerate(CASES[:8]):
+        started = time.monotonic()
+        result = runner.handle({'tool_name': 'bash', 'tool_output': output}, client, True, audit)
+        advice = result.get('output', '')[len(output):]
+        match = re.search(r'category=([a-z]+);', advice)
+        predicted = match.group(1) if match else None
+        rows.append({'case': i + 1, 'expected': expected, 'predicted': predicted,
+                     'abstain': predicted is None,
+                     'latency_ms': round((time.monotonic() - started) * 1000, 3)})
+    timings = sorted(row['latency_ms'] for row in rows)
+    def percentile(p):
+        # Nearest-rank percentile; n <= 8, so p95 is the slowest case.
+        return timings[max(0, math.ceil(p * len(timings)) - 1)] if timings else 0
+    return {'cases': len(rows), 'results': rows,
+            'correct_including_expected_abstentions': sum(r['expected'] == r['predicted'] for r in rows),
+            'abstain': sum(r['abstain'] for r in rows),
+            'total_latency_ms': round((time.monotonic() - t0) * 1000),
+            'p50_latency_ms': percentile(.50), 'p95_latency_ms': percentile(.95),
+            'stats': client.stats.snapshot(),
+            'caveat': 'Synthetic labels only; estimated Jev cost, not actual savings or real-world accuracy.'}
 
 
 if __name__ == '__main__':

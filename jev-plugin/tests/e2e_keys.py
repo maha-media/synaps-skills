@@ -123,7 +123,7 @@ def main():
 
     print("── 1. inert start")
     names = [t["name"] for t in h.init["result"]["capabilities"]["tools"]]
-    check(names == ["jev_decide", "jev_status"], f"tools advertised while inert: {names}")
+    check(names == ["jev_decide", "jev_status", "jev_select"], f"tools advertised while inert: {names}")
     st = json.loads(h.request("tool.call", {"name": "jev_status", "input": {}})["result"]["content"])
     check(st.get("active") is False and "/jev key" in " ".join(st.get("how_to_fix", [])), "jev_status explains how to configure")
     r = h.request("tool.call", {"name": "jev_decide", "input": {"state": "x", "questions": {"q": {"type": "noul", "instructions": "?"}}}})

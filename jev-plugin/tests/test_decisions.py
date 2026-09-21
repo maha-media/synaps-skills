@@ -130,3 +130,92 @@ class Decisions(unittest.TestCase):
         self.run_triage(); self.run_triage()
         self.assertEqual(len(self.c.calls), 1)
         self.assertEqual(self.audit.counters['triage.cache'], 1)
+
+    def test_quoted_credentials_outbound_only(self):
+        values = ['fake json pass', 'fake token value', 'fake assignment words',
+                  'fake single words', 'fakeplain', 'fake escaped \\"quote']
+        text = ('{"password":"fake json pass","access_token":"fake token value"}\n'
+                '"api_key"="fake assignment words" secret=\'fake single words\'\n'
+                'PASSWORD=fakeplain "secret":"fake escaped \\"quote"')
+        output = self.p['tool_output'] + '\n' + text
+        with patch.object(self.audit, 'write') as audit_write:
+            result = self.run_triage(tool_output=output)
+        audit_write.assert_not_called()
+        self.assertTrue(result['output'].startswith(output))
+        outbound = self.c.calls[0][0]['failure_output']
+        for value in values:
+            self.assertNotIn(value, outbound)
+            self.assertNotIn(value, json.dumps(self.audit.counters))
+        self.assertNotIn('assignment words', outbound)
+
+    def test_direct_nonfailure_is_free(self):
+        for params in [{}, None, {'tool_name': 'read', 'tool_output': CASES[0][0]},
+                       dict(self.p, tool_output='all tests passed'),
+                       dict(self.p, tool_output=None)]:
+            self.assertEqual(self.t.handle(params, self.c, True, self.audit), triage.CONTINUE)
+        self.assertEqual(self.c.calls, [])
+
+    def test_validator_malformed_fields_and_huge_integers(self):
+        huge = 10**1000
+        good = {'choice': 'syntax', 'confidence': 1}
+        for field, values in {
+            'confidence': [huge, -huge, {}, [], None, True, float('inf')],
+            'score': [huge, -huge, {}, [], None, True, float('nan')],
+            'probabilities': [huge, [], None, True, {}, {'syntax': huge},
+                              {'syntax': -0.1}, {'syntax': 1.1}, {'syntax': []}]
+        }.items():
+            for value in values:
+                with self.subTest(field=field, value_type=type(value).__name__):
+                    self.assertIsNone(triage.valid_choice(dict(good, **{field: value}), ['syntax']))
+        self.assertEqual(triage.valid_choice(dict(good, score=2, probabilities={'syntax': 1}), ['syntax']), 'syntax')
+
+    def test_selection_invalid_siblings_do_not_erase_valid(self):
+        decision = {'instruction': 'Choose', 'candidates': [
+            {'id': 'syntax', 'description': 'source'}, {'id': 'tests', 'description': 'tests'}]}
+        for field in ['score', 'confidence', 'probabilities']:
+            bad = {'choice': 'syntax', 'confidence': 1, field: 10**1000}
+            if field == 'probabilities':
+                bad[field] = {'syntax': 10**1000}
+            with patch.object(self.c, 'decide', return_value={'answers': {
+                '0': bad, '1': {'choice': 'syntax', 'confidence': 1}}}):
+                result = json.loads(tools.call_select({'context': 'synthetic', 'decisions': [decision]*2}, self.c, self.audit)['content'])
+            self.assertEqual([r['id'] for r in result['decisions']], [None, 'syntax'])
+
+    def test_transport_decode_errors_and_invalid_usage(self):
+        from unittest.mock import MagicMock
+        c = DecisionClient('apikey_FAKE')
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'\xff'
+        with patch('jev.client.urllib.request.urlopen', return_value=response):
+            with self.assertRaises(JevError) as raised:
+                c.decide('synthetic', {}, op='triage')
+        self.assertNotIn('apikey_FAKE', str(raised.exception))
+        with patch.object(c, '_post', side_effect=RuntimeError('fake credential value')):
+            with self.assertRaises(JevError) as raised:
+                c.decide('synthetic', {}, op='triage')
+        self.assertNotIn('fake credential value', str(raised.exception))
+        self.assertEqual(c.stats.errors, 2)
+        self.assertEqual(c.stats.op_stats['triage']['errors'], 2)
+        for usage in [None, [], 'invalid', {'input_tokens': 10**1000},
+                      {'input_tokens': []}, {'input_tokens': True}, {'input_tokens': -1}]:
+            with patch.object(c, '_post', return_value={'usage': usage, 'model': {'bad': 1}}):
+                c.decide('synthetic', {}, op='select')
+            json.dumps(c.stats.snapshot())
+        self.assertEqual(c.stats.input_tokens, 0)
+        self.assertEqual(c.stats.calls, 9)
+
+    def test_benchmark_labels_timing_and_no_raw_errors(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('benchmark_synthetic', Path(__file__).resolve().parents[1] / 'scripts' / 'benchmark_synthetic.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        c = DecisionClient('apikey_FAKE')
+        with patch.object(c, '_post', side_effect=RuntimeError('fake credential value')):
+            result = module.measure(c)
+        self.assertEqual(result['cases'], 8)
+        self.assertEqual(c.stats.calls, 7)
+        self.assertEqual(result['abstain'], 8)
+        for row in result['results']:
+            self.assertEqual(set(row), {'case', 'expected', 'predicted', 'abstain', 'latency_ms'})
+        self.assertGreaterEqual(result['p95_latency_ms'], result['p50_latency_ms'])
+        self.assertNotIn('fake credential value', json.dumps(result))

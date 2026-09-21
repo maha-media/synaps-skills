@@ -7,7 +7,7 @@
     /jev guard on|off [--save]     flip the tool-call safety gate (session-only unless --save)
     /jev router on|off [--save]    flip subagent routing
     /jev compress on|off [--save]  flip output compression
-    /jev off|on [--save]           all three at once (jev_decide / jev_status stay available)
+    /jev off|on [--save]           all four hooks at once (jev_decide / jev_status / jev_select stay available)
 
 Output is streamed as `command.output` notifications (text/system/error/done)
 matched by `request_id`; the RPC response body itself is ignored by the TUI.
@@ -142,7 +142,7 @@ def _cmd_key(rest: list[str], ext, out: Emitter, host_call) -> None:
     ext.activate(value, source=f"file:{where}")
     out.text(
         "✓ Jev is active: " + ", ".join(k for k, v in ext.features.items() if v) + ".\n\n"
-        "The guard now reviews bash/write/edit/read calls; `jev_decide` and `jev_status` are live."
+        "The guard now reviews bash/write/edit/read calls; `jev_decide`, `jev_select` and `jev_status` are live."
     )
 
 
@@ -199,7 +199,7 @@ def _cmd_feature(names: list[str], rest: list[str], ext, out: Emitter, host_call
             out.text(
                 "⚠ Tool calls are no longer reviewed by Jev"
                 + (" until you run `/jev guard on`." if not persist else "; `/jev guard on --save` re-enables.")
-                + " `jev_decide` / `jev_status` remain available."
+                + " `jev_decide` / `jev_select` / `jev_status` remain available."
             )
     ext.audit.bump(f"feature.{'+'.join(names)}.{state}")
 
