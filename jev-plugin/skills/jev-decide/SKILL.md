@@ -6,8 +6,9 @@ description: Use when a task is many small decisions — triage, classify, route
 # jev-decide — calibrated decisions for the harness
 
 TypeSafe **Jev** is a *System One* model: it never writes, it only picks from
-answers you define and tells you how sure it is. This plugin puts it in three
-places in the Synaps harness and exposes it to you as a tool.
+answers you define and tells you how sure it is. This plugin integrates it
+through harness hooks and four explicit tools:
+`jev_decide`, `jev_select`, `jev_status`, and `jev_verify`.
 
 | Surface | What it does | You need to… |
 |---|---|---|
@@ -15,6 +16,8 @@ places in the Synaps harness and exposes it to you as a tool.
 | **Router** (`subagent_start`) | Fills `role` / `write_policy` (and `model` if a tier map is configured) when you omit them | Omit fields you don't have an opinion on. Explicit values are never overridden. |
 | **Compress** (`after_tool_call`, opt-in) | Elides the middle of large *routine* bash outputs at ingestion; never touches failures | Nothing. The marker tells you what was cut and how to get it back. |
 | **`jev_decide`** tool | Ask many typed questions about one `state` in one request | Read the rest of this page. |
+| **`jev_select`** tool | Batch supplied-ID candidate choices | Use for uncertain choices, not execution or authorization. |
+| **`jev_verify`** tool | Preserve required IDs and advise optional-check priority (default off) | Supply task, changes and checks; see the example below. |
 | **`jev_status`** tool | Session accounting: calls, tokens, cost, verdict counts | Call it when asked about cost or when a verdict looks wrong. |
 | **`/jev`** slash command (user-side) | `/jev key <apikey_…>` · `/jev status` · `/jev test` | If the user types `key …`/`status`/`help` as plain text, they meant `/jev …` — point them at it. |
 
@@ -155,6 +158,33 @@ discovery stays off by default. No worker authorization or scope changes.
 
 ## Explicit verification priority: `jev_verify`
 
+Call `jev_verify` with this public synthetic input (optional advice requires
+`/jev verification on`; the default-off call instead returns optionals for review):
+
+```json
+{
+  "task": "Fix parser whitespace",
+  "changes": ["Trim edge whitespace while preserving whitespace inside tokens."],
+  "checks": [
+    {"id": "parser-unit", "description": "Mandatory parser unit checks", "required": true},
+    {"id": "parser-edge", "description": "Leading/trailing whitespace and empty-input edge cases", "required": false},
+    {"id": "http", "description": "HTTP transport behavior unrelated to parser whitespace", "required": false}
+  ]
+}
+```
+
+| Result group | Meaning |
+|---|---|
+| `required_ids` | Caller-required list, preserved in input order without AI classification. |
+| `recommended_optional_ids` | Confident priority advice: consider these optional checks earlier. |
+| `lower_priority_optional_ids` | Confident lower priority, **not permission to skip**. |
+| `review_optional_ids` | Unknown, low-confidence, malformed, unavailable or disabled advice; caller review needed. |
+
+This does not force a full-suite waiver, preserves the caller-required list but
+can't discover missing mandates. Honor project/user/CI requirements outside this
+input too: structural preservation is **not proof that all required checks were
+included**. No result group certifies coverage or execution.
+
 Four tools are always advertised. `jev_verify({task, changes, checks})` accepts
 bounded task/change summaries and checks `{id, description, required}`. Use it only
 for uncertain optional-check priority, not execution or coverage certification.
@@ -166,6 +196,7 @@ check regardless of candidates. `deferred != safe to skip`.
 `/jev off`/`/jev on` toggle all features including verification. Shared key setup:
 `/jev key <apikey_…>`. Disabled/no-key calls preserve required IDs and put optionals
 in review; required-only calls cost nothing. One batch prioritizes optionals at
-confidence ≥0.8; unknown/malformed/low-confidence answers require review. No cache,
+confidence ≥0.8; unknown/malformed/low-confidence answers require review. No cache
+because host `hosttool.call` supplies no trusted session identity. No
 file access, shell commands, activation, or automatic hook calls. See README for
 strict character/UTF-8 byte and batch limits; never supply secrets.

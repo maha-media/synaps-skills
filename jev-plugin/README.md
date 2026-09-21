@@ -122,6 +122,7 @@ All keys live under `extension.jev.*` in `~/.synaps-cli/config`, or as
 | `router_read_only_at` | `0.15` | P(needs_write) at/below which `write_policy` → `read_only` |
 | `router_models` | `""` | `small=<id>,medium=<id>`; ids must already be worker-authorised; `frontier` always inherits |
 | `discovery` | `false` | opt-in query/descriptor API calls; `/jev discovery on\|off [--save]`; independent of guard |
+| `verification` | `false` | optional priority advice; `/jev verification on\|off [--save]`; independent of guard |
 | `triage` | `true` | advisory failure classification; `/jev triage on\|off [--save]`; independent of guard |
 | `compress` | `false` | opt-in; `/jev compress on\|off [--save]` |
 | `compress_tools` | `bash` | |
@@ -487,7 +488,8 @@ measures recommendation caching, not the new low-confidence regression.
    tokens/latency/cost, and fallback behavior before recommending cheaper tiers.
 
 These are evaluation priorities, not new tools, automatic routing authority, or
-proven savings. The registered tools remain `jev_decide`, `jev_select`, `jev_status`.
+proven savings. The four registered tools are `jev_decide`, `jev_select`,
+`jev_status`, and `jev_verify`.
 
 ## Sparse worker routing (0.3.1)
 
@@ -549,9 +551,10 @@ free repeat-cache, and router-disable bypass checks: one call, 484 input tokens,
 cost counter is rounded to $0.00002).
 
 These measurements exclude worker/frontier costs and downstream task quality;
-they establish neither cheaper worker execution nor net money savings. Latest
-known offline verification is **84 tests**, reported by the benchmark agent
-after the foreman's earlier 77-test verification. This documentation-only
+they establish neither cheaper worker execution nor net money savings. The
+historical routing checkpoint reported **84 offline tests**, following
+the foreman's earlier 77-test verification. Latest verification is **105 offline
+tests** (foreman-supplied; the foreman will rerun). This documentation-only
 finalization did not rerun tests or live calls and changed no feature toggles,
 user configuration, or model mappings.
 
@@ -562,6 +565,33 @@ advertised. `/jev verification on|off [--save]` controls optional verification
 advice, **default off**, independently of guard. `/jev off` and `/jev on` toggle
 **all six features**, including discovery and verification (and their opt-in API
 calls); they do not hide tools. Use the same `/jev key <apikey_…>` setup as above.
+
+Call `jev_verify` with this public synthetic input (optional advice requires
+`/jev verification on`; the default-off call instead returns optionals for review):
+
+```json
+{
+  "task": "Fix parser whitespace",
+  "changes": ["Trim edge whitespace while preserving whitespace inside tokens."],
+  "checks": [
+    {"id": "parser-unit", "description": "Mandatory parser unit checks", "required": true},
+    {"id": "parser-edge", "description": "Leading/trailing whitespace and empty-input edge cases", "required": false},
+    {"id": "http", "description": "HTTP transport behavior unrelated to parser whitespace", "required": false}
+  ]
+}
+```
+
+| Result group | Meaning |
+|---|---|
+| `required_ids` | Caller-required list, preserved in input order without AI classification. |
+| `recommended_optional_ids` | Confident priority advice: consider these optional checks earlier. |
+| `lower_priority_optional_ids` | Confident lower priority, **not permission to skip**. |
+| `review_optional_ids` | Unknown, low-confidence, malformed, unavailable or disabled advice; caller review needed. |
+
+This does not force a full-suite waiver, preserves the caller-required list but
+can't discover missing mandates. Honor project/user/CI requirements outside this
+input too: structural preservation is **not proof that all required checks were
+included**. No result group certifies coverage or execution.
 
 `jev_verify` accepts only `{task, changes, checks}`:
 - `task`: nonblank string, at most 4000 characters **and UTF-8 bytes**.
@@ -599,7 +629,8 @@ with `redacted_state_too_large`, no API call, and required IDs intact. Counters 
 accounting uses Stats operation `verification`. No content, IDs, answers, or
 exceptions are written to verification audit records.
 
-No cache: host `process.rs` sends only tool name/input, not trusted session identity.
+No cache: host `hosttool.call` (`process.rs`) sends only tool name/input, not
+trusted session identity.
 No model-supplied session ID is accepted or inferred from hooks. This tool reads no
 files/diffs, runs no shell commands, and never fires automatically from hooks.
 
@@ -621,3 +652,30 @@ and cost stay `null`), estimated input cost, network/hook latency and p50/p95, a
 output bytes. This is neither a frontier baseline nor evidence of fewer tests,
 reasoning turns, end-to-end savings, or net money saved. Offline regression tests:
 `python3 -m unittest discover -s jev-plugin/tests -p 'test_*.py'` (sequential).
+
+### Supplied live verification evidence
+
+Public synthetic reports are retained in readable JSON with a
+[concise evidence report](scripts/verification-benchmark/README.md). These are
+supplied measurements, not live calls rerun during documentation finalization.
+
+| Measurement | Result |
+|---|---|
+| Cases / optional decisions / API calls | 4 / 12 / 4 |
+| Input tokens / estimated Jev input cost | 2,777 / $0.000116634 |
+| Network p50 / p95 | 382.09 / 416.07 ms |
+| Correct / false priorities (weak labels) | 4 / 0; all 4 weak-labelled relevant checks found |
+| Review / lower priority | 8 / 0; 5 expected unknowns plus 3 not confidently deferred |
+| Caller-required preservation | All 4 cases and all 12 free variants |
+
+Preservation is structural, **not proof of coverage or that all required checks
+were included**. No actual checks or workers were launched. The first-optional
+comparator does not establish tests avoided, test-cost reduction, whole-bill
+savings, or end-to-end task quality.
+
+The separate supplied protocol smoke reports **4 registered tools**, default-disabled
+verification free, required-only free, and toggle-off free; guard-off independence
+and session-only toggles with **no configuration writes**. Its one verification
+API call used **690 input tokens**, estimated **$0.00002898**, mean **393 ms**.
+The JSON's cost counter rounds this to `$0.000029`; the precise estimate uses
+690 × $0.042 / 1,000,000. Discovery and verification remain **off by default**.
