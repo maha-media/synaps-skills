@@ -309,3 +309,5 @@ Hypotheses remain unverified against the actual system; **contradicted is not
 ruled out and later is not skip**. All mandatory checks still apply. This is
 priority advice, not truth/source authority, execution, retry, tool activation,
 fetch or approval. Consult actual evidence and project requirements yourself.
+
+Offline-first [frozen evaluation protocol](../../scripts/evaluation/README.md).

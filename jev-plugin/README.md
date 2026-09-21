@@ -1144,3 +1144,5 @@ later/review/error` counters and per-operation usage. There is no diagnosis
 payload audit or savings claim. `tests/diagnosis_fixture.py::diagnosis_fixture`
 is a callable public synthetic fixture for future held-out testing, **not a
 benchmark or efficacy evidence**.
+
+Frozen split tooling: [evaluation protocol](scripts/evaluation/README.md).
