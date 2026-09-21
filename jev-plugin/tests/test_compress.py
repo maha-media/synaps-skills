@@ -193,3 +193,67 @@ def test_whole_redaction_and_unique_middle_sent():
 def test_exact_threshold():
     response = copy.deepcopy(GOOD); response['answers']['format']['confidence'] = .85
     assert handle(client=Client(response))[0]['action'] == 'replace'
+
+
+@pytest.mark.parametrize('marker', [
+    'fail', 'fails', 'FAIL', 'failed', 'failure', 'failures:', 'exceptions:',
+    'exception', 'exit code 1', 'exit status 23',
+])
+@pytest.mark.parametrize('position', ['beginning', 'middle', 'tail'])
+def test_full_raw_failure_markers_skip(marker, position):
+    # Both sides exceed old head/tail windows; scan the full raw transcript.
+    raw = {'beginning': marker + '\n' + RAW,
+           'middle': RAW + marker + '\n' + RAW,
+           'tail': RAW + marker + '\n'}[position]
+    client = Client()
+    result, counts, records, logs = handle(raw, client)
+    assert result == c.CONTINUE
+    assert not client.calls and counts == {'compress.skip': 1}
+    assert not records and not logs
+
+
+def test_e2e_script_failure_fixture_skips_without_replacement():
+    # e2e_protocol's module_17 replacement is a no-op: the appended plural
+    # failures marker alone must protect the transcript, without a live call.
+    routine = 'routine progress ... ok\n' * 600 + 'test result: ok. 240 passed; 0 failed\n'
+    assert 'module_17::case_3 ... ok' not in routine
+    failing = routine + 'failures:\n    module_17::case_3\n'
+    client = Client()
+    result, counts, records, logs = handle(failing, client)
+    assert result == c.CONTINUE and not client.calls
+    assert counts == {'compress.skip': 1} and not records and not logs
+
+
+@pytest.mark.parametrize('summary', ['0 failed', 'exit code 0', 'exit status 0'])
+def test_zero_failure_summary_stays_eligible(summary):
+    client = Client()
+    raw = RAW + summary + '\n'
+    result = handle(raw, client)[0]
+    assert c.decode_output(result['output']) == raw
+    assert len(client.calls) == 1
+
+
+def test_captured_typed_diagnostic_below_gate_keeps():
+    # Reconstruct the typed response from the separately captured safe fields.
+    diagnostic = json.loads((Path(__file__).resolve().parents[1] /
+        'scripts/compress-benchmark/diagnostic.json').read_text())
+    measurement = diagnostic['measurements'][0]
+    response = {
+        'model': measurement['model'],
+        'usage': {k: measurement[k] for k in ('input_tokens', 'output_tokens')},
+        'answers': {'format': {'type': 'choice', **{k: diagnostic[k]
+            for k in ('choice', 'confidence', 'probabilities')}}},
+    }
+    assert response['answers']['format'] == {
+        'type': 'choice', 'choice': 'compact', 'confidence': .37,
+        'probabilities': {'compact': .57, 'keep': .37, 'unknown': .06}}
+    assert c.CompressConfig({}).min_conf == .85
+    client = Client(response)
+    result, counts, records, logs = handle(client=client)
+    assert result == c.CONTINUE and len(client.calls) == 1
+    assert counts == {'compress.call': 1, 'compress.questions': 1, 'compress.keep': 1}
+    assert not records and not logs
+    # Only confidence differs: standard captured metadata is otherwise valid.
+    accepted = copy.deepcopy(response)
+    accepted['answers']['format']['confidence'] = .85
+    assert c.should_compress(accepted, c.CompressConfig({}))

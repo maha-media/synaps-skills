@@ -842,8 +842,8 @@ Offline tests: `python3 -B -m unittest discover -s jev-plugin/tests -p 'test_ben
 ## Lossless identical-line compression (0.7.0)
 
 `/jev compress on|off [--save]` retains its existing controls, **off by default**
-and independent of guard. Do not automatically enable it. Reports and recognized
-failure triage retain priority. No new tool, host change, event/compaction change,
+and experimental, independent of guard. Do not automatically enable it. Reports
+and recognized failure triage retain priority. No new tool, host change, event/compaction change,
 archive, source read, or automatic command execution is involved.
 
 Only adjacent exactly identical `splitlines(keepends=True)` lines fold. Every
@@ -926,9 +926,10 @@ Default execution discovers no key, constructs no API client and performs no
 network I/O; `jev` and offline hook latencies are `null`. An explicit `--live`
 opt-in uses production `DecisionClient.decide`, bounded deadline and transport,
 pinned to `jev-1.13.0`: four eligible cases, one question each, at most four wire
-attempts, no retries, cache or repeats even after errors. No live run is included
-in this change. Returned model metadata is allowlisted; missing usage remains
-`null`. Usage is recorded separately without altering the response passed to
+attempts, no retries, cache or repeats even after errors. The supplied
+[negative live result and separate diagnostic](scripts/compress-benchmark/README.md)
+are retained without additional live calls or benchmark reruns. Returned model
+metadata is allowlisted; missing usage remains `null`. Usage is recorded separately without altering the response passed to
 production validation: its current strict schema accepts standard token fields
 but conservatively keeps output on extra usage fields or malformed answers.
 Broader API metadata compatibility is not established by these offline mocks.
@@ -940,3 +941,13 @@ Estimated Jev input-token cost is separate, and unknown when usage is absent.
 Live hook and network medians/p95 use linear interpolation at `(n-1)*p`; four
 samples are descriptive, not a latency SLA. No upstream exception text, fixture
 bodies or tool-input traces are printed.
+
+The supplied four-case run kept all 100,984 bytes (four calls, zero folds), while
+forced local compact reduced the same payload to 1,736 bytes without an API.
+There is no evidence Jev did better here: it added latency and estimated cost
+without byte reduction. **Do not make a Jev call when deterministic processing
+suffices.** This result does not enable a new mode or request new configuration;
+the current opt-in mode remains experimental and off by default. Downstream host
+handling may truncate output, so exact local reconstruction is not an end-to-end
+savings or delivery guarantee. See the linked report for the separate low-confidence
+diagnostic; its cause cannot be assigned to the four uncaptured responses.
