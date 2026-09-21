@@ -60,7 +60,7 @@ def test_estimated_cost_can_overshoot_one_inflight_then_stop():
 
 
 @pytest.mark.parametrize('usage', [None, {}, [], {'input_tokens': True}, {'input_tokens': -1},
-    {'input_tokens': 2**53+1}, {'input_tokens': '10'}, {'input_tokens': float('nan')}])
+    {'input_tokens': 2**53}, {'input_tokens': 2**53+1}, {'input_tokens': '10'}, {'input_tokens': float('nan')}])
 def test_unknown_usage_stops_optional_not_guard(usage):
     c, p = client()
     with patch.object(c, '_bounded_post', return_value={'usage': usage}) as post:
@@ -72,7 +72,8 @@ def test_unknown_usage_stops_optional_not_guard(usage):
     assert c.stats.snapshot()['cost_usd'] is None
     assert c.stats.snapshot()['known_input_tokens'] == 0
     assert p.ledger().wire_attempts == 1
-    assert usage_tokens(response(2**53)) == 2**53
+    assert usage_tokens(response(2**53 - 1)) == 2**53 - 1
+    assert usage_tokens(response(2**53)) is None
 
 
 def test_latency_deadline_and_full_retry_delay_counted():
@@ -175,7 +176,7 @@ def test_extension_scope_spoof_guard_failure_reactivation_and_reset():
     commands.handle({'args': ['budget', 'reset']}, ext, events.append, lambda *a: None)
     assert p.ledger().wire_attempts == 0
     assert ext.features['guard']
-    assert ext.client.stats.calls == 1
+    assert ext.client.stats.calls == 2
 
 
 def test_commands_validation_no_writes_no_key_status():
@@ -283,3 +284,77 @@ def test_hook_key_pickup_scopes_new_client_and_user_tests_exempt():
             ext.client.decide('x', {}, op=op)
     assert ext.policy.ledgers['unscoped'].wire_attempts == 1
     assert ext.client.stats.calls == 5
+
+
+@pytest.mark.parametrize('tokens', [10, None])
+def test_session_stats_survive_deactivation_new_key_and_budget_reset(tokens):
+    ext = jev_ext.Extension()
+    shared = ext.stats
+    ext.activate('offline-first', source='fixture')
+    with patch.object(DecisionClient, '_bounded_post', return_value=response(tokens)) as post:
+        ext.client.decide('x', {}, op='guard')
+        ext.client.decide('x', {})
+        ext.audit.bump('guard.allow')
+        before = shared.snapshot()
+        budget = ext.policy.snapshot()
+        ext.deactivate()
+        assert ext.stats is shared
+        with patch('jev_ext.keys.discover', return_value=(None, 'none')):
+            inactive = json.loads(ext.tool_call({'name': 'jev_status'})['content'])
+        assert not inactive['active']
+        assert all(inactive[k] == v for k, v in before.items())
+        assert inactive['counters']['guard.allow'] == 1
+        events = []
+        with patch('jev_ext.keys.discover', return_value=(None, 'none')):
+            commands.handle({'request_id': 'status', 'args': ['status']}, ext,
+                            events.append, lambda *_: None)
+        text = json.dumps(events)
+        assert 'calls / errors' in text and '2 / 0' in text
+        if tokens is None:
+            assert 'unknown / unknown' in text
+            assert inactive['input_tokens'] is inactive['cost_usd'] is None
+        ext.activate('offline-second', source='fixture')
+        assert ext.client.stats is shared
+        assert shared.snapshot() == before
+        assert ext.policy.snapshot() == budget
+        commands.handle({'request_id': 'reset', 'args': ['budget', 'reset']}, ext,
+                        lambda *_: None, lambda *_: None)
+        assert shared.snapshot() == before
+        ext.client.decide('x', {}, op='guard')
+        assert post.call_count == 3
+    after = shared.snapshot()
+    assert (after['calls'], after['wire_attempts'], after['retries']) == (3, 3, 0)
+    assert after['by_op'] == {'guard': 2, 'decide': 1}
+    assert after['known_input_tokens'] == (30 if tokens is not None else 0)
+    assert after['unknown_usage_calls'] == after['unknown_usage_attempts'] == (3 if tokens is None else 0)
+    assert DecisionClient('offline-standalone').stats.calls == 0
+
+
+def test_late_known_usage_recorded_once():
+    c, p = client(enabled=False)
+    # A late response is known even when the deadline makes the call fail.
+    clock = [0.0]
+    def late(body, remaining):
+        clock[0] = 5.0
+        return response(7)
+    with patch('time.monotonic', side_effect=lambda: clock[0]), patch.object(c, '_bounded_post', side_effect=late):
+        with pytest.raises(JevError, match='deadline'):
+            c.decide('x', {})
+    s = c.stats.snapshot()
+    assert s['known_input_tokens'] == 7
+    assert s['unknown_usage_calls'] == s['unknown_usage_attempts'] == 0
+    assert s['op_stats']['decide']['known_input_tokens'] == 7
+
+
+def test_record_explicit_attempt_token_sum_and_unknown_count():
+    c = DecisionClient('offline')
+    c._record('decide', response(11), 0, wire_attempts=2, known_tokens=18)
+    s = c.stats.snapshot()
+    assert s['known_input_tokens'] == s['op_stats']['decide']['known_input_tokens'] == 18
+    assert s['unknown_usage_calls'] == 0
+    c._record('decide', {}, 0, wire_attempts=2, known_tokens=7, unknown_attempts=1)
+    s = c.stats.snapshot()
+    assert s['known_input_tokens'] == s['op_stats']['decide']['known_input_tokens'] == 25
+    assert s['unknown_usage_calls'] == s['op_stats']['decide']['unknown_usage_calls'] == 1
+    assert s['op_stats']['decide']['unknown_usage_attempts'] == 1
+    assert s['input_tokens'] is s['cost_usd'] is None

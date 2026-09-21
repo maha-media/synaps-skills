@@ -41,7 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from jev import audit as audit_mod  # noqa: E402
 from jev import commands, compress, discovery, evidence, guard, keys, reports, router, tools, triage, verify  # noqa: E402
 from jev.policy import BudgetPolicy
-from jev.client import DecisionClient, JevError  # noqa: E402
+from jev.client import DecisionClient, JevError, Stats  # noqa: E402
 
 PLUGIN_ID = "jev"
 INERT_RECHECK_S = 5.0
@@ -97,6 +97,7 @@ def _bool(v, default: bool) -> bool:
 
 class Extension:
     def __init__(self) -> None:
+        self.stats = Stats()
         self.client: DecisionClient | None = None
         self.cfg: dict = {}
         self.policy = BudgetPolicy()
@@ -143,6 +144,7 @@ class Extension:
         """Bring the decision layer up with this key (idempotent, no restart)."""
         self.clear_caches()
         self.client = DecisionClient(api_key, model=self.model_name(), timeout_s=self.timeout_s(), policy=self.policy)
+        self.client.stats = self.stats
         self.key_source = source
         self.recompute_features()
         log("active (" + ", ".join(k for k, v in self.features.items() if v) + f") key from {source}")
@@ -302,7 +304,7 @@ class Extension:
         self.maybe_pick_up_key()
         tool_input = params.get("input") or {}
         if name == "jev_status":
-            return tools.call_status(self.client, self.audit, self.features, self.key_source, policy=self.policy)
+            return tools.call_status(self.client, self.audit, self.features, self.key_source, policy=self.policy, stats=self.stats)
         if self.client is None:
             raise tools.ToolError(
                 "jev: no API key configured. Ask the user to run `/jev key <apikey_…>` in synaps "

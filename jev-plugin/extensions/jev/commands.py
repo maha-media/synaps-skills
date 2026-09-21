@@ -278,8 +278,9 @@ def _cmd_status(ext, out: Emitter) -> None:
         ["local compression folds", str(ext.audit.counters.get("compress.local", 0))],
         ["audit", str(ext.audit.path) if ext.audit.path else "(off)"],
     ]
-    if active:
-        s = ext.client.stats.snapshot()
+    stats = ext.client.stats if active else ext.stats
+    if stats is not None:
+        s = stats.snapshot()
         rows += [
             ["calls / errors", f"{s['calls']} / {s['errors']}"],
             ["tokens / cost", f"{s['input_tokens'] if s['input_tokens'] is not None else 'unknown'} / {_cost(s['cost_usd'])}"],

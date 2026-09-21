@@ -104,7 +104,7 @@ def call_decide(tool_input: dict, client: DecisionClient, audit) -> dict:
     return {"content": json.dumps(out, separators=(",", ":"))}
 
 
-def call_status(client: DecisionClient | None, audit, features: dict, key_source: str = "none", *, policy=None) -> dict:
+def call_status(client: DecisionClient | None, audit, features: dict, key_source: str = "none", *, policy=None, stats=None) -> dict:
     policy = policy or getattr(client, "policy", None)
     if client is None:
         from . import keys  # local import keeps tools.py free of file-system concerns otherwise
@@ -121,6 +121,8 @@ def call_status(client: DecisionClient | None, audit, features: dict, key_source
             "features": features,
             "counters": dict(audit.counters),
         }
+        if stats is not None:
+            snap.update(stats.snapshot())
         if policy:
             snap["budget"] = policy.snapshot()
         return {"content": json.dumps(snap, indent=1)}

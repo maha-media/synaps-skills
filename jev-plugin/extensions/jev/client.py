@@ -27,7 +27,7 @@ class JevError(Exception):
 def usage_tokens(resp):
     usage = resp.get("usage") if isinstance(resp, dict) else None
     tokens = usage.get("input_tokens") if isinstance(usage, dict) else None
-    return tokens if type(tokens) is int and 0 <= tokens <= 2**53 else None
+    return tokens if type(tokens) is int and 0 <= tokens <= 2**53 - 1 else None
 
 
 @dataclass
@@ -109,6 +109,7 @@ class DecisionClient:
         failed = False
         denied = False
         unknown_attempts = 0
+        known_tokens = 0
         try:
             body = json.dumps({"state": state, "model": self.model, "questions": questions}).encode("utf-8")
             while True:
@@ -143,6 +144,8 @@ class DecisionClient:
                     if tokens is None:
                         unknown_attempts += 1
                         self.stats.unknown_usage_attempts += 1
+                    else:
+                        known_tokens += tokens
                     if policy:
                         policy.observe(ledger, tokens, wire_failed)
                 if retry is None:
@@ -169,7 +172,7 @@ class DecisionClient:
                 ledger.latency_ms += max(0, time.monotonic() - t0) * 1000
             if not denied or attempt:
                 self._record(op, resp if isinstance(resp, dict) else {}, t0, failed,
-                             wire_attempts=attempt, unknown_attempts=unknown_attempts)
+                             wire_attempts=attempt, unknown_attempts=unknown_attempts, known_tokens=known_tokens)
 
     # ── internals ───────────────────────────────────────────────────────────
 
@@ -225,11 +228,12 @@ class DecisionClient:
             raise JevError("transport or response decoding failure") from None
 
     def _record(self, op: str, resp: dict, t0: float, failed: bool = False,
-                *, wire_attempts: int = 0, unknown_attempts: int = 0) -> None:
+                *, wire_attempts: int = 0, unknown_attempts: int = 0,
+                known_tokens: int | None = None) -> None:
         s = self.stats
         elapsed = max(0, int((time.monotonic() - t0) * 1000))
-        tokens = usage_tokens(resp)
-        unknown = tokens is None or unknown_attempts > 0
+        tokens = usage_tokens(resp) if known_tokens is None else known_tokens
+        unknown = tokens is None or unknown_attempts > 0 or (known_tokens is not None and not wire_attempts)
         s.calls += 1
         s.total_ms += elapsed
         s.unknown_usage_calls += int(unknown)
