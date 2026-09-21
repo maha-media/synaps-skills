@@ -602,3 +602,22 @@ exceptions are written to verification audit records.
 No cache: host `process.rs` sends only tool name/input, not trusted session identity.
 No model-supplied session ID is accepted or inferred from hooks. This tool reads no
 files/diffs, runs no shell commands, and never fires automatically from hooks.
+
+### Synthetic verification benchmark
+
+[`scripts/benchmark_verification.py`](scripts/benchmark_verification.py) defaults to
+an offline structural report: no key discovery, client, or network; Jev measurements
+are `null`. Run `python3 jev-plugin/scripts/benchmark_verification.py` from the repo
+root. Explicit `--live --model jev1.13.0` uses existing key discovery for four fixed
+public cases, one batch each, maximum four wire calls with retries disabled and a
+3-second deadline per call. No fixture check or real tool is executed.
+
+Weak, explicit fixture priorities compare first-optional input order against Jev's
+optional partition, reporting recall, false priorities and review separately.
+Required preservation is a structural invariant, **not** evidence all mandatory
+checks were enumerated; the injection case is not a safety proof. No-hint overhead
+is defined as zero, not measured. Reports include actual input usage (unknown usage
+and cost stay `null`), estimated input cost, network/hook latency and p50/p95, and
+output bytes. This is neither a frontier baseline nor evidence of fewer tests,
+reasoning turns, end-to-end savings, or net money saved. Offline regression tests:
+`python3 -m unittest discover -s jev-plugin/tests -p 'test_*.py'` (sequential).
