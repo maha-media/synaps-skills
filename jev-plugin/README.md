@@ -786,8 +786,7 @@ Opt in with `/jev reports on|off [--save]` (default **off**, independent of guar
 `/jev on` and `/jev off` include reports; all **five** existing tools remain
 advertised. There is no new tool or host change. Status exposes
 `reports.call/questions/cache/skip/advice/abstain/error` and actual `reports`
-operation cost, tokens and latency. There is no report benchmark or live
-quality/savings claim.
+operation cost, tokens and latency. There is no live quality/savings claim.
 
 Only exact runtime `subagent_collect` results qualify (runtime name takes
 precedence over display name). Running, expired, malformed, oversized,
@@ -818,3 +817,27 @@ raw payload, handle and client model; activation clears it. Invalid sessions
 bypass caching, global errors are not cached. No report payload or upstream
 exception is written to audit logs. This is advisory claim triage, not independent
 inspection of repository state or proof of worker success.
+
+### Synthetic reports benchmark
+
+[`scripts/benchmark_reports.py`](scripts/benchmark_reports.py) exercises production
+`Reports.handle` with four fixed public synthetic collect envelopes; `fixtures()`
+is reusable. Run `python3 -B jev-plugin/scripts/benchmark_reports.py` for the
+no-key-discovery offline report (live measurements are `null`). It writes only
+stdout. Off/no-key/running/malformed and terminal-status variants are free.
+Explicit `--live` discovers a key and permits at most four attempts / eight
+questions, pinned to `jev-1.13.0`, with no retries. Same-session/raw cache repeats
+include abstentions; initial errors are not repeated. Only worker prose reaches
+the API, never expected labels or synthetic lifecycle/authorization diagnostics.
+
+Flag precision/recall uses fixed weak labels against a cheap deterministic
+no-semantic-flags baseline, not a frontier model. The contradiction case's
+primary label is `conflicting_claims`; `reported_failure` is also plausible.
+No flags is ambiguous abstention, not success certification. Preservation checks
+cover original JSON values, input nonmutation and advisory-only output; no
+transcript compression or worker/check execution occurs. Output bytes total the
+four initial raw tool-result serializations, not hook envelopes; deltas include
+formatting changes and may be negative. Usage/cost remain null when unknown;
+returned model names are allowlisted. No live run or savings claim is supplied.
+
+Offline tests: `python3 -B -m unittest discover -s jev-plugin/tests -p 'test_benchmark_reports.py' -v`.
