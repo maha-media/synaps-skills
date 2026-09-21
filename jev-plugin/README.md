@@ -2,14 +2,16 @@
 
 Puts [TypeSafe Jev](https://docs.typesafe.ai) — a fast, calibrated *System One*
 decision model that never writes, only picks — into the agent harness as a
-plugin. The Synaps runtime is untouched; everything rides on the existing
-extension hooks.
+plugin. Decision policy stays plugin-only, using the existing extension hooks;
+output replacement also depends on host runtime handling (see measurement limits).
 
 | Feature | Hook | Default | Fails |
 |---|---|---|---|
 | **Guard** — risk / secrets / workspace-escape gate on `bash` `write` `edit` `read` | `before_tool_call` → `continue` / `confirm` / `block` | on | **closed** (confirm) |
 | **Router** — fill omitted `role`, `write_policy` (→ `read_only` only), `model` (tier map) on `subagent_start` | `before_tool_call` → `modify` | on | open |
 | **Compress** — elide the middle of large routine `bash` outputs at ingestion | `after_tool_call` → `replace` | **off** | open |
+| **Triage** — preserve failures and append advisory diagnostic IDs | `after_tool_call` → `continue` / `replace` | on | open (abstain) |
+| **`jev_select`** — batch choices among supplied candidate IDs | tool | on | abstain / tool error |
 | **`jev_decide`** — up to 64 typed questions about one `state` in one ~0.4 s call | tool | on | tool error |
 | **`jev_status`** — calls, tokens, cost, verdict counters | tool | on | — |
 
@@ -65,7 +67,8 @@ Get a key at https://typesafe.ai.
 /jev guard off            # this session only — no more ~0.4 s review per tool call
 /jev guard on             # back on
 /jev guard off --save     # persist to plugins/jev/config
-/jev router off           # same pattern for router / compress
+/jev router off           # same pattern for router / compress / triage
+/jev triage off           # skip advisory failure classification; guard stays independent
 /jev off                  # guard + router + compress + triage; all three tools stay
 /jev guard                # show now / source / saved
 ```
@@ -117,6 +120,7 @@ All keys live under `extension.jev.*` in `~/.synaps-cli/config`, or as
 | `router_min_conf` | `0.8` | |
 | `router_read_only_at` | `0.15` | P(needs_write) at/below which `write_policy` → `read_only` |
 | `router_models` | `""` | `small=<id>,medium=<id>`; ids must already be worker-authorised; `frontier` always inherits |
+| `triage` | `true` | advisory failure classification; `/jev triage on\|off [--save]`; independent of guard |
 | `compress` | `false` | opt-in; `/jev compress on\|off [--save]` |
 | `compress_tools` | `bash` | |
 | `compress_min_bytes` | `6000` | |
@@ -265,16 +269,57 @@ python3 -B -m unittest discover -s jev-plugin/tests -p 'test_*.py' -v
 Optional **LIVE** synthetic benchmark (not part of offline verification):
 
 ```sh
-python3 -B jev-plugin/scripts/benchmark_synthetic.py --live
+python3 -B jev-plugin/scripts/benchmark_synthetic.py --live > /tmp/jev-synthetic-benchmark.json
 ```
 
 It discovers the already configured key without printing it, runs at most eight
 fixed public synthetic cases, and reports per-case expected/predicted labels,
 abstention and timing, plus correct/abstain counts, input tokens, estimated cost
 and nearest-rank p50/p95 latency. Raw outputs and transport errors are not printed. It never sends project files and never sets a key.
-Synthetic correctness is not production calibration; wall time includes network
-variance. Worker-tier optimization remains future work (existing optional router
-mapping is unchanged); compaction integration is deferred. No host/core changes.
+
+Measured synthetic smoke (`jev-1.13.0`, captured in
+`/tmp/jev-synthetic-benchmark.json`):
+
+| Measurement | Result |
+|---|---|
+| Cases / API calls | 8 / 7 |
+| Expected outcomes, including abstentions | 7/8 |
+| Confident correct classifications | 5: dependency, syntax, assertion, permission, timeout |
+| Other outcomes | SDK mismatch abstained instead of expected `environment`; unexplained failure abstained; successful output skipped (no API call) |
+| Input tokens | 3036 |
+| Estimated Jev input-token cost | $0.000127512 (~$0.000128) |
+| Mean API-call latency | 462 ms |
+| All-case latency, nearest-rank p50 / p95 | 458.176 / 500.692 ms |
+
+The three null outcomes include two API abstentions and one local success skip;
+7/8 is therefore not seven confident classifications. To reproduce this
+measurement, run the optional live command above from the repository root with
+an already configured key, then compare the JSON's per-case results and
+`stats.op_stats.triage`. The cost there is more precise than the rounded aggregate
+cost. API-call mean excludes the local skip; all-case percentiles include it.
+Calls incur charges, and timings and decisions may vary between runs.
+
+A separate live framed-plugin protocol smoke also passed two supplied candidate
+choices, preserved the original failure output, confirmed zero additional cost
+on a repeat cache hit, and checked the triage toggle and guard independence.
+It used 2 API calls, 890 input tokens, an estimated ~$0.000037, and a mean API-call
+latency of 357 ms. For a comparable protocol measurement, batch the two supplied
+choices through `jev_select`, submit a recognized failure through
+`after_tool_call`, repeat it in the same session to check the cache, and compare
+status counter deltas while toggling triage independently of guard. These are
+protocol-process observations, not proof that an installed host session has
+reloaded this plugin or delivered replacement text to the model.
+
+These small synthetic smokes are not production accuracy or calibration
+measurements and provide no evidence of net savings. Wall time includes network
+variance; estimated Jev input-token costs exclude frontier-model and other costs.
+Worker-tier optimization remains future work (existing optional router mapping
+is unchanged); compaction integration is deferred.
+
+**No host/core policy changes:** the new decision policy stays plugin-only.
+An independent host runtime fix is needed for an `after_tool_call` `Replace` to
+override old streamed text; otherwise opt-in compression may not reach the model.
+The protocol smoke does not establish that this host fix is installed or active.
 
 Transport deadlines include the existing single rate-limit retry within a maximum
 four-second budget (below the host's five seconds). A scoped POSIX main-thread
