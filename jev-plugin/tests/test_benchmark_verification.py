@@ -37,6 +37,15 @@ class BenchmarkTests(unittest.TestCase):
             self.assertEqual(row['calls'], 0)
             self.assertTrue(row['required_retained'] and row['optional_partition'] and row['no_execution'])
 
+    def test_cli_default_model_exact_pin(self):
+        with patch('jev.keys.discover', return_value=('public-test-placeholder', None)), \
+             patch.object(bench, 'SingleAttemptClient') as client, \
+             patch.object(bench, 'report', return_value={}), \
+             patch('urllib.request.urlopen', side_effect=AssertionError('network forbidden')), \
+             contextlib.redirect_stdout(io.StringIO()):
+            bench.main(['--live'])
+        client.assert_called_once_with('public-test-placeholder', 'jev-1.13.0')
+
     def test_fixture_bounds_and_baseline(self):
         cases = bench.fixtures()
         self.assertEqual(len(cases), bench.MAX_CALLS)
@@ -56,7 +65,7 @@ class BenchmarkTests(unittest.TestCase):
         def wire(body, *, timeout_s):
             request = json.loads(body)
             bodies.append(request)
-            self.assertEqual(request['model'], bench.MODEL)
+            self.assertEqual(request['model'], 'jev-1.13.0')
             self.assertEqual(set(request['questions']), {'q0', 'q1', 'q2'})
             self.assertLessEqual(timeout_s, 3)
             self.assertTrue(all(q['type'] == 'choice' for q in request['questions'].values()))

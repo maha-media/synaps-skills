@@ -14,7 +14,7 @@ from jev.audit import Audit
 from jev.client import DecisionClient, JevError, PRICE_PER_MTOK_INPUT
 
 MAX_CALLS = 4
-MODEL = 'jev1.13.0'
+MODEL = 'jev-1.13.0'
 CAVEAT = ('Weak fixture labels, not calibrated ground truth. Required preservation is structural, '
           'not evidence that all mandatory checks were enumerated. Injection fixture is not a safety proof. '
           'No checks/tools execute and no real tests are claimed passed. This does not demonstrate reduced '

@@ -608,7 +608,7 @@ files/diffs, runs no shell commands, and never fires automatically from hooks.
 [`scripts/benchmark_verification.py`](scripts/benchmark_verification.py) defaults to
 an offline structural report: no key discovery, client, or network; Jev measurements
 are `null`. Run `python3 jev-plugin/scripts/benchmark_verification.py` from the repo
-root. Explicit `--live --model jev1.13.0` uses existing key discovery for four fixed
+root. Explicit `--live --model jev-1.13.0` uses existing key discovery for four fixed
 public cases, one batch each, maximum four wire calls with retries disabled and a
 3-second deadline per call. No fixture check or real tool is executed.
 
