@@ -24,10 +24,20 @@ class JevError(Exception):
     """Any upstream failure: network, auth, validation, rate limit."""
 
 
+def usage_tokens(resp):
+    usage = resp.get("usage") if isinstance(resp, dict) else None
+    tokens = usage.get("input_tokens") if isinstance(usage, dict) else None
+    return tokens if type(tokens) is int and 0 <= tokens <= 2**53 else None
+
+
 @dataclass
 class Stats:
     calls: int = 0
     errors: int = 0
+    wire_attempts: int = 0
+    retries: int = 0
+    unknown_usage_calls: int = 0
+    unknown_usage_attempts: int = 0
     input_tokens: int = 0
     total_ms: int = 0
     last_model: str = ""
@@ -47,8 +57,14 @@ class Stats:
         return {
             "calls": self.calls,
             "errors": self.errors,
-            "input_tokens": self.input_tokens,
-            "cost_usd": round(self.cost_usd, 6),
+            "input_tokens": None if self.unknown_usage_calls or self.unknown_usage_attempts else self.input_tokens,
+            "cost_usd": None if self.unknown_usage_calls or self.unknown_usage_attempts else round(self.cost_usd, 6),
+            "known_input_tokens": self.input_tokens,
+            "known_cost_usd": self.cost_usd,
+            "unknown_usage_calls": self.unknown_usage_calls,
+            "unknown_usage_attempts": self.unknown_usage_attempts,
+            "wire_attempts": self.wire_attempts,
+            "retries": self.retries,
             "mean_ms": self.mean_ms,
             "model": self.last_model,
             "by_op": dict(self.by_op),
@@ -64,6 +80,7 @@ class DecisionClient:
         model: str = "jev-latest",
         timeout_s: float = 3.0,
         base_url: str = API_URL,
+        policy=None,
     ) -> None:
         if not api_key:
             raise JevError("api_key is empty")
@@ -72,6 +89,7 @@ class DecisionClient:
         self.timeout_s = min(4.0, max(0.1, timeout_s)) if math.isfinite(timeout_s) else 3.0
         self.base_url = base_url
         self.stats = Stats()
+        self.policy = policy
 
     # ── public ──────────────────────────────────────────────────────────────
 
@@ -81,32 +99,65 @@ class DecisionClient:
         Raises JevError on any failure. Retries once on 429/529 if there is
         budget left; never sleeps past the hook deadline.
         """
+        from .policy import PolicyDenied
         t0 = time.monotonic()
         deadline = t0 + self.timeout_s
+        policy = self.policy if op not in ("guard", "probe", "test") else None
+        ledger = policy.ledger() if policy else None
         attempt = 0
         resp = {}
         failed = False
+        denied = False
+        unknown_attempts = 0
         try:
             body = json.dumps({"state": state, "model": self.model, "questions": questions}).encode("utf-8")
             while True:
-                attempt += 1
-                remaining = deadline - time.monotonic()
+                now = time.monotonic()
+                if policy:
+                    policy.check(ledger, max(0, now - t0) * 1000)
+                    if policy.settings["enabled"]:
+                        deadline = min(deadline, t0 + max(0, policy.settings["latency_ms"] - ledger.latency_ms) / 1000)
+                remaining = deadline - now
                 if remaining <= 0:
                     raise JevError("deadline exceeded")
+                if policy:
+                    policy.reserve(ledger, max(0, now - t0) * 1000)
+                attempt += 1
+                self.stats.wire_attempts += 1
+                self.stats.retries += int(attempt > 1)
+                wire_resp = {}
+                wire_failed = True
+                retry = None
                 try:
-                    resp = self._bounded_post(body, remaining)
+                    wire_resp = self._bounded_post(body, remaining)
+                    resp = wire_resp
                     if time.monotonic() > deadline:
                         raise JevError("deadline exceeded")
                     if not isinstance(resp, dict):
                         raise JevError("invalid response")
-                    return resp
+                    wire_failed = False
                 except _Retryable as e:
-                    remaining = deadline - time.monotonic()
-                    delay = e.retry_after if math.isfinite(e.retry_after) else 0.3
-                    delay = min(max(0.0, delay), 1.0)
-                    if attempt >= 2 or remaining < delay + 0.1:
-                        raise JevError("retry budget exhausted") from e
-                    time.sleep(delay)
+                    retry = e
+                finally:
+                    tokens = usage_tokens(wire_resp)
+                    if tokens is None:
+                        unknown_attempts += 1
+                        self.stats.unknown_usage_attempts += 1
+                    if policy:
+                        policy.observe(ledger, tokens, wire_failed)
+                if retry is None:
+                    return resp
+                if policy:
+                    policy.check(ledger, max(0, time.monotonic() - t0) * 1000)
+                remaining = deadline - time.monotonic()
+                delay = retry.retry_after if math.isfinite(retry.retry_after) else 0.3
+                delay = min(max(0.0, delay), 1.0)
+                if attempt >= 2 or remaining < delay + 0.1:
+                    raise JevError("retry budget exhausted") from retry
+                time.sleep(delay)
+        except PolicyDenied:
+            denied = True
+            raise
         except Exception as e:
             failed = True
             self.stats.errors += 1
@@ -114,7 +165,11 @@ class DecisionClient:
                 raise
             raise JevError("decision transport or response failure") from None
         finally:
-            self._record(op, resp if isinstance(resp, dict) else {}, t0, failed)
+            if policy and attempt:
+                ledger.latency_ms += max(0, time.monotonic() - t0) * 1000
+            if not denied or attempt:
+                self._record(op, resp if isinstance(resp, dict) else {}, t0, failed,
+                             wire_attempts=attempt, unknown_attempts=unknown_attempts)
 
     # ── internals ───────────────────────────────────────────────────────────
 
@@ -169,25 +224,35 @@ class DecisionClient:
             # Never surface upstream payloads, URLs, credentials or exception text.
             raise JevError("transport or response decoding failure") from None
 
-    def _record(self, op: str, resp: dict, t0: float, failed: bool = False) -> None:
+    def _record(self, op: str, resp: dict, t0: float, failed: bool = False,
+                *, wire_attempts: int = 0, unknown_attempts: int = 0) -> None:
         s = self.stats
+        elapsed = max(0, int((time.monotonic() - t0) * 1000))
+        tokens = usage_tokens(resp)
+        unknown = tokens is None or unknown_attempts > 0
         s.calls += 1
-        s.total_ms += int((time.monotonic() - t0) * 1000)
-        usage = resp.get("usage")
-        tokens = usage.get("input_tokens", 0) if isinstance(usage, dict) else 0
-        tokens = tokens if isinstance(tokens, int) and not isinstance(tokens, bool) and 0 <= tokens <= 2**53 - 1 else 0
-        s.input_tokens += tokens
+        s.total_ms += elapsed
+        s.unknown_usage_calls += int(unknown)
+        s.input_tokens += tokens or 0
         model = resp.get("model")
         if isinstance(model, str) and len(model) <= 256:
             s.last_model = model
         s.by_op[op] = s.by_op.get(op, 0) + 1
-        o = s.op_stats.setdefault(op, {"calls": 0, "errors": 0, "input_tokens": 0, "total_ms": 0, "mean_ms": 0, "cost_usd": 0.0})
+        o = s.op_stats.setdefault(op, {"calls": 0, "errors": 0, "known_input_tokens": 0,
+            "total_ms": 0, "unknown_usage_calls": 0, "wire_attempts": 0,
+            "unknown_usage_attempts": 0, "retries": 0})
         o["calls"] += 1
         o["errors"] += int(failed)
-        o["input_tokens"] += tokens
-        o["total_ms"] += int((time.monotonic() - t0) * 1000)
+        o["known_input_tokens"] += tokens or 0
+        o["unknown_usage_calls"] += int(unknown)
+        o["wire_attempts"] += wire_attempts
+        o["unknown_usage_attempts"] += unknown_attempts
+        o["retries"] += max(0, wire_attempts - 1)
+        o["total_ms"] += elapsed
         o["mean_ms"] = o["total_ms"] // o["calls"]
-        o["cost_usd"] = o["input_tokens"] * PRICE_PER_MTOK_INPUT / 1_000_000
+        o["known_cost_usd"] = o["known_input_tokens"] * PRICE_PER_MTOK_INPUT / 1e6
+        o["input_tokens"] = None if o["unknown_usage_calls"] else o["known_input_tokens"]
+        o["cost_usd"] = None if o["unknown_usage_calls"] else o["known_cost_usd"]
 
 
 class _Retryable(Exception):

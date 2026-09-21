@@ -982,3 +982,62 @@ the current opt-in mode remains experimental and off by default. Downstream host
 handling may truncate output, so exact local reconstruction is not an end-to-end
 savings or delivery guarantee. See the linked report for the separate low-confidence
 diagnostic; its cause cannot be assigned to the four uncaptured responses.
+
+### Optional session budgets and circuit breaker
+
+Budget enforcement is **off by default**. Configure it without restarting:
+
+```text
+/jev budget                          # settings, aggregate, unscoped + overflow usage
+/jev budget on|off [--save]
+/jev budget calls N [--save]          # default 100 wire attempts, including retries
+/jev budget cost USD [--save]         # default .02 estimated input-token cost
+/jev budget latency MS [--save]       # default 30000 cumulative API batch wall time
+/jev budget errors N [--save]         # default 3 consecutive failed attempts
+/jev budget cooldown SECONDS [--save] # default 60 monotonic seconds
+/jev budget reset                    # explicitly clear optional session ledgers
+```
+
+Settings are session-only unless saved through the existing host configuration
+helper. Settings, key changes and client reactivation never reset budget usage;
+`reset` does not reset accounting, disable guard, or flush advice caches. Local
+operations and cache hits need no API reservation and still work at the limit.
+
+Optional API operations share a ledger per trusted hook `session_id` (nonblank,
+control-free, at most 256 characters), stored only as a digest. Explicit tools
+and commands have no trusted session context: they share **one unscoped ledger**,
+ignoring any model-supplied session ID. Status aggregates ledgers without exposing
+IDs. At most 128 ledgers exist, including unscoped and a shared overflow ledger;
+new sessions at capacity share overflow rather than evicting old usage and
+receiving fresh budgets. Missing/invalid hook context also uses unscoped.
+
+Calls are reserved before every wire attempt, including retries. Remaining
+cumulative latency limits the request deadline and retry delay; latency includes
+retry waits. These are **not a wall-time SLA or a strict dollar cap**: estimated
+cost uses reported input tokens only, and one in-flight request can overshoot the
+cost threshold. Missing or malformed usage, including a failed retry attempt,
+is unknown—not free—and stops subsequent optional calls while budgets are on.
+The circuit blocks after the configured failure streak until monotonic cooldown,
+then permits one half-open attempt; success clears the streak. Unknown usage is
+an independent stop even after cooldown, requiring explicit reset (or disabling
+optional enforcement). Denials use fixed reasons: `budget_calls`, `budget_cost`,
+`budget_latency`, `budget_unknown_usage`, `circuit_open`; they create no wire
+attempt or circuit failure. Existing advisory fallbacks retain original data.
+
+**Guard is always exempt from optional budgets and circuits**, but all guard API
+calls remain in accounting. Guard failures still require confirmation; exhausting
+a budget never auto-allows a guarded action. User-authorized `/jev test` and key
+setup `probe` are explicitly exempt too; the standalone key-validation client is
+outside session budget accounting. `/jev test` is counted in active client stats.
+
+Stats distinguish logical `calls`, `wire_attempts`, and `retries`. Public
+`input_tokens` and `cost_usd` become JSON null when any relevant usage is unknown;
+`known_input_tokens`, `known_cost_usd`, `unknown_usage_calls` and
+`unknown_usage_attempts` retain partial evidence, also per operation. Cost is only
+an estimate of Jev input-token cost, not savings. CLI status prints unknown costs
+gracefully, and `jev_status` includes budget state even without an API key.
+
+Configuration keys are `budget_enabled`, `budget_calls`, `budget_cost_usd`,
+`budget_latency_ms`, `budget_error_streak`, `budget_cooldown_s`. Numeric settings
+must be finite: calls 1–1,000,000; cost .000001–1000; latency 1–86,400,000 ms;
+errors 1–1000; cooldown .001–86,400 seconds. Calls, latency and errors are integers.

@@ -241,6 +241,42 @@
         "type": "bool",
         "default": false,
         "description": "Opt-in automatic worker-report triage, independent of guard. Sends redacted worker prose, not artifacts; unverified advisory only, no lifecycle changes."
+      },
+      {
+        "key": "budget_enabled",
+        "type": "bool",
+        "default": false,
+        "description": "Opt-in optional API session budgets/circuit; guard and user-authorized probes/self-test excluded."
+      },
+      {
+        "key": "budget_calls",
+        "type": "number",
+        "default": 100,
+        "description": "Optional session calls; finite range 1 to 1000000; integer."
+      },
+      {
+        "key": "budget_cost_usd",
+        "type": "number",
+        "default": 0.02,
+        "description": "Optional session cost_usd; finite range 1e-06 to 1000. Input-only estimated cost, not a hard dollar cap."
+      },
+      {
+        "key": "budget_latency_ms",
+        "type": "number",
+        "default": 30000,
+        "description": "Optional session latency_ms; finite range 1 to 86400000; integer."
+      },
+      {
+        "key": "budget_error_streak",
+        "type": "number",
+        "default": 3,
+        "description": "Optional session error_streak; finite range 1 to 1000; integer."
+      },
+      {
+        "key": "budget_cooldown_s",
+        "type": "number",
+        "default": 60,
+        "description": "Optional session cooldown_s; finite range 0.001 to 86400."
       }
     ]
   },

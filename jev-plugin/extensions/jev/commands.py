@@ -19,7 +19,8 @@ import json
 import time
 
 from . import keys
-from .client import DecisionClient, JevError
+from .client import DecisionClient, JevError, usage_tokens
+from .policy import validate
 
 USAGE = (
     "**/jev** — TypeSafe Jev decision layer\n\n"
@@ -27,6 +28,7 @@ USAGE = (
     "| `/jev key <apikey_…>` | validate, save, and activate an API key (no restart) |\n"
     "| `/jev economy [--save]` | preset: guard unchanged; router+triage on, deterministic compression; optional advice off; no savings claim |\n"
     "| `/jev compress mode jev\\|deterministic [--save]` | choose compression mode without enabling it |\n"
+    "| `/jev budget [on\\|off\\|reset]` | optional session API budgets; limits: calls, cost, latency, errors, cooldown; --save for settings |\n"
     "| `/jev status` | configuration + session stats |\n"
     "| `/jev test` | one live decision: latency + cost |\n"
     "| `/jev guard off` | stop reviewing tool calls for this session (`--save` persists) |\n"
@@ -82,6 +84,11 @@ def probe(client: DecisionClient) -> tuple[int, dict]:
 
 
 def handle(params: dict, ext, send, host_call) -> dict:
+    with ext.policy.scoped():
+        return _handle(params, ext, send, host_call)
+
+
+def _handle(params: dict, ext, send, host_call) -> dict:
     """Entry point from the RPC loop. `ext` is the Extension; `host_call`
     performs an outbound JSON-RPC request to the host (or raises)."""
     out = Emitter(send, str(params.get("request_id") or ""))
@@ -94,6 +101,8 @@ def handle(params: dict, ext, send, host_call) -> dict:
             _cmd_status(ext, out)
         elif sub == "test":
             _cmd_test(ext, out)
+        elif sub == "budget":
+            _cmd_budget(args[1:], ext, out, host_call)
         elif sub == "economy":
             _cmd_economy(args[1:], ext, out, host_call)
         elif sub == "compress" and len(args) > 1 and args[1] == "mode":
@@ -273,11 +282,12 @@ def _cmd_status(ext, out: Emitter) -> None:
         s = ext.client.stats.snapshot()
         rows += [
             ["calls / errors", f"{s['calls']} / {s['errors']}"],
-            ["tokens / cost", f"{s['input_tokens']} / ${s['cost_usd']:.6f}"],
+            ["tokens / cost", f"{s['input_tokens'] if s['input_tokens'] is not None else 'unknown'} / {_cost(s['cost_usd'])}"],
             ["mean latency", f"{s['mean_ms']} ms"],
             ["per-op (estimated Jev cost only)", str(s["op_stats"])],
             ["verdicts", ", ".join(f"{k}={v}" for k, v in sorted(ext.audit.counters.items())) or "—"],
         ]
+    rows.append(["budget", json.dumps(ext.policy.snapshot(), sort_keys=True)])
     out.table(["jev", ""], rows)
     out.text("/jev on [--save]: all features including guard, mode unchanged. "
              "/jev economy [--save]: guard unchanged, router/triage on, deterministic compression; "
@@ -312,10 +322,40 @@ def _cmd_test(ext, out: Emitter) -> None:
     )
     ms = int((time.monotonic() - t0) * 1000)
     a = resp["answers"]
-    tokens = int((resp.get("usage") or {}).get("input_tokens") or 0)
+    tokens = usage_tokens(resp)
     out.text(
         f"`git push --force origin main` → risk **{a['risk']['score']:.2f}**/3 "
         f"(conf {a['risk']['confidence']:.2f}), ask_user **{a['ask_user']['noul']:.2f}** — "
-        f"{ms} ms, {tokens} tokens, ${tokens * 0.042 / 1e6:.6f}, model {resp.get('model')}"
+        f"{ms} ms, {tokens} tokens, {_cost(None if tokens is None else tokens * 0.042 / 1e6)}, model {resp.get('model')}"
     )
     out.system(json.dumps(a, separators=(",", ":"))[:600])
+
+
+def _cost(value):
+    return "unknown" if value is None else f"${value:.6f}"
+
+
+def _cmd_budget(rest, ext, out, host_call):
+    if not rest:
+        out.text(json.dumps(ext.policy.snapshot(), sort_keys=True))
+        return
+    if rest == ["reset"]:
+        ext.policy.reset()
+        out.system("Optional budget session state reset; guard and accounting unchanged.")
+        return
+    persist = rest[-1:] == ["--save"]
+    words = rest[:-1] if persist else rest
+    aliases = {"calls": "calls", "cost": "cost_usd", "latency": "latency_ms",
+               "errors": "error_streak", "cooldown": "cooldown_s"}
+    if len(words) == 1 and words[0] in ("on", "off"):
+        name, value = "enabled", words[0] == "on"
+    elif len(words) == 2 and words[0] in aliases:
+        name = aliases[words[0]]
+        value = validate(name, words[1])
+    else:
+        raise ValueError("expected budget on|off or calls N|cost USD|latency MS|errors N|cooldown SECONDS [--save], or reset")
+    if persist:
+        _save_setting("budget_" + name, str(value).lower(), host_call)
+        ext.cfg["budget_" + name] = value
+    ext.policy.settings[name] = value
+    out.system("Optional budget setting updated; session state retained. Guard excluded; cost is input-only estimated.")

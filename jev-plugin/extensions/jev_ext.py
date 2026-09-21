@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from jev import audit as audit_mod  # noqa: E402
 from jev import commands, compress, discovery, evidence, guard, keys, reports, router, tools, triage, verify  # noqa: E402
+from jev.policy import BudgetPolicy
 from jev.client import DecisionClient, JevError  # noqa: E402
 
 PLUGIN_ID = "jev"
@@ -98,6 +99,7 @@ class Extension:
     def __init__(self) -> None:
         self.client: DecisionClient | None = None
         self.cfg: dict = {}
+        self.policy = BudgetPolicy()
         self.key_source = "none"
         self.features = {"guard": False, "router": False, "compress": False, "triage": False, "discovery": False, "verification": False, "evidence": False, "reports": False, "tools": True}
         # Session-only feature overrides from `/jev guard off` etc. Applied on
@@ -140,7 +142,7 @@ class Extension:
     def activate(self, api_key: str, *, source: str) -> None:
         """Bring the decision layer up with this key (idempotent, no restart)."""
         self.clear_caches()
-        self.client = DecisionClient(api_key, model=self.model_name(), timeout_s=self.timeout_s())
+        self.client = DecisionClient(api_key, model=self.model_name(), timeout_s=self.timeout_s(), policy=self.policy)
         self.key_source = source
         self.recompute_features()
         log("active (" + ", ".join(k for k, v in self.features.items() if v) + f") key from {source}")
@@ -203,6 +205,7 @@ class Extension:
 
     def initialize(self, params: dict) -> dict:
         self.cfg = dict(params.get("config") or {})
+        self.policy.configure(self.cfg)
         self.audit = audit_mod.Audit(str(self.cfg.get("audit_file") or "") or None)
         self.guard_cfg = guard.GuardConfig(self.cfg)
         self.router_cfg = router.RouterConfig(self.cfg)
@@ -231,6 +234,10 @@ class Extension:
 
     def hook(self, params: dict) -> dict:
         self.maybe_pick_up_key()
+        with self.policy.scoped(params.get("session_id")):
+            return self._hook(params)
+
+    def _hook(self, params: dict) -> dict:
         kind = params.get("kind", "")
         tool = params.get("tool_runtime_name") or params.get("tool_name") or ""
 
@@ -281,6 +288,10 @@ class Extension:
     # ── tools ───────────────────────────────────────────────────────────
 
     def tool_call(self, params: dict) -> dict:
+        with self.policy.scoped():
+            return self._tool_call(params)
+
+    def _tool_call(self, params: dict) -> dict:
         name = params.get("name")
         if name == "jev_evidence":
             return evidence.call_evidence(params.get("input"), self.client, self.audit,
@@ -291,7 +302,7 @@ class Extension:
         self.maybe_pick_up_key()
         tool_input = params.get("input") or {}
         if name == "jev_status":
-            return tools.call_status(self.client, self.audit, self.features, self.key_source)
+            return tools.call_status(self.client, self.audit, self.features, self.key_source, policy=self.policy)
         if self.client is None:
             raise tools.ToolError(
                 "jev: no API key configured. Ask the user to run `/jev key <apikey_…>` in synaps "

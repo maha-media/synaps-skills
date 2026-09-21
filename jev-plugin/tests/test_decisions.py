@@ -111,7 +111,11 @@ class Decisions(unittest.TestCase):
         with patch('jev.client.time.monotonic', side_effect=lambda: clock[0]), patch('jev.client.time.sleep', side_effect=lambda t: clock.__setitem__(0, clock[0]+t)), patch.object(c, '_post', side_effect=post):
             c.decide('x', {}, op='triage')
         self.assertAlmostEqual(budgets[1], .9)
-        self.assertEqual(c.stats.snapshot()['op_stats']['triage']['input_tokens'], 20)
+        self.assertIsNone(c.stats.snapshot()['op_stats']['triage']['input_tokens'])
+        self.assertEqual(c.stats.snapshot()['op_stats']['triage']['known_input_tokens'], 20)
+        self.assertEqual(c.stats.snapshot()['unknown_usage_attempts'], 1)
+        self.assertEqual(c.stats.snapshot()['wire_attempts'], 2)
+        self.assertEqual(c.stats.snapshot()['retries'], 1)
         self.assertEqual(c.stats.snapshot()['by_op'], {'triage': 1})
 
     def test_hard_deadline_and_timer_cleanup(self):

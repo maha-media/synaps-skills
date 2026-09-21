@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from .client import DecisionClient, JevError
+from .client import DecisionClient, JevError, usage_tokens
 
 
 class ToolError(Exception):
@@ -92,18 +92,20 @@ def call_decide(tool_input: dict, client: DecisionClient, audit) -> dict:
         audit.bump("decide.error")
         raise ToolError(f"jev_decide: upstream error: {e}") from e
     audit.bump("decide.ok")
-    usage = resp.get("usage") or {}
+    usage = resp.get("usage")
+    tokens = usage_tokens(resp)
     out = {
         "model": resp.get("model"),
         "answers": resp.get("answers"),
         "usage": usage,
-        "cost_usd": round(int(usage.get("input_tokens") or 0) * 0.042 / 1e6, 6),
+        "cost_usd": None if tokens is None else round(tokens * 0.042 / 1e6, 6),
     }
     audit.write({"op": "decide", "n_questions": len(q), "usage": usage, "model": resp.get("model")})
     return {"content": json.dumps(out, separators=(",", ":"))}
 
 
-def call_status(client: DecisionClient | None, audit, features: dict, key_source: str = "none") -> dict:
+def call_status(client: DecisionClient | None, audit, features: dict, key_source: str = "none", *, policy=None) -> dict:
+    policy = policy or getattr(client, "policy", None)
     if client is None:
         from . import keys  # local import keeps tools.py free of file-system concerns otherwise
         snap = {
@@ -119,8 +121,12 @@ def call_status(client: DecisionClient | None, audit, features: dict, key_source
             "features": features,
             "counters": dict(audit.counters),
         }
+        if policy:
+            snap["budget"] = policy.snapshot()
         return {"content": json.dumps(snap, indent=1)}
     snap = client.stats.snapshot()
+    if policy:
+        snap["budget"] = policy.snapshot()
     snap["active"] = True
     snap["key_source"] = key_source
     snap["features"] = features
