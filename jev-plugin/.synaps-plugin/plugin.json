@@ -1,7 +1,7 @@
 {
   "name": "jev",
   "version": "0.7.0",
-  "description": "Calibrated Jev decisions: safety guard, sparse session-cached worker routing, opt-in lossless identical-line compression and experimental discovery advice, automatic advisory bash failure triage, batched jev_decide and candidate-only jev_select. Opt-in explicit verification prioritization via jev_verify. Opt-in evidence descriptor relevance via jev_evidence (no fetch or trust certification). Opt-in automatic worker-report claim triage (no lifecycle authority).",
+  "description": "Calibrated Jev decisions: safety guard, sparse session-cached worker routing, opt-in lossless identical-line compression and experimental discovery advice, automatic advisory bash failure triage, batched jev_decide and candidate-only jev_select. Opt-in explicit verification prioritization via jev_verify. Opt-in evidence descriptor relevance via jev_evidence (no fetch or trust certification). Opt-in automatic worker-report claim triage (no lifecycle authority). Opt-in supplied-hypothesis/check prioritization via jev_diagnose; no fixes or execution.",
   "author": {
     "name": "JR Morton",
     "url": "https://github.com/maha-media"
@@ -277,13 +277,19 @@
         "type": "number",
         "default": 60,
         "description": "Optional session cooldown_s; finite range 0.001 to 86400."
+      },
+      {
+        "key": "diagnosis",
+        "type": "bool",
+        "default": false,
+        "description": "Opt-in jev_diagnose supplied hypotheses/checks only; independent of guard. No cache, fixes, execution or approval."
       }
     ]
   },
   "commands": [
     {
       "name": "jev",
-      "description": "Jev decision layer: `/jev key <apikey_…>` validates+saves+activates a key without restart; `/jev status`; `/jev test`; `/jev guard|router|compress|triage|discovery|verification|evidence|reports on|off [--save]` flips one feature (session-only unless --save); `/jev off|on [--save]` flips all eight (including opt-in discovery, verification, evidence and reports). `/jev economy [--save]`: guard unchanged, router/triage on, deterministic compression, optional advice off; no savings claim. `/jev compress mode jev|deterministic [--save]` chooses mode; all-on leaves it unchanged. `/jev budget` shows optional budgets; `/jev explain [clear]` shows fixed local diagnostics (clear only the last-64 process ring, not accounting).",
+      "description": "Jev decision layer: `/jev key <apikey_…>` validates+saves+activates a key without restart; `/jev status`; `/jev test`; `/jev guard|router|compress|triage|discovery|verification|evidence|diagnosis|reports on|off [--save]` flips one feature (session-only unless --save); `/jev off|on [--save]` flips all nine (including opt-in discovery, verification, evidence, diagnosis and reports). `/jev economy [--save]`: guard unchanged, router/triage on, deterministic compression, optional advice off; no savings claim. `/jev compress mode jev|deterministic [--save]` chooses mode; all-on leaves it unchanged. `/jev budget` shows optional budgets; `/jev explain [clear]` shows fixed local diagnostics (clear only the last-64 process ring, not accounting).",
       "interactive": true,
       "subcommands": [
         "key",
@@ -301,7 +307,8 @@
         "off",
         "economy",
         "budget",
-        "explain"
+        "explain",
+        "diagnosis"
       ]
     }
   ]

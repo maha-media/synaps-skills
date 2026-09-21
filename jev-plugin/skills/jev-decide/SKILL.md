@@ -7,8 +7,8 @@ description: Use when a task is many small decisions — triage, classify, route
 
 TypeSafe **Jev** is a *System One* model: it never writes, it only picks from
 answers you define and tells you how sure it is. This plugin integrates it
-through harness hooks and five explicit tools:
-`jev_decide`, `jev_select`, `jev_status`, `jev_verify`, and `jev_evidence`.
+through harness hooks and six explicit tools:
+`jev_decide`, `jev_select`, `jev_status`, `jev_verify`, `jev_evidence`, and `jev_diagnose`.
 
 | Surface | What it does | You need to… |
 |---|---|---|
@@ -185,7 +185,7 @@ can't discover missing mandates. Honor project/user/CI requirements outside this
 input too: structural preservation is **not proof that all required checks were
 included**. No result group certifies coverage or execution.
 
-Four tools are always advertised. `jev_verify({task, changes, checks})` accepts
+Six tools are always advertised. `jev_verify({task, changes, checks})` accepts
 bounded task/change summaries and checks `{id, description, required}`. Use it only
 for uncertain optional-check priority, not execution or coverage certification.
 Caller-required IDs are preserved, never classified by AI, but **caller flags are
@@ -272,9 +272,40 @@ and triage priorities and events/compaction are unchanged.
 `/jev on [--save]` enables all features including guard and opt-in remote advice;
 it preserves the chosen compression mode. `/jev economy [--save]` leaves guard
 unchanged, configures router/triage on and deterministic compression, and disables
-discovery/verification/evidence/reports. No automatic configuration or savings
+discovery/verification/evidence/reports/diagnosis. No automatic configuration or savings
 claim. `/jev compress mode jev|deterministic [--save]` selects presentation mode
 without enabling compression. Deterministic mode uses the same bounded lossless
 checks locally with zero compression API calls. No-key defaults stay inert;
 explicit deterministic compression/economy can run locally, but remote features
 still need a key. `/jev off` disables local compression too. Tools stay available.
+
+## Supplied diagnosis priorities: `jev_diagnose`
+
+Opt in with `/jev diagnosis on|off [--save]` (default off, independent of guard).
+All-on/off includes it; economy turns it off. Supply candidates, never ask it
+to derive freeform fixes. For example:
+
+```json
+{"task":"Prioritize a synthetic parser investigation","evidence":"Empty input failed the supplied assertion.","hypotheses":[{"id":"empty","description":"Empty input is rejected"}],"checks":[{"id":"suite","description":"Mandatory project tests","required":true},{"id":"assertion","description":"Inspect the supplied assertion","required":false}]}
+```
+
+Exact keys only. Task/evidence limits: 2000/8000 characters **and UTF-8 bytes**;
+1–8 hypotheses, 1–16 checks, nonblank globally unique IDs ≤80, descriptions
+≤500, strict boolean required. Valid Unicode; IDs forbid ASCII controls;
+text permits LF/CR/TAB but no other C0. Input and redacted state ≤24 KiB;
+output preflight ≤32 KiB. Oversized state is not clipped.
+
+IDs/authority metadata and required descriptions stay local. One batch sends
+only redacted text and opaque descriptors; no cache (no trusted context).
+Fixed gates: hypotheses .85, optional checks .80, reflecting higher cost of
+misleading hypothesis disposition, not tuned quality claims. Output preserves
+`required_check_ids`, hypothesis partitions `investigate/contradicted/review`,
+optional-check partitions `inspect/later/review`, and full local references
+`{id, required, kind, priority}`. No labels, confidences or replacement prose.
+Off/no-key/budget/error falls back to review with required checks preserved.
+Status and explain use `diagnose`.
+
+Hypotheses remain unverified against the actual system; **contradicted is not
+ruled out and later is not skip**. All mandatory checks still apply. This is
+priority advice, not truth/source authority, execution, retry, tool activation,
+fetch or approval. Consult actual evidence and project requirements yourself.

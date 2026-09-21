@@ -165,7 +165,7 @@ class FeatureToggles(unittest.TestCase):
         commands.handle({"request_id": "t", "args": list(args)}, self.ext, self._send, self._host)
 
     def test_defaults(self):
-        self.assertEqual(self.ext.features, {"guard": True, "router": True, "compress": False, "triage": True, "discovery": False, "verification": False, "evidence": False, "reports": False, "tools": True})
+        self.assertEqual(self.ext.features, {"guard": True, "router": True, "compress": False, "triage": True, "discovery": False, "verification": False, "evidence": False, "diagnosis": False, "reports": False, "tools": True})
 
     def test_guard_off_is_session_only(self):
         self.run_cmd("guard", "off")
@@ -188,9 +188,9 @@ class FeatureToggles(unittest.TestCase):
 
     def test_all_off_keeps_tools(self):
         self.run_cmd("off")
-        self.assertEqual(self.ext.features, {"guard": False, "router": False, "compress": False, "triage": False, "discovery": False, "verification": False, "evidence": False, "reports": False, "tools": True})
+        self.assertEqual(self.ext.features, {"guard": False, "router": False, "compress": False, "triage": False, "discovery": False, "verification": False, "evidence": False, "diagnosis": False, "reports": False, "tools": True})
         self.run_cmd("on")
-        self.assertEqual(self.ext.features, {"guard": True, "router": True, "compress": True, "triage": True, "discovery": True, "verification": True, "evidence": True, "reports": True, "tools": True})
+        self.assertEqual(self.ext.features, {"guard": True, "router": True, "compress": True, "triage": True, "discovery": True, "verification": True, "evidence": True, "diagnosis": True, "reports": True, "tools": True})
 
     def test_bare_feature_shows_table(self):
         self.run_cmd("guard")

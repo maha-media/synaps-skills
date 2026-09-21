@@ -19,7 +19,7 @@ def test_economy_preserves_guard_and_mode_activation(guard):
     events = []
     commands.handle({'args': ['economy']}, ext, events.append, lambda *a: None)
     assert ext.features == dict(guard=guard, router=True, triage=True, compress=True,
-                               discovery=False, verification=False, evidence=False, reports=False, tools=True)
+                               discovery=False, verification=False, evidence=False, diagnosis=False, reports=False, tools=True)
     assert ext.session_overrides['guard'] is guard
     assert ext.cfg == {}
     ext.activate('new-offline', source='test')

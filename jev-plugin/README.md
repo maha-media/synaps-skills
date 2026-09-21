@@ -66,11 +66,11 @@ Get a key at https://typesafe.ai.
 ## All-on versus economy (explicit presets)
 
 - **`/jev on [--save]`** enables every feature, **including guard** and opt-in
-  discovery, verification, evidence and reports. It leaves the chosen compression
+  discovery, verification, evidence, reports and diagnosis. It leaves the chosen compression
   mode alone. A key is required for all-on.
 - **`/jev economy [--save]`** leaves guard **unchanged**, configures router and
   triage on, enables **deterministic** compression, and turns discovery,
-  verification, evidence and reports off. Economy is a preset, not a feature flag
+  verification, evidence, reports and diagnosis off. Economy is a preset, not a feature flag
   or a claim of savings. No setup or defaults are changed automatically.
 - **`/jev off [--save]`** disables every feature, including deterministic
   compression. Tools remain advertised.
@@ -101,7 +101,7 @@ reviews are never cached. `/jev status` shows mode and preset guidance.
 /jev guard off --save     # persist to plugins/jev/config
 /jev router off           # same pattern for router / compress / triage / discovery
 /jev triage off           # skip advisory failure classification; guard stays independent
-/jev off                  # guard + router + compress + triage + discovery + verification + evidence; all five tools stay
+/jev off                  # guard + router + compress + triage + discovery + verification + evidence + reports + diagnosis; all six tools stay
 /jev guard                # show now / source / saved
 ```
 
@@ -366,7 +366,7 @@ Underlying `search_tools` and `search_skills` discovery is **pure local**. The
 `discovery` experiment defaults to **false** and is **not recommended as a
 savings technique yet**. `/jev discovery on|off [--save]`
 controls it independently of guard; without `--save` the override is session-only.
-`/jev on` enables **all eight** features, including this opt-in API cost/privacy
+`/jev on` enables **all nine** features, including this opt-in API cost/privacy
 contract (and compression); `/jev off` disables them. Explicit Jev tools remain
 available, including their no-key setup guidance.
 
@@ -517,8 +517,8 @@ measures recommendation caching, not the new low-confidence regression.
    tokens/latency/cost, and fallback behavior before recommending cheaper tiers.
 
 These are evaluation priorities, not new tools, automatic routing authority, or
-proven savings. The five registered tools are `jev_decide`, `jev_select`,
-`jev_status`, `jev_verify`, and `jev_evidence`.
+proven savings. The six registered tools are `jev_decide`, `jev_select`,
+`jev_status`, `jev_verify`, `jev_evidence`, and `jev_diagnose`.
 
 ## Sparse worker routing (0.3.1)
 
@@ -589,10 +589,10 @@ user configuration, or model mappings.
 
 ## Explicit verification priority (0.4.0)
 
-All five tools (`jev_decide`, `jev_select`, `jev_status`, `jev_verify`, `jev_evidence`) are always
+All six tools (`jev_decide`, `jev_select`, `jev_status`, `jev_verify`, `jev_evidence`, `jev_diagnose`) are always
 advertised. `/jev verification on|off [--save]` controls optional verification
 advice, **default off**, independently of guard. `/jev off` and `/jev on` toggle
-**all eight features**, including discovery, verification, evidence and reports (and their opt-in API
+**all nine features**, including discovery, verification, evidence, reports and diagnosis (and their opt-in API
 calls); they do not hide tools. Use the same `/jev key <apikey_…>` setup as above.
 
 Call `jev_verify` with this public synthetic input (optional advice requires
@@ -711,7 +711,7 @@ The JSON's cost counter rounds this to `$0.000029`; the precise estimate uses
 
 ## Explicit evidence relevance (0.5.0)
 
-`jev_evidence` is the fifth tool. `/jev evidence on|off [--save]` controls its
+`jev_evidence` was introduced as the fifth tool in 0.5.0 (six tools now). `/jev evidence on|off [--save]` controls its
 optional API advice, **off by default**, independently of guard. `/jev on` and
 `/jev off` include evidence. No key/off returns all optionals for review with
 setup guidance, without key discovery or file access. All-required requests are
@@ -809,7 +809,7 @@ python3 -B -m unittest discover -s jev-plugin/tests -p 'test_benchmark_evidence.
 ## Automatic worker-report triage (0.6.0)
 
 Opt in with `/jev reports on|off [--save]` (default **off**, independent of guard).
-`/jev on` and `/jev off` include reports; all **five** existing tools remain
+`/jev on` and `/jev off` include reports; all **six** tools remain
 advertised. There is no new tool or host change. Status exposes
 `reports.call/questions/cache/skip/advice/abstain/error` and actual `reports`
 operation cost, tokens and latency. The [supplied synthetic live report](scripts/reports-benchmark/README.md)
@@ -1067,3 +1067,74 @@ exception strings, or timing. They are not written to files, logs, or traces and
 do not change the existing audit configuration. Clearing them is not an
 accounting reset. They do not certify truth, source authority, execution, or
 permission to fetch/read/delete anything; they never authorize an action.
+
+## Explicit diagnosis priority: `jev_diagnose`
+
+The sixth tool is always advertised but **off by default**. Enable with
+`/jev diagnosis on|off [--save]`; without `--save` the toggle is session-only.
+It is independent of the guard. `/jev on` and `/jev off` include diagnosis;
+`/jev economy` explicitly turns it off. No metadata version bump accompanies
+this slice.
+
+Supply hypotheses and checks yourself; the tool does not invent explanations,
+fixes, commands, or replacement prose:
+
+```json
+{
+  "task": "Prioritize investigation of a synthetic parser failure",
+  "evidence": "The supplied test rejects an empty field. No actual system was inspected.",
+  "hypotheses": [
+    {"id": "empty-field", "description": "The parser rejects empty fields"},
+    {"id": "encoding", "description": "The input encoding differs"}
+  ],
+  "checks": [
+    {"id": "project-suite", "description": "Run the mandatory project suite", "required": true},
+    {"id": "assertion", "description": "Inspect the supplied failing assertion", "required": false}
+  ]
+}
+```
+
+The exact input keys are `task` (1–2000), `evidence` (1–8000), `hypotheses`
+(1–8 `{id, description}` objects), and `checks` (1–16
+`{id, description, required}` objects). IDs are nonblank strings up to 80;
+descriptions up to 500; `required` is strictly boolean. IDs must be unique
+**across both lists**. Limits apply to characters and UTF-8 bytes. Valid Unicode
+is required; IDs forbid ASCII controls including DEL; other text forbids C0
+except LF/CR/TAB. Serialized input is limited to 24 KiB and output is locally
+preflighted at 32 KiB. Redacted state exceeding 24 KiB is rejected for remote
+advice, never clipped; all candidates remain for review.
+
+Only redacted task/evidence and descriptors keyed by opaque `h0`, `c0`, etc.
+are sent in one batch. IDs and source-authority metadata remain local; required
+check descriptions are **never sent**. There is **no cache**: the explicit tool
+has no trusted lifecycle context. Existing unscoped budgets/circuit and client
+accounting apply automatically under operation `diagnose`.
+
+Each supplied hypothesis receives `plausible|contradicted|unknown` priority
+classification, not probability of truth. Optional checks receive
+`inspect|later|unknown`. Fixed confidence gates are **0.85 for hypotheses** and
+**0.80 for checks**: a misleading hypothesis disposition is more costly than
+an optional-check ordering error. These are conservative asymmetric error
+choices, not benchmark-tuned thresholds. Invalid/missing answers affect only
+their sibling; extra answer keys or malformed batch envelopes put all optional
+items in review. No key, off, budget denial and upstream errors preserve every
+reference and every required check without advice.
+
+Output contains only local fields: `advisory`, `executed`,
+`required_check_ids`, `hypotheses` partitions (`investigate`, `contradicted`,
+`review`), `optional_checks` partitions (`inspect`, `later`, `review`),
+`references` (`id`, `required`, `kind`, `priority`), and a fixed `note` (plus
+`fallback_reason` when applicable). Original IDs are preserved exactly;
+there are no model labels, confidence values or model-written prose.
+
+**Hypotheses are unverified against the actual system. Contradicted does not
+mean ruled out; later does not mean skip. All mandatory project/user/CI checks
+still apply. No execution, retry, tool activation, fetch or approval is granted.**
+
+`/jev explain` uses operation `diagnose` with local accepted, low-confidence,
+abstention, invalid-response, disabled, no-key and budget/error reasons.
+`jev_status` records `diagnose.call/questions/skip/investigate/contradicted/inspect/
+later/review/error` counters and per-operation usage. There is no diagnosis
+payload audit or savings claim. `tests/diagnosis_fixture.py::diagnosis_fixture`
+is a callable public synthetic fixture for future held-out testing, **not a
+benchmark or efficacy evidence**.

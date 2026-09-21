@@ -7,7 +7,7 @@
     /jev guard on|off [--save]     flip the tool-call safety gate (session-only unless --save)
     /jev router on|off [--save]    flip subagent routing
     /jev compress on|off [--save]  flip output compression
-    /jev off|on [--save]           all features at once (all five tools stay advertised)
+    /jev off|on [--save]           all features at once (all six tools stay advertised)
 
 Output is streamed as `command.output` notifications (text/system/error/done)
 matched by `request_id`; the RPC response body itself is ignored by the TUI.
@@ -36,9 +36,10 @@ USAGE = (
     "| `/jev guard on` | resume the safety gate |\n"
     "| `/jev router on\\|off`, `/jev compress on\\|off` | flip sparse session-cached routing or compression; `/jev triage on or off` controls advisory failure triage; `/jev discovery on or off [--save]` controls opt-in discovery advice |\n"
     "| `/jev evidence on\\|off [--save]` | opt-in descriptor relevance advice; no fetch or trust certification |\n"
+    "| `/jev diagnosis on\\|off [--save]` | supplied hypotheses/checks only; advisory, no fixes or execution |\n"
     "| `/jev verification on\\|off [--save]` | opt-in explicit optional-check prioritization, independent of guard |\n"
     "| `/jev reports on\\|off [--save]` | opt-in worker-report claim triage, independent of guard; no lifecycle authority |\n"
-    "| `/jev off` / `/jev on` | guard+router+compress+triage+discovery+verification+evidence+reports together (including opt-in API calls); mode unchanged; all five tools stay advertised |\n\n"
+    "| `/jev off` / `/jev on` | guard+router+compress+triage+discovery+verification+evidence+diagnosis+reports together (including opt-in API calls); mode unchanged; all six tools stay advertised |\n\n"
     "Tip: the Confirm dialog's **Allow all this session** button keeps the guard scoring+auditing "
     "but stops asking; `/jev guard off` skips the ~0.4 s review entirely.\n\n"
     f"Get a key at {keys.GET_KEY_URL}. Keys are stored in `{keys.plugin_config_path()}` (mode 600), "
@@ -172,7 +173,7 @@ def _cmd_key(rest: list[str], ext, out: Emitter, host_call) -> None:
     ext.activate(value, source=f"file:{where}")
     out.text(
         "✓ Jev is active: " + ", ".join(k for k, v in ext.features.items() if v) + ".\n\n"
-        "The guard now reviews bash/write/edit/read calls; `jev_decide`, `jev_select` and `jev_status` are live; `jev_verify` is available (enable optional advice with `/jev verification on`); `jev_evidence` is available (enable descriptor relevance advice with `/jev evidence on`)."
+        "The guard now reviews bash/write/edit/read calls; `jev_decide`, `jev_select` and `jev_status` are live; `jev_verify` is available (enable optional advice with `/jev verification on`); `jev_evidence` is available (enable descriptor relevance advice with `/jev evidence on`); `jev_diagnose` is available (enable supplied-hypothesis/check advice with `/jev diagnosis on`)."
     )
 
 
@@ -221,7 +222,7 @@ def _cmd_economy(rest, ext, out, host_call) -> None:
         ext.set_feature(name, enabled, persist=persist)
     out.system("Economy preset applied; guard unchanged; compression deterministic — "
                + ("saved" if persist else "session only; --save persists"))
-    out.text("Router and triage configured on; discovery, verification, evidence and reports off. "
+    out.text("Router and triage configured on; discovery, verification, evidence, diagnosis and reports off. "
              "Economy is a preset, not a savings estimate. /jev on enables all features including guard; "
              "it leaves the chosen compression mode alone.")
     if ext.client is None:

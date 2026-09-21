@@ -13,9 +13,9 @@ Hooks (all subscribed in .synaps-plugin/plugin.json):
   before_message    remember the latest user message as the compression "goal"
   on_session_start  inject a one-paragraph note so the model knows the guard exists
 
-Tools:   jev_evidence (descriptor relevance), jev_verify (verification priority), jev_select (candidate IDs), jev_decide (typed questions), jev_status (accounting) — always
+Tools:   jev_diagnose (supplied hypotheses/checks), jev_evidence (descriptor relevance), jev_verify (verification priority), jev_select (candidate IDs), jev_decide (typed questions), jev_status (accounting) — always
          advertised; without a key they explain how to set one.
-Command: /jev economy|key|status|test|guard|router|compress|triage|discovery|verification|evidence|reports|on|off — set a key or flip a
+Command: /jev economy|key|status|test|guard|router|compress|triage|discovery|verification|evidence|diagnosis|reports|on|off — set a key or flip a
          feature without restarting (session-only unless --save).
 
 Key setup: the runtime resolves `api_key` once at initialize. If none is
@@ -39,7 +39,7 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from jev import audit as audit_mod  # noqa: E402
-from jev import commands, compress, discovery, evidence, guard, keys, reports, router, tools, triage, verify  # noqa: E402
+from jev import commands, compress, discovery, diagnose, evidence, guard, keys, reports, router, tools, triage, verify  # noqa: E402
 from jev.policy import BudgetPolicy
 from jev.client import DecisionClient, JevError, Stats  # noqa: E402
 
@@ -102,7 +102,7 @@ class Extension:
         self.cfg: dict = {}
         self.policy = BudgetPolicy()
         self.key_source = "none"
-        self.features = {"guard": False, "router": False, "compress": False, "triage": False, "discovery": False, "verification": False, "evidence": False, "reports": False, "tools": True}
+        self.features = {"guard": False, "router": False, "compress": False, "triage": False, "discovery": False, "verification": False, "evidence": False, "diagnosis": False, "reports": False, "tools": True}
         # Session-only feature overrides from `/jev guard off` etc. Applied on
         # top of config every time features are (re)computed, so a later
         # `/jev key …` re-activation cannot silently re-arm a disabled guard.
@@ -151,7 +151,7 @@ class Extension:
         self.recompute_features()
         log("active (" + ", ".join(k for k, v in self.features.items() if v) + f") key from {source}")
 
-    FEATURE_DEFAULTS = {"guard": True, "router": True, "compress": False, "triage": True, "discovery": False, "verification": False, "evidence": False, "reports": False}
+    FEATURE_DEFAULTS = {"guard": True, "router": True, "compress": False, "triage": True, "discovery": False, "verification": False, "evidence": False, "diagnosis": False, "reports": False}
 
     def configured_feature(self, name: str) -> bool:
         """The persisted (config) value of a feature, ignoring session overrides."""
@@ -232,7 +232,7 @@ class Extension:
 
         # Tools are always advertised so the model can discover the plugin and
         # be told how to configure it.
-        return {"protocol_version": 1, "capabilities": {"tools": [tools.DECIDE_SPEC, tools.STATUS_SPEC, tools.SELECT_SPEC, verify.SPEC, evidence.SPEC]}}
+        return {"protocol_version": 1, "capabilities": {"tools": [tools.DECIDE_SPEC, tools.STATUS_SPEC, tools.SELECT_SPEC, verify.SPEC, evidence.SPEC, diagnose.SPEC]}}
 
     # ── hooks ───────────────────────────────────────────────────────────
 
@@ -280,6 +280,7 @@ class Extension:
             return {"action": "inject", "content": (
                 "Jev offers jev_select for batched candidate-ID choices and jev_decide for typed questions. "
                 "jev_verify prioritizes optional checks only; honor all project/user/CI mandatory checks. "
+                "jev_diagnose prioritizes supplied hypotheses/checks only; /jev diagnosis on. "
                 "jev_evidence offers descriptor relevance only, never trust or fetch permission; /jev evidence on. "
                 "Opt-in /jev reports on adds unverified worker-claim advice, never lifecycle or merge authority. "
                 "Enable with /jev verification on; configure the shared key with /jev key. "
@@ -299,6 +300,9 @@ class Extension:
 
     def _tool_call(self, params: dict) -> dict:
         name = params.get("name")
+        if name == "jev_diagnose":
+            return diagnose.call_diagnose(params.get("input"), self.client, self.audit,
+                                          enabled=self.features["diagnosis"])
         if name == "jev_evidence":
             return evidence.call_evidence(params.get("input"), self.client, self.audit,
                                           enabled=self.features["evidence"])
