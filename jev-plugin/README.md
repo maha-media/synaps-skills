@@ -786,7 +786,8 @@ Opt in with `/jev reports on|off [--save]` (default **off**, independent of guar
 `/jev on` and `/jev off` include reports; all **five** existing tools remain
 advertised. There is no new tool or host change. Status exposes
 `reports.call/questions/cache/skip/advice/abstain/error` and actual `reports`
-operation cost, tokens and latency. There is no live quality/savings claim.
+operation cost, tokens and latency. The [supplied synthetic live report](scripts/reports-benchmark/README.md)
+records limited flag-quality measurements, not end-to-end savings.
 
 Only exact runtime `subagent_collect` results qualify (runtime name takes
 precedence over display name). Running, expired, malformed, oversized,
@@ -838,6 +839,7 @@ cover original JSON values, input nonmutation and advisory-only output; no
 transcript compression or worker/check execution occurs. Output bytes total the
 four initial raw tool-result serializations, not hook envelopes; deltas include
 formatting changes and may be negative. Usage/cost remain null when unknown;
-returned model names are allowlisted. No live run or savings claim is supplied.
+returned model names are allowlisted. The [retained live results](scripts/reports-benchmark/README.md)
+document four synthetic calls and their limitations; no savings claim is made.
 
 Offline tests: `python3 -B -m unittest discover -s jev-plugin/tests -p 'test_benchmark_reports.py' -v`.

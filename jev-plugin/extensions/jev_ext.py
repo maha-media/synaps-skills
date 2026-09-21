@@ -9,6 +9,7 @@ Hooks (all subscribed in .synaps-plugin/plugin.json):
   before_tool_call  bash/write/edit/read → guard   (continue|confirm|block, fail-closed)
                     subagent_start/subagent → router (modify: role/write_policy/model, fail-open)
   after_tool_call   bash → advisory triage, otherwise compress (opt-in, fail-open)
+                    subagent_collect → worker-report annotation (opt-in, advisory only; no host authority)
   before_message    remember the latest user message as the compression "goal"
   on_session_start  inject a one-paragraph note so the model knows the guard exists
 
