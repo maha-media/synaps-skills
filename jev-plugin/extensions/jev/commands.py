@@ -25,6 +25,8 @@ USAGE = (
     "**/jev** — TypeSafe Jev decision layer\n\n"
     "| command | does |\n|---|---|\n"
     "| `/jev key <apikey_…>` | validate, save, and activate an API key (no restart) |\n"
+    "| `/jev economy [--save]` | preset: guard unchanged; router+triage on, deterministic compression; optional advice off; no savings claim |\n"
+    "| `/jev compress mode jev\\|deterministic [--save]` | choose compression mode without enabling it |\n"
     "| `/jev status` | configuration + session stats |\n"
     "| `/jev test` | one live decision: latency + cost |\n"
     "| `/jev guard off` | stop reviewing tool calls for this session (`--save` persists) |\n"
@@ -33,7 +35,7 @@ USAGE = (
     "| `/jev evidence on\\|off [--save]` | opt-in descriptor relevance advice; no fetch or trust certification |\n"
     "| `/jev verification on\\|off [--save]` | opt-in explicit optional-check prioritization, independent of guard |\n"
     "| `/jev reports on\\|off [--save]` | opt-in worker-report claim triage, independent of guard; no lifecycle authority |\n"
-    "| `/jev off` / `/jev on` | guard+router+compress+triage+discovery+verification+evidence+reports together (including opt-in API calls); all five tools stay advertised |\n\n"
+    "| `/jev off` / `/jev on` | guard+router+compress+triage+discovery+verification+evidence+reports together (including opt-in API calls); mode unchanged; all five tools stay advertised |\n\n"
     "Tip: the Confirm dialog's **Allow all this session** button keeps the guard scoring+auditing "
     "but stops asking; `/jev guard off` skips the ~0.4 s review entirely.\n\n"
     f"Get a key at {keys.GET_KEY_URL}. Keys are stored in `{keys.plugin_config_path()}` (mode 600), "
@@ -92,6 +94,10 @@ def handle(params: dict, ext, send, host_call) -> dict:
             _cmd_status(ext, out)
         elif sub == "test":
             _cmd_test(ext, out)
+        elif sub == "economy":
+            _cmd_economy(args[1:], ext, out, host_call)
+        elif sub == "compress" and len(args) > 1 and args[1] == "mode":
+            _cmd_compress_mode(args[2:], ext, out, host_call)
         elif sub in ext.FEATURE_DEFAULTS:
             _cmd_feature([sub], args[1:], ext, out, host_call)
         elif sub in ("on", "off"):
@@ -158,6 +164,50 @@ def _parse_on_off(word: str) -> bool | None:
     return None
 
 
+def _setting_args(rest: list[str], *, mode: bool = False) -> tuple[str | None, bool]:
+    words = [a for a in rest if a != "--save"]
+    if rest.count("--save") > 1 or (mode and (len(words) != 1 or words[0] not in ("jev", "deterministic"))) or (not mode and words):
+        raise ValueError("expected jev|deterministic [--save]" if mode else "expected [--save]")
+    return (words[0] if mode else None), "--save" in rest
+
+
+def _save_setting(name: str, value: str, host_call) -> None:
+    try:
+        host_call("config.set", {"key": name, "value": value})
+    except Exception:
+        keys.write_plugin_config(name, value)
+
+
+def _cmd_compress_mode(rest, ext, out, host_call) -> None:
+    mode, persist = _setting_args(rest, mode=True)
+    if persist:
+        _save_setting("compress_mode", mode, host_call)
+    ext.set_compress_mode(mode, persist=persist)
+    out.system(f"compress mode: {mode} — " + ("saved" if persist else "session only; --save persists"))
+    out.text("Mode does not enable compression; use `/jev compress on` or `/jev economy`.")
+
+
+def _cmd_economy(rest, ext, out, host_call) -> None:
+    _, persist = _setting_args(rest)
+    settings = {name: name in ("router", "triage", "compress")
+                for name in ext.FEATURE_DEFAULTS if name != "guard"}
+    if persist:
+        _save_setting("compress_mode", "deterministic", host_call)
+        for name, enabled in settings.items():
+            _save_setting(name, "true" if enabled else "false", host_call)
+    ext.set_compress_mode("deterministic", persist=persist)
+    for name, enabled in settings.items():
+        ext.set_feature(name, enabled, persist=persist)
+    out.system("Economy preset applied; guard unchanged; compression deterministic — "
+               + ("saved" if persist else "session only; --save persists"))
+    out.text("Router and triage configured on; discovery, verification, evidence and reports off. "
+             "Economy is a preset, not a savings estimate. /jev on enables all features including guard; "
+             "it leaves the chosen compression mode alone.")
+    if ext.client is None:
+        out.text("No API key: only local compression is active. Remote features need `/jev key <apikey_…>`; "
+                 "guard remains inert and tools remain available.")
+
+
 def _cmd_feature(names: list[str], rest: list[str], ext, out: Emitter, host_call) -> None:
     """`/jev <feature> on|off [--save]` and `/jev on|off [--save]`."""
     flags = {a.lower() for a in rest if a.startswith("-")}
@@ -176,7 +226,7 @@ def _cmd_feature(names: list[str], rest: list[str], ext, out: Emitter, host_call
     if enabled is None:
         out.error(f"expected on|off, got {words[0]!r}")
         return
-    if ext.client is None and enabled:
+    if ext.client is None and enabled and not (names == ["compress"] and ext.compress_cfg.mode == "deterministic"):
         out.error("No API key — nothing to enable. Run `/jev key <apikey_…>` first.")
         return
 
@@ -215,6 +265,8 @@ def _cmd_status(ext, out: Emitter) -> None:
         ["key", f"{keys.redact(key)}  ({source})" if key else f"(none)  → {keys.GET_KEY_URL}"],
         ["model", ext.model_name() + (f"  (answering as {ext.client.stats.last_model})" if active and ext.client.stats.last_model else "")],
         ["features", _features_line(ext)],
+        ["compress mode", ext.compress_cfg.mode],
+        ["local compression folds", str(ext.audit.counters.get("compress.local", 0))],
         ["audit", str(ext.audit.path) if ext.audit.path else "(off)"],
     ]
     if active:
@@ -227,6 +279,9 @@ def _cmd_status(ext, out: Emitter) -> None:
             ["verdicts", ", ".join(f"{k}={v}" for k, v in sorted(ext.audit.counters.items())) or "—"],
         ]
     out.table(["jev", ""], rows)
+    out.text("/jev on [--save]: all features including guard, mode unchanged. "
+             "/jev economy [--save]: guard unchanged, router/triage on, deterministic compression; "
+             "other optional advice off. Remote features require a key; no savings estimate.")
 
 
 def _features_line(ext) -> str:

@@ -14,7 +14,7 @@ through harness hooks and five explicit tools:
 |---|---|---|
 | **Guard** (`before_tool_call`) | Scores every `bash`/`write`/`edit`/`read` call for risk, secret exposure, workspace escape → `continue` / `confirm` / `block` | Nothing. If a call pauses for confirmation, that is the gate working. Prefer confined, reversible commands. |
 | **Router** (`subagent_start`) | Fills `role` / `write_policy` (and `model` if a tier map is configured) when you omit them | Omit fields you don't have an opinion on. Explicit values are never overridden. |
-| **Compress** (`after_tool_call`, opt-in) | Elides the middle of large *routine* bash outputs at ingestion; never touches failures | Nothing. The marker tells you what was cut and how to get it back. |
+| **Compress** (`after_tool_call`, opt-in) | Losslessly folds identical-line runs in bounded repetitive bash output; never touches failures | Nothing. Expand the runs exactly as instructed to recover the original untrusted output. |
 | **`jev_decide`** tool | Ask many typed questions about one `state` in one request | Read the rest of this page. |
 | **`jev_select`** tool | Batch supplied-ID candidate choices | Use for uncertain choices, not execution or authorization. |
 | **`jev_verify`** tool | Preserve required IDs and advise optional-check priority (default off) | Supply task, changes and checks; see the example below. |
@@ -265,3 +265,16 @@ Deprecated head/tail settings are ignored. Successful-fold byte counters are
 actual bytes, not dollar savings. Local roundtrip preservation is a plugin
 contract, not a promise against later host context-budget truncation. Reports
 and triage priorities and events/compaction are unchanged.
+
+
+### Explicit economy preset
+
+`/jev on [--save]` enables all features including guard and opt-in remote advice;
+it preserves the chosen compression mode. `/jev economy [--save]` leaves guard
+unchanged, configures router/triage on and deterministic compression, and disables
+discovery/verification/evidence/reports. No automatic configuration or savings
+claim. `/jev compress mode jev|deterministic [--save]` selects presentation mode
+without enabling compression. Deterministic mode uses the same bounded lossless
+checks locally with zero compression API calls. No-key defaults stay inert;
+explicit deterministic compression/economy can run locally, but remote features
+still need a key. `/jev off` disables local compression too. Tools stay available.

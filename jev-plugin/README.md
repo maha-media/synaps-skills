@@ -63,6 +63,36 @@ get configured, and `/jev` still works.
 
 Get a key at https://typesafe.ai.
 
+## All-on versus economy (explicit presets)
+
+- **`/jev on [--save]`** enables every feature, **including guard** and opt-in
+  discovery, verification, evidence and reports. It leaves the chosen compression
+  mode alone. A key is required for all-on.
+- **`/jev economy [--save]`** leaves guard **unchanged**, configures router and
+  triage on, enables **deterministic** compression, and turns discovery,
+  verification, evidence and reports off. Economy is a preset, not a feature flag
+  or a claim of savings. No setup or defaults are changed automatically.
+- **`/jev off [--save]`** disables every feature, including deterministic
+  compression. Tools remain advertised.
+
+`/jev compress mode jev|deterministic [--save]` chooses the mode immediately
+without enabling compression. `jev` (the default) keeps the remote readability
+choice; `deterministic` performs only the **same bounded lossless checks and exact
+roundtrip** locally, with no API call or outbound redaction step. Both preserve
+failure output, reject unsafe/truncated/structured candidates, and use the same
+identical-line-run representation, not a lossy summary. Local folds increment
+`compress.local` plus the shared fold/byte counters; byte reduction is not a
+model-token or dollar-savings measurement.
+
+Without a key, defaults remain inert. Local compression is allowed only with
+explicit `compress=true` and `compress_mode=deterministic`, or after selecting
+economy. Economy can be saved without a key: remote features remain inactive
+until a key is supplied; the guard's inert behavior is unchanged. Session choices
+survive key reactivation; only `--save` persists to a new session. Existing exact
+session caches for routing, triage and reports are reused (no generic tool-call
+cache); all advice caches clear on key/model activation and deactivation. Guard
+reviews are never cached. `/jev status` shows mode and preset guidance.
+
 ## Turning the guard off (without losing the rest)
 
 ```
@@ -127,6 +157,7 @@ All keys live under `extension.jev.*` in `~/.synaps-cli/config`, or as
 | `evidence` | `false` | descriptor relevance advice; `/jev evidence on\|off [--save]`; independent of guard |
 | `verification` | `false` | optional priority advice; `/jev verification on\|off [--save]`; independent of guard |
 | `triage` | `true` | advisory failure classification; `/jev triage on\|off [--save]`; independent of guard |
+| `compress_mode` | `jev` | Only `jev` or `deterministic`; mode alone does not enable compression |
 | `compress` | `false` | opt-in; `/jev compress on\|off [--save]` |
 | `compress_tools` | `bash` | intersected with hard allowlist `{bash}` |
 | `compress_min_bytes` | `6000` | integer clamped to 6000..262144; invalid uses default |

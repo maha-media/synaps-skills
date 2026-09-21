@@ -108,6 +108,9 @@ def decode_output(encoded):
 
 class CompressConfig:
     def __init__(self, cfg):
+        self.mode = cfg.get('compress_mode', 'jev')
+        if self.mode not in ('jev', 'deterministic'):
+            raise ValueError('compress_mode must be jev or deterministic')
         tools = cfg.get('compress_tools', 'bash')
         self.tools = {'bash'} & ({t.strip() for t in tools.split(',')} if isinstance(tools, str) else set())
         minimum = cfg.get('compress_min_bytes', 6000)
@@ -158,7 +161,7 @@ def handle(params, goal, client, cfg, audit, log):
     try:
         output = params.get('tool_output')
         tool = params.get('tool_runtime_name', params.get('tool_name'))
-        if (client is None or not isinstance(tool, str) or tool not in cfg.tools
+        if ((client is None and cfg.mode != 'deterministic') or not isinstance(tool, str) or tool not in cfg.tools
                 or not safe_text(output) or recognized(params) or MARKERS.search(output)
                 or _ERRORISH.search(output)
                 or any('truncat' in k.lower() and v is not None and v is not False for k, v in params.items())):
@@ -179,20 +182,24 @@ def handle(params, goal, client, cfg, audit, log):
         size = len(candidate.encode('utf-8'))
         if size * 10 > raw_bytes * 7 or raw_bytes - size < 1024 or decode_output(candidate) != output:
             raise ValueError()
-        # Redact the whole transcript before forming runs: multi-line credentials stay covered.
-        state = {'runs': line_runs(redact(output)), 'original_utf8_bytes': raw_bytes}
-        if len(dumps(state).encode('utf-8')) > MAX_ENCODED:
-            raise ValueError()
+        if cfg.mode == 'jev':
+            # Only outbound data needs redaction; the local candidate remains lossless.
+            state = {'runs': line_runs(redact(output)), 'original_utf8_bytes': raw_bytes}
+            if len(dumps(state).encode('utf-8')) > MAX_ENCODED:
+                raise ValueError()
     except Exception:
         audit.bump('compress.skip')
         return dict(CONTINUE)
     try:
-        audit.bump('compress.call')
-        audit.bump('compress.questions')
-        response = client.decide(state, questions(), op='compress')
-        if not should_compress(response, cfg):
-            audit.bump('compress.keep')
-            return dict(CONTINUE)
+        if cfg.mode == 'jev':
+            audit.bump('compress.call')
+            audit.bump('compress.questions')
+            response = client.decide(state, questions(), op='compress')
+            if not should_compress(response, cfg):
+                audit.bump('compress.keep')
+                return dict(CONTINUE)
+        else:
+            audit.bump('compress.local')
         audit.bump('compress.fold')
         for key, value in {'input_bytes': raw_bytes, 'output_bytes': size, 'saved_bytes': raw_bytes - size}.items():
             name = 'compress.' + key

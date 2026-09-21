@@ -177,6 +177,12 @@
         "default": false
       },
       {
+        "key": "compress_mode",
+        "type": "string",
+        "default": "jev",
+        "description": "Compression presentation mode: jev (remote readability decision) or deterministic (local bounded lossless checks only). Does not enable compression."
+      },
+      {
         "key": "compress_tools",
         "type": "string",
         "description": "Comma-separated tools intersected with bash only; other tools are never compressed.",
@@ -241,7 +247,7 @@
   "commands": [
     {
       "name": "jev",
-      "description": "Jev decision layer: `/jev key <apikey_…>` validates+saves+activates a key without restart; `/jev status`; `/jev test`; `/jev guard|router|compress|triage|discovery|verification|evidence|reports on|off [--save]` flips one feature (session-only unless --save); `/jev off|on [--save]` flips all eight (including opt-in discovery, verification, evidence and reports).",
+      "description": "Jev decision layer: `/jev key <apikey_…>` validates+saves+activates a key without restart; `/jev status`; `/jev test`; `/jev guard|router|compress|triage|discovery|verification|evidence|reports on|off [--save]` flips one feature (session-only unless --save); `/jev off|on [--save]` flips all eight (including opt-in discovery, verification, evidence and reports). `/jev economy [--save]`: guard unchanged, router/triage on, deterministic compression, optional advice off; no savings claim. `/jev compress mode jev|deterministic [--save]` chooses mode; all-on leaves it unchanged.",
       "interactive": true,
       "subcommands": [
         "key",
@@ -256,7 +262,8 @@
         "evidence",
         "reports",
         "on",
-        "off"
+        "off",
+        "economy"
       ]
     }
   ]

@@ -104,9 +104,10 @@ def test_fold_accounting_and_original_secrets():
     'omitted\n'+RAW, '[jev: elided]\n'+RAW, 'jev_lossless_runs\n'+RAW,
     json.dumps({'x': RAW}), json.dumps([RAW]), 'x'*7000, 'é'*140000,
     ''.join(f'unique {i}\n' for i in range(1500)), 'x\n'*140000])
-def test_preflight_skip(raw):
+@pytest.mark.parametrize("mode", ["jev", "deterministic"])
+def test_preflight_skip(raw, mode):
     client = Client()
-    result, counts, records, logs = handle(raw, client)
+    result, counts, records, logs = handle(raw, client, config={"compress_mode": mode})
     assert result == c.CONTINUE and not client.calls and counts == {'compress.skip': 1}
     assert not records and not logs
 
@@ -200,13 +201,14 @@ def test_exact_threshold():
     'exception', 'exit code 1', 'exit status 23',
 ])
 @pytest.mark.parametrize('position', ['beginning', 'middle', 'tail'])
-def test_full_raw_failure_markers_skip(marker, position):
+@pytest.mark.parametrize("mode", ["jev", "deterministic"])
+def test_full_raw_failure_markers_skip(marker, position, mode):
     # Both sides exceed old head/tail windows; scan the full raw transcript.
     raw = {'beginning': marker + '\n' + RAW,
            'middle': RAW + marker + '\n' + RAW,
            'tail': RAW + marker + '\n'}[position]
     client = Client()
-    result, counts, records, logs = handle(raw, client)
+    result, counts, records, logs = handle(raw, client, config={"compress_mode": mode})
     assert result == c.CONTINUE
     assert not client.calls and counts == {'compress.skip': 1}
     assert not records and not logs
@@ -257,3 +259,23 @@ def test_captured_typed_diagnostic_below_gate_keeps():
     accepted = copy.deepcopy(response)
     accepted['answers']['format']['confidence'] = .85
     assert c.should_compress(accepted, c.CompressConfig({}))
+
+
+@pytest.mark.parametrize('client', [None, Client(RuntimeError('PRIVATE API failure'))])
+def test_deterministic_shared_fold_no_outbound(client):
+    raw = RAW + 'token="private multi word"\n' + RAW
+    with patch.object(c, 'redact', side_effect=AssertionError('local redaction forbidden')):
+        result, counts, records, logs = handle(raw, client, config={'compress_mode': 'deterministic'})
+    assert c.decode_output(result['output']) == raw
+    assert counts['compress.local'] == counts['compress.fold'] == 1
+    assert counts['compress.saved_bytes'] == len(raw.encode()) - len(result['output'].encode())
+    assert 'compress.call' not in counts and 'compress.questions' not in counts
+    assert 'private multi word' not in str(records) + str(logs)
+    if client:
+        assert not client.calls
+
+
+def test_no_key_jev_keeps_original_and_bad_mode_rejected():
+    assert handle()[0] == c.CONTINUE
+    with pytest.raises(ValueError):
+        c.CompressConfig({'compress_mode': 'invalid'})

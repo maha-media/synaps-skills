@@ -15,7 +15,7 @@ Hooks (all subscribed in .synaps-plugin/plugin.json):
 
 Tools:   jev_evidence (descriptor relevance), jev_verify (verification priority), jev_select (candidate IDs), jev_decide (typed questions), jev_status (accounting) — always
          advertised; without a key they explain how to set one.
-Command: /jev key|status|test|guard|router|compress|triage|discovery|verification|evidence|reports|on|off — set a key or flip a
+Command: /jev economy|key|status|test|guard|router|compress|triage|discovery|verification|evidence|reports|on|off — set a key or flip a
          feature without restarting (session-only unless --save).
 
 Key setup: the runtime resolves `api_key` once at initialize. If none is
@@ -117,6 +117,20 @@ class Extension:
 
     # ── config / activation ─────────────────────────────────────────────
 
+    def clear_caches(self) -> None:
+        """Invalidate all exact-session advice on key/model activation changes."""
+        for component in (self.router, self.triage, self.reports, self.discovery):
+            component.cache.clear()
+
+    def set_compress_mode(self, mode: str, *, persist: bool) -> None:
+        """Set presentation mode immediately; caller persists before calling."""
+        if mode not in ("jev", "deterministic"):
+            raise ValueError("compress_mode must be jev or deterministic")
+        if persist:
+            self.cfg["compress_mode"] = mode
+        self.compress_cfg.mode = mode
+        self.recompute_features()
+
     def model_name(self) -> str:
         return str(self.cfg.get("model") or "jev-latest")
 
@@ -125,7 +139,7 @@ class Extension:
 
     def activate(self, api_key: str, *, source: str) -> None:
         """Bring the decision layer up with this key (idempotent, no restart)."""
-        self.reports.cache.clear()
+        self.clear_caches()
         self.client = DecisionClient(api_key, model=self.model_name(), timeout_s=self.timeout_s())
         self.key_source = source
         self.recompute_features()
@@ -139,10 +153,13 @@ class Extension:
 
     def recompute_features(self) -> None:
         """features = config defaults, then session overrides. Only meaningful
-        while a client exists; an inert extension has everything but tools off."""
+        while a client exists; explicit deterministic compression can run locally."""
         if self.client is None:
             for k in self.FEATURE_DEFAULTS:
                 self.features[k] = False
+            self.features["compress"] = (
+                self.compress_cfg.mode == "deterministic"
+                and self.session_overrides.get("compress", self.configured_feature("compress")))
             self.features["tools"] = True
             return
         for k in self.FEATURE_DEFAULTS:
@@ -164,7 +181,7 @@ class Extension:
         self.recompute_features()
 
     def deactivate(self) -> None:
-        self.reports.cache.clear()
+        self.clear_caches()
         self.client = None
         self.key_source = "none"
         self.recompute_features()
@@ -203,6 +220,8 @@ class Extension:
         else:
             log(f"inert: no API key. Run `/jev key <apikey_…>` in synaps, or `scripts/setup.sh --key …` "
                 f"(stores in {keys.plugin_config_path()}). Re-checking every {INERT_RECHECK_S:.0f}s.")
+
+        self.recompute_features()
 
         # Tools are always advertised so the model can discover the plugin and
         # be told how to configure it.
