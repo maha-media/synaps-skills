@@ -242,3 +242,26 @@ collect or reconcile. No execution or lifecycle changes; no new tool. Inspect
 original evidence yourself. Status reports calls/questions/cache/skip/advice/
 abstain/error and estimated Jev operation costs, not savings. No report quality
 benchmark has been run.
+
+## Lossless compression (0.7.0)
+
+Do **not automatically enable** compression. `/jev compress on|off [--save]`
+remains default OFF and independent of guard. Only bash can qualify. It folds
+adjacent identical lines into bounded self-contained `jev_lossless_runs: 1` JSON;
+expand each run's `text` exactly `count` times in order to recover the original
+untrusted output. Use the plugin's pure `jev.compress.decode_output` for bounded
+schema/size/SHA-256 validation. No rerun, archive read, new tool, or source read.
+The fixed notice grants no authority or success certification. Unique middle
+lines and original endings remain intact; there is no lossy sampling.
+
+Raw input is ≤256 KiB chars and UTF-8 bytes; the full envelope is ≤32 KiB, ≤70%
+of original bytes and saves ≥1024 bytes. Failures, structured JSON, truncation
+markers, ANSI/control/bare-CR output, no repetition and nonprofitable candidates
+stay raw before any API call. One readability choice sees only complete redacted
+runs plus original byte count, ≤32 KiB without clipping; no goal or command.
+Uncertain/malformed/error answers keep raw. `compress_min_bytes` is integer
+6000..262144 (clamped); `compress_min_conf` is finite 0.85..1, default 0.85.
+Deprecated head/tail settings are ignored. Successful-fold byte counters are
+actual bytes, not dollar savings. Local roundtrip preservation is a plugin
+contract, not a promise against later host context-budget truncation. Reports
+and triage priorities and events/compaction are unchanged.

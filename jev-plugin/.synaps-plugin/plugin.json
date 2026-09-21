@@ -1,7 +1,7 @@
 {
   "name": "jev",
-  "version": "0.6.0",
-  "description": "Calibrated Jev decisions: safety guard, sparse session-cached worker routing, opt-in compression and experimental discovery advice, automatic advisory bash failure triage, batched jev_decide and candidate-only jev_select. Opt-in explicit verification prioritization via jev_verify. Opt-in evidence descriptor relevance via jev_evidence (no fetch or trust certification). Opt-in automatic worker-report claim triage (no lifecycle authority).",
+  "version": "0.7.0",
+  "description": "Calibrated Jev decisions: safety guard, sparse session-cached worker routing, opt-in lossless identical-line compression and experimental discovery advice, automatic advisory bash failure triage, batched jev_decide and candidate-only jev_select. Opt-in explicit verification prioritization via jev_verify. Opt-in evidence descriptor relevance via jev_evidence (no fetch or trust certification). Opt-in automatic worker-report claim triage (no lifecycle authority).",
   "author": {
     "name": "JR Morton",
     "url": "https://github.com/maha-media"
@@ -173,37 +173,37 @@
       {
         "key": "compress",
         "type": "bool",
-        "description": "Opt-in: elide the middle of large, routine bash outputs at ingestion when Jev is confident head+tail suffice. Never on failures.",
+        "description": "Opt-in bounded reversible identical-line runs for bash output. Off by default, independent of guard; never on failures.",
         "default": false
       },
       {
         "key": "compress_tools",
         "type": "string",
-        "description": "Comma-separated runtime tool names eligible for compression.",
+        "description": "Comma-separated tools intersected with bash only; other tools are never compressed.",
         "default": "bash"
       },
       {
         "key": "compress_min_bytes",
         "type": "number",
-        "description": "Outputs smaller than this are never touched.",
+        "description": "Minimum raw UTF-8 bytes; integer clamped to 6000..262144, invalid uses 6000.",
         "default": 6000
       },
       {
         "key": "compress_min_conf",
         "type": "number",
-        "description": "Minimum probability mass on \"outcome only\" + \"head and tail suffice\" before eliding.",
+        "description": "Finite readability-choice confidence in 0.85..1; invalid uses 0.85.",
         "default": 0.85
       },
       {
         "key": "compress_head",
         "type": "number",
-        "description": "Bytes kept from the start of an elided output.",
+        "description": "Deprecated and ignored; no output is sampled or dropped.",
         "default": 1500
       },
       {
         "key": "compress_tail",
         "type": "number",
-        "description": "Bytes kept from the end of an elided output.",
+        "description": "Deprecated and ignored; no output is sampled or dropped.",
         "default": 1000
       },
       {

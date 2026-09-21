@@ -111,34 +111,6 @@ class RouterPolicy(unittest.TestCase):
 
 
 class CompressPolicy(unittest.TestCase):
-    cfg = compress.CompressConfig({})
-    legend = {str(i): l for i, l in enumerate(compress.NEED_LEVELS)}
-
-    def test_failure_never_compressed(self):
-        self.assertFalse(compress.should_compress({"need": score(0.1, 0.99, self.legend), "is_failure": noul(0.6)}, self.cfg))
-
-    def test_only_low_need_with_confidence(self):
-        self.assertTrue(compress.should_compress({"need": score(0.2, 0.9, self.legend), "is_failure": noul(0.02)}, self.cfg))
-        self.assertTrue(compress.should_compress({"need": score(1.1, 0.8, self.legend), "is_failure": noul(0.02)}, self.cfg))
-        self.assertFalse(compress.should_compress({"need": score(2.2, 0.9, self.legend), "is_failure": noul(0.02)}, self.cfg))
-
-    def test_mass_collapses_equivalent_levels(self):
-        split = {"type": "score", "score": 0.42, "confidence": 0.58, "legend": self.legend,
-                 "probabilities": {"0": 0.59, "1": 0.41, "2": 0.0, "3": 0.0}}
-        self.assertTrue(compress.should_compress({"need": split, "is_failure": noul(0.03)}, self.cfg),
-                        "59/41 across two compressible levels is 100% compressible")
-        spread = {"type": "score", "score": 1.4, "confidence": 0.3, "legend": self.legend,
-                  "probabilities": {"0": 0.3, "1": 0.3, "2": 0.4, "3": 0.0}}
-        self.assertFalse(compress.should_compress({"need": spread, "is_failure": noul(0.03)}, self.cfg))
-
-    def test_render_keeps_head_tail_and_marker(self):
-        out = "H" * 3000 + "M" * 5000 + "T" * 3000
-        new = compress.render(out, score(0.1, 0.95, self.legend), self.cfg)
-        self.assertTrue(new.startswith("H" * 1500))
-        self.assertTrue(new.endswith("T" * 1000))
-        self.assertIn("[jev: elided", new)
-        self.assertLess(len(new), len(out))
-
     def test_errorish_regex(self):
         self.assertTrue(compress._ERRORISH.search("....\ntest foo ... FAILED\n"))
         self.assertTrue(compress._ERRORISH.search("thread 'main' panicked at"))

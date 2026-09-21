@@ -97,7 +97,7 @@ def main():
     fails = 0
     audit = os.path.join(tempfile.mkdtemp(prefix="jev-e2e-"), "audit.jsonl")
     project_root = "/home/example/some-project"
-    ext = Ext({"api_key": key, "compress": True, "compress_min_bytes": 3000, "audit_file": audit,
+    ext = Ext({"api_key": key, "compress": True, "compress_min_bytes": 6000, "audit_file": audit,
                "router_models": "small=anthropic/claude-haiku-4-5", "project_root": project_root})
 
     print("── initialize")
@@ -147,11 +147,15 @@ def main():
 
     print("── compress (after_tool_call)")
     ext.hook("before_message", message="Run the full test suite and tell me if it passes.")
-    routine = "\n".join(f"test module_{i}::case_{j} ... ok" for i in range(40) for j in range(6)) + "\n\ntest result: ok. 240 passed; 0 failed\n"
+    routine = "routine progress ... ok\n" * 600 + "test result: ok. 240 passed; 0 failed\n"
     r = ext.hook("after_tool_call", tool_name="bash", tool_runtime_name="bash",
                  tool_input={"command": "cargo test --workspace"}, tool_output=routine)
     ok = r["action"] in ("replace", "continue")
-    shrunk = r["action"] == "replace" and len(r["output"]) < len(routine) and "[jev: elided" in r["output"]
+    shrunk = r["action"] == "replace" and len(r["output"]) < len(routine) and "jev_lossless_runs" in r["output"]
+    if r["action"] == "replace":
+        from jev.compress import decode_output
+        ok = shrunk and decode_output(r["output"]) == routine
+    fails += not ok
     print(f"  {'✓' if ok else '✗'} routine 240-pass output → {r['action']}" + (f" ({len(routine)} → {len(r['output'])} bytes)" if shrunk else " (kept — acceptable, conservative)"))
     failing = routine.replace("module_17::case_3 ... ok", "module_17::case_3 ... FAILED") + "failures:\n    module_17::case_3\n"
     r = ext.hook("after_tool_call", tool_name="bash", tool_runtime_name="bash",

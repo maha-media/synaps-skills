@@ -37,7 +37,7 @@ def offline_post(self, body, *, timeout_s):
         "role": {"choice": "reviewer", "confidence": 1},
         "needs_write": {"noul": 0},
         "tier": {"choice": "small", "confidence": 1},
-        "need": {"probabilities": {"0": 1}, "legend": {"0": "outcome"}},
+        "format": {"type": "choice", "choice": "compact", "confidence": 1},
         "is_failure": {"noul": 0},
         "ok": {"noul": 1},
         "verification": {"choice": "gap", "confidence": .9},
@@ -263,8 +263,18 @@ class FeatureProtocolTests(unittest.TestCase):
         self.assertEqual(result['action'], 'modify')
         self.assertEqual(result['input']['role'], 'reviewer')
         output = 'routine output\n' * 600
+        fold = h.hook('after_tool_call', tool_runtime_name='bash', tool_output=output)
+        self.assertEqual(fold['action'], 'replace')
+        from jev.compress import decode_output
+        self.assertEqual(decode_output(fold['output']), output)
+        self.assertEqual(h.status()['counters']['compress.fold'], 1)
+        self.assertEqual(h.status()['counters']['compress.saved_bytes'],
+                         len(output.encode()) - len(fold['output'].encode()))
+        before = h.status()['calls']
+        unique = ''.join(f'unique line {i}\n' for i in range(1000))
         self.assertEqual(h.hook('after_tool_call', tool_runtime_name='bash',
-                                tool_output=output)['action'], 'replace')
+                                tool_output=unique)['action'], 'continue')
+        self.assertEqual(h.status()['calls'], before)
         self.command(h, 'router', 'off')
         self.assertTrue(h.status()['features']['compress'])
         self.command(h, 'compress', 'off')
@@ -276,6 +286,26 @@ class FeatureProtocolTests(unittest.TestCase):
             'state': 'fixture', 'questions': {'ok': {'type': 'noul', 'instructions': 'Fixture?'}}}})
         self.assertEqual(json.loads(result['result']['content'])['answers']['ok']['noul'], 1)
         self.assertEqual(h.status()['by_op'], {'router': 1, 'compress': 1, 'decide': 1})
+
+    def test_compress_default_off_and_saved_independent(self):
+        h = self.host()
+        output = 'routine output\n' * 600
+        self.assertFalse(h.status()['features']['compress'])
+        self.assertEqual(h.hook('after_tool_call', tool_runtime_name='bash',
+                                tool_output=output)['action'], 'continue')
+        self.assertEqual(h.status()['calls'], 0)
+        self.command(h, 'guard', 'off', '--save')
+        self.command(h, 'compress', 'on', '--save')
+        self.assertEqual(h.config_sets, [('guard', 'false'), ('compress', 'true')])
+        saved = dict(h.persisted)
+        h.close()
+        fresh = self.host(config=saved)
+        self.assertFalse(fresh.status()['features']['guard'])
+        self.assertTrue(fresh.status()['features']['compress'])
+        fold = fresh.hook('after_tool_call', tool_runtime_name='bash', tool_output=output)
+        from jev.compress import decode_output
+        self.assertEqual(decode_output(fold['output']), output)
+        self.assertEqual(fresh.status()['by_op'], {'compress': 1})
 
     def test_session_only_does_not_write_and_fresh_process_resets(self):
         h = self.host()
