@@ -37,7 +37,23 @@ def case(name, query, rows, expected=None, behavior='abstain', skills=False,
                 tool_input={'query': query}, tool_output=compact(payload)))
 
 
-def fixtures():
+AUDIT_COUNTERS = ('skip', 'call', 'cache', 'recommend', 'abstain', 'error')
+
+
+def fixtures(suite='default'):
+    if suite == 'heldout':
+        rows = json.loads((Path(__file__).parent / 'fixtures' / 'discovery_heldout.json').read_text())
+        result = []
+        for row in rows:
+            skills = row['kind'] == 'skills'
+            c = case(row['name'], row['query'],
+                     [(skill if skills else tool)(*candidate) for candidate in row['candidates']],
+                     row['expected'], 'recommend' if row['expected'] else 'abstain', skills=skills)
+            c['label_assumption'] = row['assumption']
+            result.append(c)
+        return result
+    if suite != 'default':
+        raise ValueError('unknown suite')
     image = [tool('receipt_archive', 'Store image resize job receipts; never modify images.'),
              tool('pixel_resizer', 'Perform image resize operations to requested pixel dimensions.')]
     python = [skill('course_catalogue', 'List Python debugging training courses; does not diagnose code.'),
@@ -104,20 +120,24 @@ def baseline(cases):
                             latency_ms=0, appended_bytes=0),
                 first_candidate=dict(results=rows, correct=correct, denominator=len(eligible),
                                      accuracy=correct / len(eligible)),
-                caveat='Explicit fixture-order comparator, NOT a frontier model or savings estimate; skips excluded.')
+                caveat='Weak synthetic labels infer task intent from substring queries; abstention may be reasonable. Explicit fixture-order comparator, NOT a frontier model or savings estimate; skips excluded.')
 
 
-def offline_report():
-    cases = fixtures()
-    return dict(mode='offline', fixture_validation=validate(cases), baselines=baseline(cases),
+def offline_report(suite='default'):
+    cases = fixtures(suite)
+    return dict(mode='offline', suite=suite, min_confidence=discovery.MIN_CONFIDENCE,
+                label_assumptions={c['case']: c.get('label_assumption', 'Weak label: assumes operational intent from substring, not a full task.') for c in cases}, fixture_validation=validate(cases), baselines=baseline(cases),
                 jev=dict(status='not_executed', results=None, calls=None, input_tokens=None,
-                         estimated_cost_usd=None, latency_ms=None, accuracy=None))
+                         estimated_cost_usd=None, latency_ms=None, accuracy=None, skips=None,
+                         abstentions=None, repeats=None, client_stats=None,
+                         audit={f'discovery.{name}': None for name in AUDIT_COUNTERS}))
 
 
-def measure(client):
+def measure(client, suite='default'):
     """Exercise production Discovery with an injected client (Stats-compatible)."""
-    cases = fixtures()
-    report = dict(mode='measured', fixture_validation=validate(cases), baselines=baseline(cases))
+    cases = fixtures(suite)
+    report = dict(mode='measured', suite=suite, min_confidence=discovery.MIN_CONFIDENCE,
+                  label_assumptions={c['case']: c.get('label_assumption', 'Weak label: assumes operational intent from substring, not a full task.') for c in cases}, fixture_validation=validate(cases), baselines=baseline(cases))
     runner, audit, results = discovery.Discovery(), Audit(None), []
 
     def run(c, repeat=False):
@@ -165,7 +185,11 @@ def measure(client):
         right_confident_recommendations=right, incorrect_confident_recommendations=len(recommended) - right,
         eligible_cases=len(scored), recommendation_coverage=len(recommended) / len(scored),
         correct_abstentions=sum(r['expected_behavior'] == 'abstain' and r['predicted_recommended_id'] is None for r in scored),
-        audit=dict(audit.counters))
+        skips=sum(r['observed_behavior'] == 'skip' for r in results if not r['repeat']),
+        abstentions=sum(r['observed_behavior'] == 'abstain' for r in results if not r['repeat']),
+        repeats=sum(r['repeat'] for r in results),
+        client_stats=client.stats.snapshot(),
+        audit={f'discovery.{name}': audit.counters.get(f'discovery.{name}', 0) for name in AUDIT_COUNTERS})
     report['caveat'] = ('Synthetic labels only; confidence means production gate accepted, not calibrated accuracy. '
                         'Input-token cost estimate only; missing usage/errors may undercount billed cost. '
                         'Latency includes hook/client work. Skips and repeats excluded from quality metrics.')
@@ -184,15 +208,17 @@ class SingleAttemptClient(DecisionClient):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--live', action='store_true', help='Use configured key for at most 8 public synthetic requests')
+    parser.add_argument('--suite', choices=('default', 'heldout'), default='default',
+                        help='Independent suite invocation, each capped at 8 wire calls')
     args = parser.parse_args(argv)
     if not args.live:
-        report = offline_report()
+        report = offline_report(args.suite)
     else:
         from jev import keys
         key, _ = keys.discover()
         if not key:
             parser.exit(2, 'Not run: no configured key.\n')
-        report = measure(SingleAttemptClient(key))
+        report = measure(SingleAttemptClient(key), args.suite)
         report['mode'] = 'live'
     print(json.dumps(report, ensure_ascii=False, indent=2))
 

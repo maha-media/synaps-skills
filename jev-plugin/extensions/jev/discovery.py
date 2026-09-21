@@ -9,6 +9,7 @@ from .triage import redact, valid_choice
 
 CONTINUE = {"action": "continue"}
 TOOLS = {"search_tools", "search_skills"}
+MIN_CONFIDENCE = 0.8  # Advisory-only; aligned with jev_select, not truth certification.
 CACHE_SIZE = 128
 MAX_OUTPUT = 32768
 MAX_STATE = 16384
@@ -138,7 +139,7 @@ class Discovery:
                     raise ValueError("answer size")
                 answers = response.get("answers") if isinstance(response, dict) else None
                 answer = answers.get("recommendation") if isinstance(answers, dict) else None
-                choice = valid_choice(answer, criteria, threshold=0.85)
+                choice = valid_choice(answer, criteria, threshold=MIN_CONFIDENCE)
                 if choice is None:
                     audit.bump("discovery.abstain")
                     return dict(CONTINUE)  # malformed/low-confidence answers are not cached

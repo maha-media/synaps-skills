@@ -355,8 +355,10 @@ Unknown host fields remain unchanged semantically and local.
 
 Jev must abstain for generic keywords such as `memory`, `test`, or `search`,
 equally plausible matches, and any ambiguity. Candidate order is not intent.
-Only a supplied opaque option at confidence ≥0.85 can map locally to a supplied
-ID. The original machine-readable JSON and every descriptor remain intact;
+Only a supplied opaque option at confidence ≥0.8 (`discovery.MIN_CONFIDENCE`) can map locally to a supplied
+ID. Confidence 0.8 does **not certify truth**: the lower gate can recommend a
+mistaken result, but grants no permissions and causes no activation. All
+validation, privacy and scope boundaries remain unchanged. The original machine-readable JSON and every descriptor remain intact;
 only bounded `jev_advisory` metadata is added, with `recommended_id`,
 `advisory: true`, and a **not activation/permission** note. No filtering,
 reranking, activation, permission change or automatic follow-up occurs.
@@ -377,9 +379,12 @@ From the repository root:
 
 ```sh
 python3 jev-plugin/scripts/benchmark_discovery.py
+python3 jev-plugin/scripts/benchmark_discovery.py --suite heldout
 python3 -m unittest discover -s jev-plugin/tests -p 'test_benchmark_discovery.py' -v
 # Optional: explicitly consent to public synthetic requests using an already configured key:
 python3 jev-plugin/scripts/benchmark_discovery.py --live
+# Separate invocation and independent budget (not combined with default):
+python3 jev-plugin/scripts/benchmark_discovery.py --suite heldout --live
 ```
 
 Default mode does **not** discover keys, read configuration, or access the network.
@@ -387,7 +392,8 @@ It validates fixed public synthetic fixtures and emits deterministic no-hint
 (zero incremental overhead) and explicit-order first-candidate baselines. Jev
 fields are `not_executed`/null, not fabricated measurements. `--live` resolves
 an existing key through `keys.discover`; it never prints the key or its source.
-No live result is included here; add one only after an actual measured run.
+The initial live result supplied by the foreman is recorded below; no new live
+measurement was performed for this revision.
 
 The fixture shapes follow the host's `tools/catalog.rs` discovery entries and
 `skills/tool.rs` search results: every candidate contains the query in searchable
@@ -416,3 +422,38 @@ Cost uses the client's input-token price estimate; missing usage and failures ca
 undercount billed cost. No-hint overhead is zero by construction, not a timed host
 measurement. These tiny, hand-labeled synthetic cases and the first-candidate
 comparator are **not frontier-model accuracy, real-world accuracy, or savings**.
+
+#### Gate alignment and held-out evaluation
+
+The existing initial live default smoke at **0.85** produced **0/7
+recommendations** (all seven abstained), reported cost **$0.000162204**,
+**3,862 tokens**, and **~2.773 seconds**. A separate diagnostic selected the
+intended image option with confidence **0.83** and chosen-option probability
+**0.89**. Probability is not confidence and does not bypass the gate. These are
+foreman-supplied historical observations, not measurements rerun here.
+
+`extensions/jev/discovery.py` now defines `MIN_CONFIDENCE = 0.8`, aligned with
+the existing `jev_select` validation gate. The change is an advisory-policy
+alignment motivated by those observations, not evidence of improved coverage,
+accuracy or savings. Held-out cases were added **after** choosing this threshold
+and were not used to tune it. No positive live result at 0.8 is claimed.
+
+`--suite heldout` loads the separate public fixture file
+`scripts/fixtures/discovery_heldout.json`: PDF merge versus receipt listing,
+SQL explain execution-plan diagnosis versus tutorial indexing, video subtitles
+extraction versus style catalogues, and git conflict diagnosis versus bookkeeping.
+Two additional cases cover equal capabilities and irrelevant capabilities with
+an injection; PDF and SQL also have reversed-order variants. Each candidate
+matches its fixed query substring. Eight eligible cases mean at most **eight
+wire calls per independent invocation**, with no retries and only cached repeats.
+The default suite's cases and ordering are unchanged.
+
+Reports identify `suite` and `min_confidence`, and publish label assumptions.
+Both suites have **weak hand labels**: operational intent is assumed from terse
+substring queries, which can also denote browsing or bookkeeping. In particular,
+the default first-candidate baseline is not ground-truth task accuracy;
+conservative abstention may be reasonable. Held-out means separate from the
+threshold decision, not a statistically representative or permanently unseen set.
+Printed measured statistics include skips separately, abstentions, repeats, all
+six discovery audit counters (including zeros), and the client statistics snapshot.
+Offline counters remain null rather than implying an executed run.

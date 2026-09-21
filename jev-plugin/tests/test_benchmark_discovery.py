@@ -127,6 +127,37 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(j['recommendation_coverage'], 1)
         self.assertEqual(j['correct_abstentions'], 0)
 
+    def test_heldout_independent_suite_and_accounting(self):
+        cases = b.fixtures('heldout')
+        self.assertEqual(b.validate(cases)['eligible_requests'], 8)
+        self.assertEqual(len(cases), 8)
+        self.assertEqual(sum(c['expected_behavior'] == 'abstain' for c in cases), 2)
+        for left, right in ((0, 6), (1, 7)):
+            a, z = (json.loads(cases[i]['params']['tool_output']) for i in (left, right))
+            key = 'tools' if 'tools' in a else 'skills'
+            self.assertEqual(a[key], list(reversed(z[key])))
+            self.assertEqual(cases[left]['expected_recommended_id'], cases[right]['expected_recommended_id'])
+        self.assertTrue(all(c['label_assumption'] for c in cases))
+        with patch('jev.keys.discover', side_effect=AssertionError('credentials')), \
+             patch.object(b.DecisionClient, 'decide', side_effect=AssertionError('network')), \
+             contextlib.redirect_stdout(io.StringIO()) as out:
+            b.main(['--suite', 'heldout'])
+        report = json.loads(out.getvalue())
+        self.assertEqual(report, b.offline_report('heldout'))
+        self.assertEqual(report['suite'], 'heldout')
+        self.assertEqual(report['min_confidence'], b.discovery.MIN_CONFIDENCE)
+        for response in ('labels', {}, RuntimeError('offline')):
+            j = b.measure(Stub(response), 'heldout')['jev']
+            self.assertEqual(j['calls'], 8)
+            self.assertEqual(j['skips'], 0)
+            self.assertEqual(set(j['audit']), {f'discovery.{n}' for n in b.AUDIT_COUNTERS})
+            self.assertEqual(j['client_stats']['calls'], 8)
+        default = b.measure(Stub())
+        self.assertEqual(default['suite'], 'default')
+        self.assertEqual(default['jev']['skips'], 4)
+        self.assertEqual(default['jev']['audit']['discovery.error'], 0)
+        self.assertIn('Weak', default['baselines']['caveat'])
+
     def test_live_client_does_not_retry(self):
         client = b.SingleAttemptClient('public-test-placeholder')
         with patch.object(b.DecisionClient, '_post', side_effect=_Retryable('synthetic', 0)) as post:

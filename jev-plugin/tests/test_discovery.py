@@ -30,7 +30,7 @@ class DiscoveryTests(unittest.TestCase):
         self.a = Audit(None)
         self.a.write = Mock(side_effect=AssertionError('no audit payload'))
         self.c = Mock(model='fixture')
-        self.c.decide.return_value = {'answers': {'recommendation': {'choice': 'option_0', 'confidence': .85}}}
+        self.c.decide.return_value = {'answers': {'recommendation': {'choice': 'option_0', 'confidence': discovery.MIN_CONFIDENCE}}}
         self.p = {'tool_runtime_name': 'search_tools', 'tool_name': 'alias', 'session_id': 's',
                   'tool_input': {'query': 'failed assertions'}, 'tool_output': json.dumps(catalog())}
 
@@ -96,7 +96,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_malformed_answers_and_errors(self):
         for answer in [None, [], {}, {'choice': 'invented', 'confidence': 1},
                        {'choice': 'alpha', 'confidence': 1}, {'choice': 'option_0', 'confidence': True},
-                       {'choice': 'option_0', 'confidence': .849}, {'choice': 'option_0', 'confidence': float('nan')},
+                       {'choice': 'option_0', 'confidence': .799}, {'choice': 'option_0', 'confidence': float('nan')},
                        {'choice': 'option_0', 'confidence': 1, 'probabilities': []}]:
             self.c.decide.return_value = {'answers': {'recommendation': answer}}
             self.assertEqual(self.run_hook(), discovery.CONTINUE)
@@ -106,6 +106,16 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(self.run_hook(), discovery.CONTINUE)
             self.assertFalse(self.d.cache)
         self.assertGreaterEqual(self.a.counters['discovery.error'], 2)
+
+    def test_confidence_boundary_and_invalid_high(self):
+        self.assertEqual(discovery.MIN_CONFIDENCE, .8)
+        for confidence, choice, action in ((.799, 'option_0', 'continue'),
+                                           (.8, 'option_0', 'replace'),
+                                           (1, 'outside_id', 'continue')):
+            self.c.decide.return_value = {'answers': {'recommendation': {
+                'choice': choice, 'confidence': confidence}}}
+            self.assertEqual(self.run_hook(session_id=None)['action'], action)
+        self.assertFalse(self.d.cache)
 
     def test_cache_invalidation_lru_and_abstention(self):
         self.run_hook(); self.run_hook()
