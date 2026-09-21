@@ -370,3 +370,49 @@ payload. Malformed answers, low confidence and errors are not cached. Discovery
 never writes payloads or exception text to audit/logs. Status exposes
 `discovery.skip/call/cache/recommend/abstain/error` counters and `op=discovery`
 estimated Jev costs/tokens/latency. These are advisory measurements, not savings.
+
+### Discovery benchmark (offline by default)
+
+From the repository root:
+
+```sh
+python3 jev-plugin/scripts/benchmark_discovery.py
+python3 -m unittest discover -s jev-plugin/tests -p 'test_benchmark_discovery.py' -v
+# Optional: explicitly consent to public synthetic requests using an already configured key:
+python3 jev-plugin/scripts/benchmark_discovery.py --live
+```
+
+Default mode does **not** discover keys, read configuration, or access the network.
+It validates fixed public synthetic fixtures and emits deterministic no-hint
+(zero incremental overhead) and explicit-order first-candidate baselines. Jev
+fields are `not_executed`/null, not fabricated measurements. `--live` resolves
+an existing key through `keys.discover`; it never prints the key or its source.
+No live result is included here; add one only after an actual measured run.
+
+The fixture shapes follow the host's `tools/catalog.rs` discovery entries and
+`skills/tool.rs` search results: every candidate contains the query in searchable
+fields. Digests and descriptors are synthetic. The two contrast pairs reverse
+candidate order deliberately (an order-sensitivity experiment, **not** a claim
+that the host normally reverses its deterministic ordering). They distinguish
+receipt storage from image resizing and course listings from Python diagnosis.
+Memory, equal descriptions, and irrelevant capabilities with a descriptor
+injection are labeled abstain. Exact-name, singleton, truncated and disabled
+cases are skips, never Jev successes.
+
+There are seven eligible decisions, at most eight permitted; the benchmark's
+client disables transport retries to keep the wire-request bound honest without
+changing production policy. The first eligible case is repeated in-session only
+if production cached its response: its repeat must show zero calls/tokens/cost.
+Malformed/error responses are not cached, so a repeat is reported not executed
+rather than spending another request. `measure(client)` supports offline stubs.
+
+Reports separate expected labels from predicted IDs, include per-case deltas,
+wall latency, net UTF-8 output-byte growth, JSON evidence preservation, supplied-ID
+boundary, confident right/wrong recommendations and eligible-case coverage.
+Production's confidence gate determines “confident”; this is not a calibration
+study. Skips and repeats are excluded from quality denominators. JSON evidence
+preservation means all original parsed fields survive, not identical whitespace.
+Cost uses the client's input-token price estimate; missing usage and failures can
+undercount billed cost. No-hint overhead is zero by construction, not a timed host
+measurement. These tiny, hand-labeled synthetic cases and the first-candidate
+comparator are **not frontier-model accuracy, real-world accuracy, or savings**.
