@@ -1,7 +1,7 @@
 {
   "name": "jev",
-  "version": "0.5.0",
-  "description": "Calibrated Jev decisions: safety guard, sparse session-cached worker routing, opt-in compression and experimental discovery advice, automatic advisory bash failure triage, batched jev_decide and candidate-only jev_select. Opt-in explicit verification prioritization via jev_verify. Opt-in evidence descriptor relevance via jev_evidence (no fetch or trust certification).",
+  "version": "0.6.0",
+  "description": "Calibrated Jev decisions: safety guard, sparse session-cached worker routing, opt-in compression and experimental discovery advice, automatic advisory bash failure triage, batched jev_decide and candidate-only jev_select. Opt-in explicit verification prioritization via jev_verify. Opt-in evidence descriptor relevance via jev_evidence (no fetch or trust certification). Opt-in automatic worker-report claim triage (no lifecycle authority).",
   "author": {
     "name": "JR Morton",
     "url": "https://github.com/maha-media"
@@ -67,6 +67,10 @@
       {
         "hook": "after_tool_call",
         "tool": "search_skills"
+      },
+      {
+        "hook": "after_tool_call",
+        "tool": "subagent_collect"
       }
     ],
     "config": [
@@ -225,13 +229,19 @@
         "type": "bool",
         "default": false,
         "description": "Opt-in explicit descriptor relevance advice independent of guard. No source access or trust certification."
+      },
+      {
+        "key": "reports",
+        "type": "bool",
+        "default": false,
+        "description": "Opt-in automatic worker-report triage, independent of guard. Sends redacted worker prose, not artifacts; unverified advisory only, no lifecycle changes."
       }
     ]
   },
   "commands": [
     {
       "name": "jev",
-      "description": "Jev decision layer: `/jev key <apikey_…>` validates+saves+activates a key without restart; `/jev status`; `/jev test`; `/jev guard|router|compress|triage|discovery|verification|evidence on|off [--save]` flips one feature (session-only unless --save); `/jev off|on [--save]` flips all seven (including opt-in discovery, verification and evidence).",
+      "description": "Jev decision layer: `/jev key <apikey_…>` validates+saves+activates a key without restart; `/jev status`; `/jev test`; `/jev guard|router|compress|triage|discovery|verification|evidence|reports on|off [--save]` flips one feature (session-only unless --save); `/jev off|on [--save]` flips all eight (including opt-in discovery, verification, evidence and reports).",
       "interactive": true,
       "subcommands": [
         "key",
@@ -244,6 +254,7 @@
         "discovery",
         "verification",
         "evidence",
+        "reports",
         "on",
         "off"
       ]

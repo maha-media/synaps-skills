@@ -222,3 +222,23 @@ Caller-required is not exhaustive: all host/user/project mandatory instructions
 still apply. No fetch authorization: obey original tool scope, provenance and
 freshness. The tool does not fetch/read/delete, activate tools or automate work.
 No evidence benchmark yet; do not claim quality or savings.
+
+
+## Automatic worker reports (0.6.0)
+
+`/jev reports on|off [--save]` is opt-in (default off), independent of guard;
+`/jev on` includes reports. Exact runtime `subagent_collect` terminal JSON only.
+Completed worker prose is sent in full after pattern redaction, not artifacts,
+goals, tool input or lifecycle metadata. Sensitive prose may survive redaction.
+Two batched choices flag verification gaps, conflicting claims, admitted failures
+or unclear scope; reported checks are not proof they ran. Failed/timed-out/cancelled
+statuses get deterministic local flags without API calls. Running/expired,
+malformed, oversized, truncated and already-annotated results pass through.
+
+Only positive flags add `jev_advisory`; original JSON values and complete worker
+output remain (formatting may change). Never treat advice or its absence as
+approval, success certification, skip permission, or authority to retry, merge,
+collect or reconcile. No execution or lifecycle changes; no new tool. Inspect
+original evidence yourself. Status reports calls/questions/cache/skip/advice/
+abstain/error and estimated Jev operation costs, not savings. No report quality
+benchmark has been run.

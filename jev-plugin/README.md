@@ -123,6 +123,7 @@ All keys live under `extension.jev.*` in `~/.synaps-cli/config`, or as
 | `router_read_only_at` | `0.15` | P(needs_write) at/below which `write_policy` → `read_only` |
 | `router_models` | `""` | `small=<id>,medium=<id>`; ids must already be worker-authorised; `frontier` always inherits |
 | `discovery` | `false` | opt-in query/descriptor API calls; `/jev discovery on\|off [--save]`; independent of guard |
+| `reports` | `false` | automatic worker-report claim triage; `/jev reports on\|off [--save]`; independent of guard |
 | `evidence` | `false` | descriptor relevance advice; `/jev evidence on\|off [--save]`; independent of guard |
 | `verification` | `false` | optional priority advice; `/jev verification on\|off [--save]`; independent of guard |
 | `triage` | `true` | advisory failure classification; `/jev triage on\|off [--save]`; independent of guard |
@@ -339,7 +340,7 @@ Underlying `search_tools` and `search_skills` discovery is **pure local**. The
 `discovery` experiment defaults to **false** and is **not recommended as a
 savings technique yet**. `/jev discovery on|off [--save]`
 controls it independently of guard; without `--save` the override is session-only.
-`/jev on` enables **all six** features, including this opt-in API cost/privacy
+`/jev on` enables **all eight** features, including this opt-in API cost/privacy
 contract (and compression); `/jev off` disables them. Explicit Jev tools remain
 available, including their no-key setup guidance.
 
@@ -565,7 +566,7 @@ user configuration, or model mappings.
 All five tools (`jev_decide`, `jev_select`, `jev_status`, `jev_verify`, `jev_evidence`) are always
 advertised. `/jev verification on|off [--save]` controls optional verification
 advice, **default off**, independently of guard. `/jev off` and `/jev on` toggle
-**all seven features**, including discovery, verification and evidence (and their opt-in API
+**all eight features**, including discovery, verification, evidence and reports (and their opt-in API
 calls); they do not hide tools. Use the same `/jev key <apikey_…>` setup as above.
 
 Call `jev_verify` with this public synthetic input (optional advice requires
@@ -777,3 +778,43 @@ report is retained at the link above. Offline tests:
 ```bash
 python3 -B -m unittest discover -s jev-plugin/tests -p 'test_benchmark_evidence.py' -v
 ```
+
+
+## Automatic worker-report triage (0.6.0)
+
+Opt in with `/jev reports on|off [--save]` (default **off**, independent of guard).
+`/jev on` and `/jev off` include reports; all **five** existing tools remain
+advertised. There is no new tool or host change. Status exposes
+`reports.call/questions/cache/skip/advice/abstain/error` and actual `reports`
+operation cost, tokens and latency. There is no report benchmark or live
+quality/savings claim.
+
+Only exact runtime `subagent_collect` results qualify (runtime name takes
+precedence over display name). Running, expired, malformed, oversized,
+truncation-marked or already-annotated reports pass through unchanged, as do
+all reports when disabled or without a client. Valid failed/timed-out/cancelled
+terminal results receive only a fixed local worker-status flag, with **no API
+call**, even when the worker prose claims success.
+
+Completed nonblank reports send **redacted full worker prose**, not artifacts,
+tool input, foreground goals, model labels, authorization or terminal diagnostics.
+This opt-in disclosure has API cost; pattern redaction is not a guarantee that
+arbitrary sensitive prose is removed. One batch asks two bounded choice
+questions about reported verification gaps and concerns. Claims that checks ran
+are **not verification** that they did. Confident positive flags alone add a
+`jev_advisory` JSON field; no flags means no replacement. Model prose and
+confidence are never presented as authority. The local note denies success
+certification, skip authorization, execution, retry/merge/collect/reconcile
+permission. Existing lifecycle behavior and caller reconciliation stay untouched.
+
+The original report stays complete and all original JSON values/metadata survive
+annotation; formatting may change (no byte-perfect promise). Bounds are 32 KiB
+raw JSON and 8 KiB report in both characters and UTF-8 bytes, with 64 KiB maximum
+serialized replacement. No clipping. Duplicate keys, nonfinite values, invalid
+Unicode, ambiguous inputs and explicit truncation are rejected conservatively.
+The session-local LRU holds at most 128 digests and flag sets/abstentions, never
+report text or handles. Cache scope includes a valid trusted session ID, exact
+raw payload, handle and client model; activation clears it. Invalid sessions
+bypass caching, global errors are not cached. No report payload or upstream
+exception is written to audit logs. This is advisory claim triage, not independent
+inspection of repository state or proof of worker success.

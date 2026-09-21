@@ -14,7 +14,7 @@ Hooks (all subscribed in .synaps-plugin/plugin.json):
 
 Tools:   jev_evidence (descriptor relevance), jev_verify (verification priority), jev_select (candidate IDs), jev_decide (typed questions), jev_status (accounting) — always
          advertised; without a key they explain how to set one.
-Command: /jev key|status|test|guard|router|compress|triage|discovery|verification|evidence|on|off — set a key or flip a
+Command: /jev key|status|test|guard|router|compress|triage|discovery|verification|evidence|reports|on|off — set a key or flip a
          feature without restarting (session-only unless --save).
 
 Key setup: the runtime resolves `api_key` once at initialize. If none is
@@ -38,7 +38,7 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from jev import audit as audit_mod  # noqa: E402
-from jev import commands, compress, discovery, evidence, guard, keys, router, tools, triage, verify  # noqa: E402
+from jev import commands, compress, discovery, evidence, guard, keys, reports, router, tools, triage, verify  # noqa: E402
 from jev.client import DecisionClient, JevError  # noqa: E402
 
 PLUGIN_ID = "jev"
@@ -98,7 +98,7 @@ class Extension:
         self.client: DecisionClient | None = None
         self.cfg: dict = {}
         self.key_source = "none"
-        self.features = {"guard": False, "router": False, "compress": False, "triage": False, "discovery": False, "verification": False, "evidence": False, "tools": True}
+        self.features = {"guard": False, "router": False, "compress": False, "triage": False, "discovery": False, "verification": False, "evidence": False, "reports": False, "tools": True}
         # Session-only feature overrides from `/jev guard off` etc. Applied on
         # top of config every time features are (re)computed, so a later
         # `/jev key …` re-activation cannot silently re-arm a disabled guard.
@@ -110,6 +110,7 @@ class Extension:
         self.goal = ""
         self.router = router.Router()
         self.triage = triage.Triage()
+        self.reports = reports.Reports()
         self.discovery = discovery.Discovery()
         self._next_recheck = 0.0
 
@@ -123,12 +124,13 @@ class Extension:
 
     def activate(self, api_key: str, *, source: str) -> None:
         """Bring the decision layer up with this key (idempotent, no restart)."""
+        self.reports.cache.clear()
         self.client = DecisionClient(api_key, model=self.model_name(), timeout_s=self.timeout_s())
         self.key_source = source
         self.recompute_features()
         log("active (" + ", ".join(k for k, v in self.features.items() if v) + f") key from {source}")
 
-    FEATURE_DEFAULTS = {"guard": True, "router": True, "compress": False, "triage": True, "discovery": False, "verification": False, "evidence": False}
+    FEATURE_DEFAULTS = {"guard": True, "router": True, "compress": False, "triage": True, "discovery": False, "verification": False, "evidence": False, "reports": False}
 
     def configured_feature(self, name: str) -> bool:
         """The persisted (config) value of a feature, ignoring session overrides."""
@@ -161,6 +163,7 @@ class Extension:
         self.recompute_features()
 
     def deactivate(self) -> None:
+        self.reports.cache.clear()
         self.client = None
         self.key_source = "none"
         self.recompute_features()
@@ -224,6 +227,8 @@ class Extension:
             return {"action": "continue"}
 
         if kind == "after_tool_call":
+            if reports.collect_candidate(params):
+                return self.reports.handle(params, self.client, self.features["reports"], self.audit)
             if discovery.recognized(params):
                 return self.discovery.handle(params, self.client, self.features["discovery"], self.audit)
             if triage.recognized(params):
@@ -243,6 +248,7 @@ class Extension:
                 "Jev offers jev_select for batched candidate-ID choices and jev_decide for typed questions. "
                 "jev_verify prioritizes optional checks only; honor all project/user/CI mandatory checks. "
                 "jev_evidence offers descriptor relevance only, never trust or fetch permission; /jev evidence on. "
+                "Opt-in /jev reports on adds unverified worker-claim advice, never lifecycle or merge authority. "
                 "Enable with /jev verification on; configure the shared key with /jev key. "
                 "Batch uncertain choices; skip obvious deterministic ones. Choice criteria are ID-to-description "
                 "objects; score criteria are ordered lists. Bash failure triage is advisory, never authority "
