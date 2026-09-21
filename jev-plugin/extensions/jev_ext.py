@@ -108,6 +108,7 @@ class Extension:
         self.compress_cfg = compress.CompressConfig({})
         self.audit = audit_mod.Audit(None)
         self.goal = ""
+        self.router = router.Router()
         self.triage = triage.Triage()
         self.discovery = discovery.Discovery()
         self._next_recheck = 0.0
@@ -212,9 +213,8 @@ class Extension:
 
         if kind == "before_tool_call":
             if tool in router.SUBAGENT_TOOLS:
-                if self.features["router"]:
-                    return router.handle(params, self.client, self.router_cfg, self.audit, log)
-                return {"action": "continue"}
+                return self.router.handle(params, self.client, self.router_cfg, self.audit, log,
+                                          enabled=self.features["router"])
             if self.features["guard"]:
                 return guard.handle(params, self.client, self.guard_cfg, self.audit, log)
             if self.client is None and tool in self.guard_cfg.tools:

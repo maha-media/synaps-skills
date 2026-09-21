@@ -314,8 +314,9 @@ reloaded this plugin or delivered replacement text to the model.
 These small synthetic smokes are not production accuracy or calibration
 measurements and provide no evidence of net savings. Wall time includes network
 variance; estimated Jev input-token costs exclude frontier-model and other costs.
-Worker-tier optimization remains future work (existing optional router mapping
-is unchanged); compaction integration is deferred.
+Router sparsity/cache changes in 0.3.1 have not been live-benchmarked; no token or
+net savings are claimed. Existing user model mapping remains required; compaction
+integration is deferred.
 
 **No host/core policy changes:** the new decision policy stays plugin-only.
 An independent host runtime fix is needed for an `after_tool_call` `Replace` to
@@ -486,3 +487,35 @@ measures recommendation caching, not the new low-confidence regression.
 
 These are evaluation priorities, not new tools, automatic routing authority, or
 proven savings. The registered tools remain `jev_decide`, `jev_select`, `jev_status`.
+
+## Sparse worker routing (0.3.1)
+
+The existing `/jev router on|off [--save]` toggle controls routing. Each request
+asks only about absent keys: role, read-only suitability, and (only with an
+existing user tier map) model tier. Explicit values are never repaired or
+replaced, including null/empty/invalid values; invalid explicit inputs continue
+to host validation without an API call. Unknown/frontier tiers inherit. A model
+fill is exactly the configured provider/model ID, never a new authorization.
+Only `read_only` can be inferred; paths and broader write access are never added.
+
+A per-extension 128-entry LRU caches validated fills and abstentions by session,
+full canonical input, tool, decision model, thresholds, map, and question set.
+No session means no cache; malformed answers and transport errors are not cached.
+Valid sibling decisions can still fill when another answer is malformed.
+Task and optional system prompt must each fit both character and UTF-8 byte
+limits (4000 and 600); oversized text is skipped, never truncated. Full canonical
+input is capped at 32 KiB locally. Only bounded task/system prompt go outbound,
+with triage credential redaction; unknown fields and saved conversation goals do
+not. Redaction is best-effort: routing still shares task text with Jev and incurs
+API cost on misses. Router logs/audit contain no task, fills, models, answers or
+exceptions; status exposes counters and existing per-operation cost accounting.
+Older audit files are not rewritten by this release. Discovery remains off by
+default. No changes to worker calls, activation, scopes or host authorization.
+
+Offline benchmark seams: `Router.handle(params, client, cfg, audit, log)` uses
+`client.decide(state, questions, op="router")`; production transport can be stubbed
+at `DecisionClient._post` (see protocol tests). `questions(input, cfg)` exposes
+sparse request construction and `plan_fill` remains a pure compatibility seam.
+Use one Router per extension and repeated session IDs to measure cache behavior;
+compare against frozen 0.3.0 questions on identical synthetic tasks before making
+any savings claims.

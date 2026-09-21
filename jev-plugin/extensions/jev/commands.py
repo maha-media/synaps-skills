@@ -29,7 +29,7 @@ USAGE = (
     "| `/jev test` | one live decision: latency + cost |\n"
     "| `/jev guard off` | stop reviewing tool calls for this session (`--save` persists) |\n"
     "| `/jev guard on` | resume the safety gate |\n"
-    "| `/jev router on\\|off`, `/jev compress on\\|off` | flip the other features the same way; `/jev triage on or off` controls advisory failure triage; `/jev discovery on or off [--save]` controls opt-in discovery advice |\n"
+    "| `/jev router on\\|off`, `/jev compress on\\|off` | flip sparse session-cached routing or compression; `/jev triage on or off` controls advisory failure triage; `/jev discovery on or off [--save]` controls opt-in discovery advice |\n"
     "| `/jev off` / `/jev on` | guard+router+compress+triage+discovery together (including opt-in API calls); `jev_decide` stays available |\n\n"
     "Tip: the Confirm dialog's **Allow all this session** button keeps the guard scoring+auditing "
     "but stops asking; `/jev guard off` skips the ~0.4 s review entirely.\n\n"

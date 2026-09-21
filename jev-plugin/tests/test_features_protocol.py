@@ -36,6 +36,7 @@ def offline_post(self, body, *, timeout_s):
         "leaves_workspace": {"noul": 0},
         "role": {"choice": "reviewer", "confidence": 1},
         "needs_write": {"noul": 0},
+        "tier": {"choice": "small", "confidence": 1},
         "need": {"probabilities": {"0": 1}, "legend": {"0": "outcome"}},
         "is_failure": {"noul": 0},
         "ok": {"noul": 1},
@@ -176,6 +177,34 @@ class FeatureProtocolTests(unittest.TestCase):
         self.assertEqual(h.hook('before_tool_call', tool_runtime_name='bash',
                                 tool_input={'command': 'echo fixture'})['action'], 'confirm')
         self.assertEqual(h.status()['by_op'], {'guard': 1})
+
+    def test_sparse_router_protocol(self):
+        h = self.host(config={'router_models': 'small=provider/tiny'})
+        inp = {'task': 'Read docs', 'role': 'reviewer',
+               'write_policy': {'mode': 'non_overlapping_paths', 'scopes': ['docs/']},
+               'unknown': {'keep': True}}
+        def route(value):
+            return h.hook('before_tool_call', tool_runtime_name='subagent_start',
+                          session_id='sparse', tool_input=value)
+        result = route(inp)
+        self.assertEqual(result['input'], {**inp, 'model': 'provider/tiny'})
+        self.assertEqual(route(inp), result)
+        status = h.status()
+        self.assertEqual(status['by_op'], {'router': 1})
+        self.assertEqual(status['counters']['router.questions'], 1)
+        self.assertEqual(status['counters']['router.cache'], 1)
+        self.assertEqual(route({**inp, 'model': None})['action'], 'continue')
+        self.assertEqual(route(result['input'])['action'], 'continue')
+        self.assertEqual(h.status()['by_op'], {'router': 1})
+        other = self.host()
+        no_map = other.hook('before_tool_call', tool_runtime_name='subagent',
+                            tool_input=inp)
+        self.assertEqual(no_map['action'], 'continue')
+        self.assertEqual(other.status()['calls'], 0)
+        mixed = other.hook('before_tool_call', tool_runtime_name='subagent',
+                           tool_input={'task': 'Read docs', 'role': 'reviewer', 'model': 'exact/id'})
+        self.assertEqual(mixed['input']['model'], 'exact/id')
+        self.assertEqual(other.status()['counters']['router.questions'], 1)
 
     def test_other_features_and_tools_remain_independent(self):
         h = self.host(config={'compress': True})

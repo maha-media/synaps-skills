@@ -141,3 +141,14 @@ Follow-up is plugin-only evaluation, not new code: user-authorized task-aware
 `jev_select` batches versus keyword advice, then opt-in authorized worker-tier
 maps. Both need matched task-quality and total cost/latency baselines, including
 misses, rework and fallbacks, before savings recommendations.
+
+### Sparse routing and privacy (0.3.1)
+Routing asks only omitted task-aware questions, with a session-local bounded LRU
+for validated fills/abstentions. Explicit fields (even invalid ones) are never
+repaired. Model inference requires the user's existing tier map; unknown/frontier
+inherits. Oversize task/system prompts skip rather than truncate. Only redacted
+bounded task/system prompt are sent, not conversation goals or unknown fields.
+Redaction is best-effort and task sharing still costs API tokens on cache misses.
+Router audit/logs omit text and decisions; status reports counters and estimated
+Jev costs, not savings. The existing router toggle covers caching/sparsity;
+discovery stays off by default. No worker authorization or scope changes.
