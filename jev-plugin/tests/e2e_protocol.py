@@ -103,7 +103,7 @@ def main():
     print("── initialize")
     caps = ext.init["result"]["capabilities"]
     names = [t["name"] for t in caps.get("tools", [])]
-    ok = names == ["jev_decide", "jev_status", "jev_select"]
+    ok = names == ["jev_decide", "jev_status", "jev_select", "jev_verify"]
     fails += not ok
     print(f"  {'✓' if ok else '✗'} tools advertised: {names}")
 

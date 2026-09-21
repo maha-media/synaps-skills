@@ -12,9 +12,9 @@ Hooks (all subscribed in .synaps-plugin/plugin.json):
   before_message    remember the latest user message as the compression "goal"
   on_session_start  inject a one-paragraph note so the model knows the guard exists
 
-Tools:   jev_select (candidate IDs), jev_decide (typed questions), jev_status (accounting) — always
+Tools:   jev_verify (verification priority), jev_select (candidate IDs), jev_decide (typed questions), jev_status (accounting) — always
          advertised; without a key they explain how to set one.
-Command: /jev key|status|test|guard|router|compress|triage|discovery|on|off — set a key or flip a
+Command: /jev key|status|test|guard|router|compress|triage|discovery|verification|on|off — set a key or flip a
          feature without restarting (session-only unless --save).
 
 Key setup: the runtime resolves `api_key` once at initialize. If none is
@@ -38,7 +38,7 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from jev import audit as audit_mod  # noqa: E402
-from jev import commands, compress, discovery, guard, keys, router, tools, triage  # noqa: E402
+from jev import commands, compress, discovery, guard, keys, router, tools, triage, verify  # noqa: E402
 from jev.client import DecisionClient, JevError  # noqa: E402
 
 PLUGIN_ID = "jev"
@@ -98,7 +98,7 @@ class Extension:
         self.client: DecisionClient | None = None
         self.cfg: dict = {}
         self.key_source = "none"
-        self.features = {"guard": False, "router": False, "compress": False, "triage": False, "discovery": False, "tools": True}
+        self.features = {"guard": False, "router": False, "compress": False, "triage": False, "discovery": False, "verification": False, "tools": True}
         # Session-only feature overrides from `/jev guard off` etc. Applied on
         # top of config every time features are (re)computed, so a later
         # `/jev key …` re-activation cannot silently re-arm a disabled guard.
@@ -128,7 +128,7 @@ class Extension:
         self.recompute_features()
         log("active (" + ", ".join(k for k, v in self.features.items() if v) + f") key from {source}")
 
-    FEATURE_DEFAULTS = {"guard": True, "router": True, "compress": False, "triage": True, "discovery": False}
+    FEATURE_DEFAULTS = {"guard": True, "router": True, "compress": False, "triage": True, "discovery": False, "verification": False}
 
     def configured_feature(self, name: str) -> bool:
         """The persisted (config) value of a feature, ignoring session overrides."""
@@ -202,7 +202,7 @@ class Extension:
 
         # Tools are always advertised so the model can discover the plugin and
         # be told how to configure it.
-        return {"protocol_version": 1, "capabilities": {"tools": [tools.DECIDE_SPEC, tools.STATUS_SPEC, tools.SELECT_SPEC]}}
+        return {"protocol_version": 1, "capabilities": {"tools": [tools.DECIDE_SPEC, tools.STATUS_SPEC, tools.SELECT_SPEC, verify.SPEC]}}
 
     # ── hooks ───────────────────────────────────────────────────────────
 
@@ -241,6 +241,8 @@ class Extension:
         if kind == "on_session_start":
             return {"action": "inject", "content": (
                 "Jev offers jev_select for batched candidate-ID choices and jev_decide for typed questions. "
+                "jev_verify prioritizes optional checks only; honor all project/user/CI mandatory checks. "
+                "Enable with /jev verification on; configure the shared key with /jev key. "
                 "Batch uncertain choices; skip obvious deterministic ones. Choice criteria are ID-to-description "
                 "objects; score criteria are ordered lists. Bash failure triage is advisory, never authority "
                 "to execute, retry, or certify success. Optional discovery recommendations are advisory, "
@@ -252,8 +254,11 @@ class Extension:
     # ── tools ───────────────────────────────────────────────────────────
 
     def tool_call(self, params: dict) -> dict:
-        self.maybe_pick_up_key()
         name = params.get("name")
+        if name == "jev_verify":
+            return verify.call_verify(params.get("input"), self.client, self.audit,
+                                      enabled=self.features["verification"])
+        self.maybe_pick_up_key()
         tool_input = params.get("input") or {}
         if name == "jev_status":
             return tools.call_status(self.client, self.audit, self.features, self.key_source)

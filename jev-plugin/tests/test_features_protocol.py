@@ -43,6 +43,7 @@ def offline_post(self, body, *, timeout_s):
         "category": {"choice": "syntax", "confidence": 1},
         "recommendation": {"choice": "option_0", "confidence": .9},
         "0": {"choice": "source", "confidence": 1},
+        "q0": {"choice": "prioritize", "confidence": .9},
     }
     return {"answers": {k: answers[k] for k in questions},
             "model": "offline-fixture", "usage": {"input_tokens": 10}}
@@ -210,7 +211,7 @@ class FeatureProtocolTests(unittest.TestCase):
         h = self.host(config={'compress': True})
         self.command(h, 'guard', 'off')
         self.assertEqual(h.status()['features'],
-                         {'guard': False, 'router': True, 'compress': True, 'triage': True, 'discovery': False, 'tools': True})
+                         {'guard': False, 'router': True, 'compress': True, 'triage': True, 'discovery': False, 'verification': False, 'tools': True})
         result = h.hook('before_tool_call', tool_runtime_name='subagent_start',
                         tool_input={'task': 'Review the fixture'})
         self.assertEqual(result['action'], 'modify')
@@ -325,10 +326,34 @@ class FeatureProtocolTests(unittest.TestCase):
         self.assertEqual(h.request('hook.handle', p)['result'], {'action': 'continue'})
         self.assertEqual(h.status()['calls'], 1)
 
+    def test_verification_protocol(self):
+        from test_verification import data
+        h = self.host()
+        d = data(); d['checks'] = d['checks'][:2]
+        def call():
+            return json.loads(h.request('tool.call', {'name': 'jev_verify', 'input': d})['result']['content'])
+        self.assertEqual(call()['review_optional_ids'], ['candidate/0'])
+        self.assertEqual(h.status()['calls'], 0)
+        self.command(h, 'verification', 'on', '--save')
+        self.command(h, 'guard', 'off')
+        self.assertEqual(call()['recommended_optional_ids'], ['candidate/0'])
+        self.assertEqual(h.status()['op_stats']['verification']['calls'], 1)
+        self.assertIn(('verification', 'true'), h.config_sets)
+        d['checks'] = d['checks'][:1]
+        self.assertEqual(call()['required_ids'], ['mandatory'])
+        self.assertEqual(h.status()['calls'], 1)
+        d['checks'][0]['required'] = 1
+        error = h.request('tool.call', {'name': 'jev_verify', 'input': d})['error']
+        self.assertIn('invalid input', error['message'])
+        inert = self.host(config={'api_key': ''})
+        out = json.loads(inert.request('tool.call', {'name': 'jev_verify', 'input': data()})['result']['content'])
+        self.assertEqual(out['required_ids'], ['mandatory'])
+        self.assertIn('/jev key', out['fallback_reason'])
+
     def test_on_off_help_and_status_events(self):
         h = self.host()
         self.assertEqual([t['name'] for t in h.init['result']['capabilities']['tools']],
-                         ['jev_decide', 'jev_status', 'jev_select'])
+                         ['jev_decide', 'jev_status', 'jev_select', 'jev_verify'])
         for args in [(), ('help',)]:
             text = json.dumps(self.command(h, *args))
             for phrase in ['/jev guard off', '--save', '/jev off', '/jev status']:
@@ -337,10 +362,10 @@ class FeatureProtocolTests(unittest.TestCase):
             events = self.command(h, command)
             self.assertIn('this session only', json.dumps(events))
             self.assertEqual(h.status()['features'], {'guard': enabled, 'router': enabled,
-                                                      'compress': enabled, 'triage': enabled, 'discovery': enabled, 'tools': True})
+                                                      'compress': enabled, 'triage': enabled, 'discovery': enabled, 'verification': enabled, 'tools': True})
             self.assertTrue(any(e['kind'] == 'table' for e in self.command(h, 'status')))
         self.command(h, 'off', '--save')
-        self.assertEqual(h.config_sets, [('guard', 'false'), ('router', 'false'), ('compress', 'false'), ('triage', 'false'), ('discovery', 'false')])
+        self.assertEqual(h.config_sets, [('guard', 'false'), ('router', 'false'), ('compress', 'false'), ('triage', 'false'), ('discovery', 'false'), ('verification', 'false')])
         self.assertNotIn('(session)', json.dumps(self.command(h, 'status')))
 
 

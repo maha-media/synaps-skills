@@ -152,3 +152,20 @@ Redaction is best-effort and task sharing still costs API tokens on cache misses
 Router audit/logs omit text and decisions; status reports counters and estimated
 Jev costs, not savings. The existing router toggle covers caching/sparsity;
 discovery stays off by default. No worker authorization or scope changes.
+
+## Explicit verification priority: `jev_verify`
+
+Four tools are always advertised. `jev_verify({task, changes, checks})` accepts
+bounded task/change summaries and checks `{id, description, required}`. Use it only
+for uncertain optional-check priority, not execution or coverage certification.
+Caller-required IDs are preserved, never classified by AI, but **caller flags are
+not host-authoritative or exhaustive**: honor every project/user/CI mandatory
+check regardless of candidates. `deferred != safe to skip`.
+
+`/jev verification on|off [--save]` is independent of guard and defaults off.
+`/jev off`/`/jev on` toggle all features including verification. Shared key setup:
+`/jev key <apikey_…>`. Disabled/no-key calls preserve required IDs and put optionals
+in review; required-only calls cost nothing. One batch prioritizes optionals at
+confidence ≥0.8; unknown/malformed/low-confidence answers require review. No cache,
+file access, shell commands, activation, or automatic hook calls. See README for
+strict character/UTF-8 byte and batch limits; never supply secrets.

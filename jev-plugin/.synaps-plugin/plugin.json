@@ -1,7 +1,7 @@
 {
   "name": "jev",
-  "version": "0.3.1",
-  "description": "Calibrated Jev decisions: safety guard, sparse session-cached worker routing, opt-in compression and experimental discovery advice, automatic advisory bash failure triage, batched jev_decide and candidate-only jev_select.",
+  "version": "0.4.0",
+  "description": "Calibrated Jev decisions: safety guard, sparse session-cached worker routing, opt-in compression and experimental discovery advice, automatic advisory bash failure triage, batched jev_decide and candidate-only jev_select. Opt-in explicit verification prioritization via jev_verify.",
   "author": {
     "name": "JR Morton",
     "url": "https://github.com/maha-media"
@@ -213,6 +213,12 @@
         "type": "bool",
         "default": false,
         "description": "Opt-in discovery advice; sends redacted query/descriptors to Jev (API cost). Independent of guard; never activation/permission."
+      },
+      {
+        "key": "verification",
+        "type": "bool",
+        "default": false,
+        "description": "Enable explicit jev_verify optional-check priority advice, independent of guard. Never skip authority or test execution."
       }
     ]
   },

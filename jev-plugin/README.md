@@ -11,6 +11,7 @@ output replacement also depends on host runtime handling (see measurement limits
 | **Router** — fill omitted `role`, `write_policy` (→ `read_only` only), `model` (tier map) on `subagent_start` | `before_tool_call` → `modify` | on | open |
 | **Compress** — elide the middle of large routine `bash` outputs at ingestion | `after_tool_call` → `replace` | **off** | open |
 | **Triage** — preserve failures and append advisory diagnostic IDs | `after_tool_call` → `continue` / `replace` | on | open (abstain) |
+| **`jev_verify`** — explicit optional verification priority; preserves caller-required IDs | tool (no hook) | advice **off** | review |
 | **`jev_select`** — batch choices among supplied candidate IDs | tool | on | abstain / tool error |
 | **`jev_decide`** — up to 64 typed questions about one `state` in one ~0.4 s call | tool | on | tool error |
 | **`jev_status`** — calls, tokens, cost, verdict counters | tool | on | — |
@@ -69,7 +70,7 @@ Get a key at https://typesafe.ai.
 /jev guard off --save     # persist to plugins/jev/config
 /jev router off           # same pattern for router / compress / triage / discovery
 /jev triage off           # skip advisory failure classification; guard stays independent
-/jev off                  # guard + router + compress + triage + discovery; all three tools stay
+/jev off                  # guard + router + compress + triage + discovery + verification; all four tools stay
 /jev guard                # show now / source / saved
 ```
 
@@ -335,7 +336,7 @@ Underlying `search_tools` and `search_skills` discovery is **pure local**. The
 `discovery` experiment defaults to **false** and is **not recommended as a
 savings technique yet**. `/jev discovery on|off [--save]`
 controls it independently of guard; without `--save` the override is session-only.
-`/jev on` enables **all five** hooks, including this opt-in API cost/privacy
+`/jev on` enables **all six** features, including this opt-in API cost/privacy
 contract (and compression); `/jev off` disables them. Explicit Jev tools remain
 available, including their no-key setup guidance.
 
@@ -553,3 +554,49 @@ known offline verification is **84 tests**, reported by the benchmark agent
 after the foreman's earlier 77-test verification. This documentation-only
 finalization did not rerun tests or live calls and changed no feature toggles,
 user configuration, or model mappings.
+
+## Explicit verification priority (0.4.0)
+
+All four tools (`jev_decide`, `jev_select`, `jev_status`, `jev_verify`) are always
+advertised. `/jev verification on|off [--save]` controls optional verification
+advice, **default off**, independently of guard. `/jev off` and `/jev on` toggle
+**all six features**, including discovery and verification (and their opt-in API
+calls); they do not hide tools. Use the same `/jev key <apikey_…>` setup as above.
+
+`jev_verify` accepts only `{task, changes, checks}`:
+- `task`: nonblank string, at most 4000 characters **and UTF-8 bytes**.
+- `changes`: 1–16 nonblank strings, each at most 500 characters/bytes.
+- `checks`: 1–32 `{id, description, required}` objects, no extra fields.
+  IDs are globally unique, 1–80 ASCII letters/digits or `._:/-`; descriptions are
+  nonblank, at most 500 characters/bytes; `required` must be a JSON boolean.
+- No extra top-level fields; full serialized input at most 24 KiB.
+
+Caller-required checks are immutable caller policy: their IDs are always returned
+in input order and their descriptors are never sent for AI decisions. **Caller
+flags are not host-authoritative and are not an exhaustive mandatory-check list.
+Honor all project/user/CI mandatory checks regardless of supplied candidates.**
+The tool provides priority advice, never skip authority, test execution, coverage
+certification, commands, or activation. **deferred != safe to skip**.
+
+Optional checks get one `prioritize`/`defer`/`unknown` question each in one batch;
+confidence ≥0.8 is needed for recommendations or lower priority. Each optional ID
+appears exactly once in `recommended_optional_ids`, `lower_priority_optional_ids`,
+or `review_optional_ids`, in input order within groups. Missing/malformed/uncertain
+answers review only the affected candidate; global/transport failures review all.
+No key or disabled advice validates input first, preserves `required_ids`, and
+reviews all optionals with `/jev key` or `/jev verification on` guidance.
+Required-only requests are free even when enabled.
+
+The JSON content also includes `advisory:true`, `executed:false`,
+`coverage_certified:false`, optional `decisions` (local priority and status or
+fallback reason), a global fallback reason when appropriate, and a constant safety
+note. Output is local and ≤16 KiB; no model prose is returned. Invalid input produces
+a static tool error. Inputs are not mutated. State text is best-effort redacted
+using the triage redactor; do not supply secrets. Counters are
+`verification.call/questions/skip/recommend/defer/review/error`; estimated API
+accounting uses Stats operation `verification`. No content, IDs, answers, or
+exceptions are written to verification audit records.
+
+No cache: host `process.rs` sends only tool name/input, not trusted session identity.
+No model-supplied session ID is accepted or inferred from hooks. This tool reads no
+files/diffs, runs no shell commands, and never fires automatically from hooks.
