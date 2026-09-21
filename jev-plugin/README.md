@@ -67,9 +67,9 @@ Get a key at https://typesafe.ai.
 /jev guard off            # this session only — no more ~0.4 s review per tool call
 /jev guard on             # back on
 /jev guard off --save     # persist to plugins/jev/config
-/jev router off           # same pattern for router / compress / triage
+/jev router off           # same pattern for router / compress / triage / discovery
 /jev triage off           # skip advisory failure classification; guard stays independent
-/jev off                  # guard + router + compress + triage; all three tools stay
+/jev off                  # guard + router + compress + triage + discovery; all three tools stay
 /jev guard                # show now / source / saved
 ```
 
@@ -120,6 +120,7 @@ All keys live under `extension.jev.*` in `~/.synaps-cli/config`, or as
 | `router_min_conf` | `0.8` | |
 | `router_read_only_at` | `0.15` | P(needs_write) at/below which `write_policy` → `read_only` |
 | `router_models` | `""` | `small=<id>,medium=<id>`; ids must already be worker-authorised; `frontier` always inherits |
+| `discovery` | `false` | opt-in query/descriptor API calls; `/jev discovery on\|off [--save]`; independent of guard |
 | `triage` | `true` | advisory failure classification; `/jev triage on\|off [--save]`; independent of guard |
 | `compress` | `false` | opt-in; `/jev compress on\|off [--save]` |
 | `compress_tools` | `bash` | |
@@ -326,3 +327,46 @@ four-second budget (below the host's five seconds). A scoped POSIX main-thread
 timer bounds blocking DNS/response reads as well as socket operations; unavailable
 or already-owned timers fail without making a request. This process extension's
 supported execution path is the POSIX main-thread stdio loop.
+
+## Optional discovery recommendations (0.3)
+
+Underlying `search_tools` and `search_skills` discovery is **pure local**. The
+`discovery` feature defaults to **false**. `/jev discovery on|off [--save]`
+controls it independently of guard; without `--save` the override is session-only.
+`/jev on` enables **all five** hooks, including this opt-in API cost/privacy
+contract (and compression); `/jev off` disables them. Explicit Jev tools remain
+available, including their no-key setup guidance.
+
+**Privacy and cost opt-in:** when enabled with a key, eligible discovery sends
+only the substring query and bounded candidate names/summaries/descriptions/tags
+to Jev. Recognizable credential patterns are redacted using the triage redactor;
+this is not a guarantee that all sensitive text is detected. No prior user goal,
+transcript, tool schema, schema digest, or unknown host field is sent. Each cache
+miss can incur one decision request (the existing client may retry within its
+budget). Default-off, no-key and rejected inputs make zero discovery API calls.
+
+The hook accepts 2–16 unique candidates, nontruncated strict JSON and a query of
+at most 512 UTF-8 bytes/chars. Tool summaries are at most 256 bytes; skill
+descriptions 160 bytes. IDs/names are bounded to 256 bytes, tags to 16 × 64 bytes,
+and original output to 32 KiB. Invalid shapes, duplicate JSON keys/IDs,
+nonfinite numbers, preexisting `jev_advisory`, oversized evidence, control
+characters, and exact ID/name queries are skipped rather than truncated.
+Unknown host fields remain unchanged semantically and local.
+
+Jev must abstain for generic keywords such as `memory`, `test`, or `search`,
+equally plausible matches, and any ambiguity. Candidate order is not intent.
+Only a supplied opaque option at confidence ≥0.85 can map locally to a supplied
+ID. The original machine-readable JSON and every descriptor remain intact;
+only bounded `jev_advisory` metadata is added, with `recommended_id`,
+`advisory: true`, and a **not activation/permission** note. No filtering,
+reranking, activation, permission change or automatic follow-up occurs.
+Errors and abstentions return exact Continue, without rewriting output.
+
+A process-local LRU of 128 entries caches recommendations and explicit
+abstentions, keyed by a digest of session, query, runtime tool, entire original
+output and client model. No session means no cache. Cache values are opaque
+options, never raw catalogs; metadata is reapplied to the current original
+payload. Malformed answers, low confidence and errors are not cached. Discovery
+never writes payloads or exception text to audit/logs. Status exposes
+`discovery.skip/call/cache/recommend/abstain/error` counters and `op=discovery`
+estimated Jev costs/tokens/latency. These are advisory measurements, not savings.

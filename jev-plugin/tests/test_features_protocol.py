@@ -40,6 +40,7 @@ def offline_post(self, body, *, timeout_s):
         "is_failure": {"noul": 0},
         "ok": {"noul": 1},
         "category": {"choice": "syntax", "confidence": 1},
+        "recommendation": {"choice": "option_0", "confidence": .9},
         "0": {"choice": "source", "confidence": 1},
     }
     return {"answers": {k: answers[k] for k in questions},
@@ -180,7 +181,7 @@ class FeatureProtocolTests(unittest.TestCase):
         h = self.host(config={'compress': True})
         self.command(h, 'guard', 'off')
         self.assertEqual(h.status()['features'],
-                         {'guard': False, 'router': True, 'compress': True, 'triage': True, 'tools': True})
+                         {'guard': False, 'router': True, 'compress': True, 'triage': True, 'discovery': False, 'tools': True})
         result = h.hook('before_tool_call', tool_runtime_name='subagent_start',
                         tool_input={'task': 'Review the fixture'})
         self.assertEqual(result['action'], 'modify')
@@ -275,6 +276,26 @@ class FeatureProtocolTests(unittest.TestCase):
                            {'id': 'tests', 'description': 'test suite'}]}]}})
         self.assertEqual(json.loads(r['result']['content'])['decisions'][0]['id'], 'source')
 
+    def test_discovery_protocol(self):
+        from test_discovery import catalog
+        h = self.host()
+        self.assertFalse(h.status()['features']['discovery'])
+        p = {'kind': 'after_tool_call', 'tool_runtime_name': 'search_tools',
+             'session_id': 'synthetic', 'tool_input': {'query': 'failed assertions'},
+             'tool_output': json.dumps(catalog())}
+        self.assertEqual(h.request('hook.handle', p)['result'], {'action': 'continue'})
+        self.assertEqual(h.status()['calls'], 0)
+        self.command(h, 'guard', 'off')
+        self.command(h, 'discovery', 'on', '--save')
+        self.assertIn(('discovery', 'true'), h.config_sets)
+        result = h.request('hook.handle', p)['result']
+        self.assertEqual(json.loads(result['output'])['jev_advisory']['recommended_id'], 'alpha')
+        h.request('hook.handle', p)
+        self.assertEqual(h.status()['calls'], 1)
+        self.command(h, 'discovery', 'off')
+        self.assertEqual(h.request('hook.handle', p)['result'], {'action': 'continue'})
+        self.assertEqual(h.status()['calls'], 1)
+
     def test_on_off_help_and_status_events(self):
         h = self.host()
         self.assertEqual([t['name'] for t in h.init['result']['capabilities']['tools']],
@@ -287,10 +308,10 @@ class FeatureProtocolTests(unittest.TestCase):
             events = self.command(h, command)
             self.assertIn('this session only', json.dumps(events))
             self.assertEqual(h.status()['features'], {'guard': enabled, 'router': enabled,
-                                                      'compress': enabled, 'triage': enabled, 'tools': True})
+                                                      'compress': enabled, 'triage': enabled, 'discovery': enabled, 'tools': True})
             self.assertTrue(any(e['kind'] == 'table' for e in self.command(h, 'status')))
         self.command(h, 'off', '--save')
-        self.assertEqual(h.config_sets, [('guard', 'false'), ('router', 'false'), ('compress', 'false'), ('triage', 'false')])
+        self.assertEqual(h.config_sets, [('guard', 'false'), ('router', 'false'), ('compress', 'false'), ('triage', 'false'), ('discovery', 'false')])
         self.assertNotIn('(session)', json.dumps(self.command(h, 'status')))
 
 

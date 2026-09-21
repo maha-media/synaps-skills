@@ -28,8 +28,10 @@ def recognized(params):
     return isinstance(params, dict) and (params.get("tool_runtime_name") or params.get("tool_name")) in TOOLS
 
 
-def bounded(value, size):
-    return isinstance(value, str) and bool(value.strip()) and len(value) <= size and len(value.encode("utf-8")) <= size
+def bounded(value, size, *, controls=False):
+    return (isinstance(value, str) and bool(value.strip()) and len(value) <= size
+            and len(value.encode("utf-8")) <= size
+            and (controls or not re.search(r"[\x00-\x1f\x7f]", value)))
 
 
 def pairs(items):
@@ -58,7 +60,7 @@ def prepare(params):
     inp, raw = params.get("tool_input"), params.get("tool_output")
     if not isinstance(inp, dict) or set(inp) != {"query"} or not bounded(inp["query"], 512):
         raise ValueError("input")
-    if not bounded(raw, MAX_OUTPUT):
+    if not bounded(raw, MAX_OUTPUT, controls=True):
         raise ValueError("output")
     payload = json.loads(raw, object_pairs_hook=pairs, parse_constant=reject_constant, parse_float=finite_float)
     if not isinstance(payload, dict) or payload.get("truncated") is not False:
@@ -90,7 +92,7 @@ def prepare(params):
                 raise ValueError("skill descriptor")
             name = row["name"]
             descriptor = {"name": redact(name), "description": redact(row["description"])}
-        names.extend([ident, name, re.split(r"::|[/.]", ident)[-1]])
+        names.extend([ident, name, re.split(r"[:/.]", ident)[-1]])
         descriptors[f"option_{i}"] = descriptor
     if inp["query"].strip().casefold() in {n.casefold() for n in names if n}:
         raise ValueError("exact name")
@@ -125,7 +127,7 @@ class Discovery:
                 self.cache.move_to_end(key)
                 choice = self.cache[key]
             else:
-                criteria = {token: "Candidate described in `candidates`." for token in state["candidates"]}
+                criteria = {token: f"Select candidate {token} in `candidates`." for token in state["candidates"]}
                 criteria["abstain"] = "Ambiguous, generic query, insufficient intent, or none of these."
                 audit.bump("discovery.call")
                 response = client.decide(state, {"recommendation": {

@@ -108,3 +108,22 @@ non-authoritative; inspect evidence yourself. Unknown/oversized/truncated/error
 cases abstain, and recognized failures never compress. No automatic retry.
 Use status for per-operation estimated Jev cost and triage cache/skip/abstain
 counts, not invented savings. Worker-tier optimization and compaction are deferred.
+
+### Optional discovery advice (0.3)
+
+Local `search_tools`/`search_skills` remains pure local by default. Discovery
+recommendations are **off by default**, independent of guard. `/jev discovery
+on|off [--save]` opts into sending bounded, credential-pattern-redacted search
+query and descriptors to Jev, with API cost; `/jev on` enables this too. No prior
+goal, transcript or schemas are sent. Redaction is best-effort, not a secrecy
+guarantee. Explicit Jev tools and no-key guidance remain available.
+
+The query is substring keywords, not a task: generic words (memory/test/search),
+unstated intent and equally plausible matches must abstain. Never infer intent
+from order. `jev_advisory` is optional advice, **not activation/permission or
+authority**. All discovery fields/candidates stay intact and machine-readable;
+no filtering/reranking occurs. Confidence ≥0.85 only maps a supplied opaque
+option to an exact returned ID. Invalid/oversized/truncated/exact-name results,
+off/no-key, failures and abstentions leave output unchanged. Cache is session-
+local, bounded to 128 digests/options; no raw payload audit. Check status for
+`discovery.*` counters and per-operation Jev cost, not assumed savings.
