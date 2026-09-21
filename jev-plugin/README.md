@@ -28,6 +28,12 @@ instead of guessing. Fresh worker runtimes inherit the host session approval
 latch, but the host's default worker hook bus is empty: this does **not** mean
 Jev reviews worker tool calls. Worker reviews require host hook wiring.
 
+## Offline workflow comparison
+
+[Workflow comparison protocol and harness](docs/workflow-comparison.md) replays
+public toy tasks offline. Synthetic fixture results are not LLM benchmarks or
+evidence of production savings.
+
 ## Install
 
 ```bash
