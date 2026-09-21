@@ -1,0 +1,216 @@
+{
+  "name": "jev",
+  "version": "0.1.0",
+  "description": "Calibrated decision layer for the agent harness via TypeSafe Jev (System One): tool-call safety gate, subagent auto-routing, opt-in tool-output relevance compression, and a batched jev_decide tool.",
+  "author": {
+    "name": "JR Morton",
+    "url": "https://github.com/maha-media"
+  },
+  "repository": "maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "security",
+  "extension": {
+    "protocol_version": 1,
+    "runtime": "process",
+    "command": "python3",
+    "args": [
+      "-u",
+      "extensions/jev_ext.py"
+    ],
+    "permissions": [
+      "tools.register",
+      "tools.intercept",
+      "tools.transform_output",
+      "privacy.llm_content",
+      "session.lifecycle",
+      "config.write"
+    ],
+    "hooks": [
+      {
+        "hook": "before_tool_call",
+        "tool": "bash"
+      },
+      {
+        "hook": "before_tool_call",
+        "tool": "write"
+      },
+      {
+        "hook": "before_tool_call",
+        "tool": "edit"
+      },
+      {
+        "hook": "before_tool_call",
+        "tool": "read"
+      },
+      {
+        "hook": "before_tool_call",
+        "tool": "subagent_start"
+      },
+      {
+        "hook": "before_tool_call",
+        "tool": "subagent"
+      },
+      {
+        "hook": "after_tool_call",
+        "tool": "bash"
+      },
+      {
+        "hook": "before_message"
+      },
+      {
+        "hook": "on_session_start"
+      }
+    ],
+    "config": [
+      {
+        "key": "project_root",
+        "host_context": "project_root",
+        "description": "Host-owned: the session's trusted project root (nearest .git/.synaps-project). The guard's 'leaves workspace' question is asked relative to this, not to the plugin directory."
+      },
+      {
+        "key": "api_key",
+        "type": "string",
+        "description": "TypeSafe API key. Easiest: run `/jev key <apikey_…>` inside synaps (validates, saves to plugins/jev/config, activates without restart). Also resolved from TYPESAFE_API_KEY or extension.jev.api_key. Without it the plugin loads inert and re-checks every 5 s.",
+        "required": false,
+        "secret_env": "TYPESAFE_API_KEY"
+      },
+      {
+        "key": "model",
+        "type": "string",
+        "description": "Model name or alias. Pin a versioned id (e.g. jev-1.13.0) once thresholds are tuned.",
+        "default": "jev-latest"
+      },
+      {
+        "key": "timeout_ms",
+        "type": "number",
+        "description": "Per-request HTTP timeout. Must stay under the runtime's 5 s fail-open hook timeout.",
+        "default": 3000
+      },
+      {
+        "key": "audit_file",
+        "type": "string",
+        "description": "JSONL audit trail (relative to SYNAPS_BASE_DIR). Contains command text and file paths; chmod 600. Empty disables.",
+        "default": "memory/jev/audit.jsonl"
+      },
+      {
+        "key": "guard",
+        "type": "bool",
+        "description": "Enable the before_tool_call safety gate.",
+        "default": true
+      },
+      {
+        "key": "guard_tools",
+        "type": "string",
+        "description": "Comma-separated runtime tool names the guard evaluates.",
+        "default": "bash,write,edit,read"
+      },
+      {
+        "key": "guard_ask_at",
+        "type": "number",
+        "description": "Risk score (0–3) at/above which the user is asked to confirm.",
+        "default": 1.5
+      },
+      {
+        "key": "guard_block_at",
+        "type": "number",
+        "description": "Risk score (0–3) at/above which the call is hard-blocked. 3.5 = never.",
+        "default": 3.5
+      },
+      {
+        "key": "guard_min_conf",
+        "type": "number",
+        "description": "Below this confidence the guard always asks rather than guesses.",
+        "default": 0.6
+      },
+      {
+        "key": "guard_secrets_at",
+        "type": "number",
+        "description": "Probability that the call touches secrets at/above which it always asks.",
+        "default": 0.5
+      },
+      {
+        "key": "guard_escape_at",
+        "type": "number",
+        "description": "Probability that the call writes outside cwd//tmp at/above which it always asks.",
+        "default": 0.7
+      },
+      {
+        "key": "router",
+        "type": "bool",
+        "description": "Fill omitted subagent role / write_policy (and model, if router_models is set) from the task text.",
+        "default": true
+      },
+      {
+        "key": "router_min_conf",
+        "type": "number",
+        "description": "Minimum Jev confidence to fill a routing field.",
+        "default": 0.8
+      },
+      {
+        "key": "router_read_only_at",
+        "type": "number",
+        "description": "needs_write probability at/below which an omitted write_policy becomes read_only.",
+        "default": 0.15
+      },
+      {
+        "key": "router_models",
+        "type": "string",
+        "description": "Optional tier map, e.g. \"small=anthropic/claude-haiku-4-5,medium=anthropic/claude-sonnet-4-6\". Ids must already be authorised for workers (see subagent_models). Unset = never change model; frontier always inherits.",
+        "default": ""
+      },
+      {
+        "key": "compress",
+        "type": "bool",
+        "description": "Opt-in: elide the middle of large, routine bash outputs at ingestion when Jev is confident head+tail suffice. Never on failures.",
+        "default": false
+      },
+      {
+        "key": "compress_tools",
+        "type": "string",
+        "description": "Comma-separated runtime tool names eligible for compression.",
+        "default": "bash"
+      },
+      {
+        "key": "compress_min_bytes",
+        "type": "number",
+        "description": "Outputs smaller than this are never touched.",
+        "default": 6000
+      },
+      {
+        "key": "compress_min_conf",
+        "type": "number",
+        "description": "Minimum probability mass on \"outcome only\" + \"head and tail suffice\" before eliding.",
+        "default": 0.85
+      },
+      {
+        "key": "compress_head",
+        "type": "number",
+        "description": "Bytes kept from the start of an elided output.",
+        "default": 1500
+      },
+      {
+        "key": "compress_tail",
+        "type": "number",
+        "description": "Bytes kept from the end of an elided output.",
+        "default": 1000
+      }
+    ]
+  },
+  "commands": [
+    {
+      "name": "jev",
+      "description": "Jev decision layer: `/jev key <apikey_…>` validates+saves+activates a key without restart; `/jev status`; `/jev test`; `/jev guard|router|compress on|off [--save]` flips one feature (session-only unless --save); `/jev off|on [--save]` flips all three.",
+      "interactive": true,
+      "subcommands": [
+        "key",
+        "status",
+        "test",
+        "guard",
+        "router",
+        "compress",
+        "on",
+        "off"
+      ]
+    }
+  ]
+}
