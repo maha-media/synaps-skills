@@ -592,7 +592,9 @@ The JSON content also includes `advisory:true`, `executed:false`,
 fallback reason), a global fallback reason when appropriate, and a constant safety
 note. Output is local and ≤16 KiB; no model prose is returned. Invalid input produces
 a static tool error. Inputs are not mutated. State text is best-effort redacted
-using the triage redactor; do not supply secrets. Counters are
+using the triage redactor without truncating expanded text; do not supply secrets.
+If serialized redacted state exceeds 32 KiB (UTF-8), all optionals receive review
+with `redacted_state_too_large`, no API call, and required IDs intact. Counters are
 `verification.call/questions/skip/recommend/defer/review/error`; estimated API
 accounting uses Stats operation `verification`. No content, IDs, answers, or
 exceptions are written to verification audit records.

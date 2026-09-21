@@ -43,8 +43,12 @@ def offline_post(self, body, *, timeout_s):
         "category": {"choice": "syntax", "confidence": 1},
         "recommendation": {"choice": "option_0", "confidence": .9},
         "0": {"choice": "source", "confidence": 1},
-        "q0": {"choice": "prioritize", "confidence": .9},
+        "q0": {"type": "choice", "choice": "prioritize", "confidence": .9,
+               "probabilities": {"prioritize": .9, "defer": .05, "unknown": .05}},
     }
+    answers["q1"] = {**answers["q0"], "type": None}
+    answers["q2"] = {"type": "choice", "choice": "defer", "confidence": .9,
+                     "probabilities": {"prioritize": .05, "defer": .9, "unknown": .05}}
     return {"answers": {k: answers[k] for k in questions},
             "model": "offline-fixture", "usage": {"input_tokens": 10}}
 DecisionClient._post = offline_post
@@ -349,6 +353,25 @@ class FeatureProtocolTests(unittest.TestCase):
         out = json.loads(inert.request('tool.call', {'name': 'jev_verify', 'input': data()})['result']['content'])
         self.assertEqual(out['required_ids'], ['mandatory'])
         self.assertIn('/jev key', out['fallback_reason'])
+
+    def test_verification_typed_siblings_and_expansion_cap_protocol(self):
+        from test_verification import data
+        h = self.host()
+        self.command(h, 'verification', 'on')
+        d = data()
+        def call():
+            return json.loads(h.request('tool.call', {'name': 'jev_verify', 'input': d})['result']['content'])
+        out = call()
+        self.assertEqual(out['recommended_optional_ids'], ['candidate/0'])
+        self.assertEqual(out['review_optional_ids'], ['candidate/1'])
+        self.assertEqual(out['lower_priority_optional_ids'], ['candidate/2'])
+        d['task'] = 'token=x ' * 500
+        d['changes'] = ['token=x ' * 62] * 16
+        out = call()
+        self.assertEqual(out['required_ids'], ['mandatory'])
+        self.assertEqual(out['review_optional_ids'], ['candidate/0', 'candidate/1', 'candidate/2'])
+        self.assertEqual(out['fallback_reason'], 'redacted_state_too_large')
+        self.assertEqual(h.status()['op_stats']['verification']['calls'], 1)
 
     def test_on_off_help_and_status_events(self):
         h = self.host()
