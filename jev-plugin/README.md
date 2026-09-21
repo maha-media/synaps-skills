@@ -314,9 +314,9 @@ reloaded this plugin or delivered replacement text to the model.
 These small synthetic smokes are not production accuracy or calibration
 measurements and provide no evidence of net savings. Wall time includes network
 variance; estimated Jev input-token costs exclude frontier-model and other costs.
-Router sparsity/cache changes in 0.3.1 have not been live-benchmarked; no token or
-net savings are claimed. Existing user model mapping remains required; compaction
-integration is deferred.
+Router sparsity/cache changes in 0.3.1 now have a pinned synthetic live smoke
+(see below), measuring Jev overhead only, not net savings. Existing user model
+mapping remains required; compaction integration is deferred.
 
 **No host/core policy changes:** the new decision policy stays plugin-only.
 An independent host runtime fix is needed for an `after_tool_call` `Replace` to
@@ -509,7 +509,8 @@ with triage credential redaction; unknown fields and saved conversation goals do
 not. Redaction is best-effort: routing still shares task text with Jev and incurs
 API cost on misses. Router logs/audit contain no task, fills, models, answers or
 exceptions; status exposes counters and existing per-operation cost accounting.
-Older audit files are not rewritten by this release. Discovery remains off by
+Task-bearing router logging is deprecated; older audit files are not rewritten
+by this release and may still contain previously logged task data. Discovery remains off by
 default. No changes to worker calls, activation, scopes or host authorization.
 
 Offline benchmark seams: `Router.handle(params, client, cfg, audit, log)` uses
@@ -517,5 +518,38 @@ Offline benchmark seams: `Router.handle(params, client, cfg, audit, log)` uses
 at `DecisionClient._post` (see protocol tests). `questions(input, cfg)` exposes
 sparse request construction and `plan_fill` remains a pure compatibility seam.
 Use one Router per extension and repeated session IDs to measure cache behavior;
-compare against frozen 0.3.0 questions on identical synthetic tasks before making
-any savings claims.
+the pinned live comparison below uses the frozen baseline at `f3a6d07`.
+
+### Pinned synthetic live evidence
+
+The supplied `jev-1.13.0` live run covers seven fixed synthetic cases, including
+two repeats. [Evidence and methodology](scripts/router-benchmark/README.md)
+include the original JSON reports; no worker was launched.
+
+| Jev overhead on this workload | Old | New |
+|---|---:|---:|
+| Calls / questions | 6 / 12 | 4 / 5 |
+| Returned input tokens | 2,972 | 1,730 |
+| Estimated input-token cost | $0.000124824 | $0.00007266 |
+| Summed transport latency | 2,290.87 ms | 1,514.51 ms |
+
+This is a **41.8% reduction in Jev input tokens and estimated Jev cost only**.
+Unique cases used 1,981 → 1,730 tokens (251 saved); the two repeats avoided
+991 tokens and two calls. The both-fields-missing case grew from 497 to 548
+tokens with the safety prompt. Unique-case summed transport latency was
+**33.67 ms slower**, so this is not evidence of a universal speedup.
+
+The old arm matched all seven expected fill sets; the new arm had five correct
+and two abstentions (the same docs case and its repeat), with no incorrect
+positive fills. Existing explicit/configured inputs were preserved; no worker
+models were set. The separate guard-off protocol smoke passed sparse-question,
+free repeat-cache, and router-disable bypass checks: one call, 484 input tokens,
+~$0.000020328 at the stated rate, and 363 ms mean transport latency (its JSON
+cost counter is rounded to $0.00002).
+
+These measurements exclude worker/frontier costs and downstream task quality;
+they establish neither cheaper worker execution nor net money savings. Latest
+known offline verification is **84 tests**, reported by the benchmark agent
+after the foreman's earlier 77-test verification. This documentation-only
+finalization did not rerun tests or live calls and changed no feature toggles,
+user configuration, or model mappings.

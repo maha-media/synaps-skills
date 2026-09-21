@@ -1,0 +1,19 @@
+{
+  "protocol": "PASS",
+  "cache_repeat_free": true,
+  "sparse_questions": 1,
+  "explicit_fields_preserved": true,
+  "model_inherited": true,
+  "router_off_free": true,
+  "guard_disabled": true,
+  "stats": {
+    "calls": 1,
+    "input_tokens": 484,
+    "cost_usd": 2e-05,
+    "mean_ms": 363,
+    "by_op": {
+      "router": 1
+    }
+  },
+  "action": "modify"
+}
