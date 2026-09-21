@@ -728,5 +728,41 @@ mandatory instructions still apply. This is not fetch authorization: honor the
 original tool scope, provenance and freshness. No fetch/read/delete, tool
 activation or automation occurs. Counters are
 `evidence.call/questions/skip/inspect_first/later/review/error`; Stats uses operation
-`evidence`. No evidence payload audit records. **No evidence benchmark yet**;
-o quality, savings or live-evaluation claims are made.
+`evidence`. No evidence payload audit records.
+
+### Synthetic evidence benchmark
+
+[`scripts/benchmark_evidence.py`](scripts/benchmark_evidence.py) runs offline by
+default: no key discovery, client construction or network; live measurements are
+`null`. Run `python3 -B jev-plugin/scripts/benchmark_evidence.py` from the repo root.
+It uses production `evidence.call_evidence`, four fixed public synthetic cases
+(parser whitespace, contradictory auth descriptors, keyboard/injection, vague),
+and twelve optional relevance questions. Every case also exercises all-required,
+off and no-key variants at zero API cost. No source contents are read or fetched.
+
+For a separately authorized live run, append `--live --model jev-1.13.0` (the pinned
+default and only accepted model). This explicitly discovers a configured key;
+production `DecisionClient.decide` and deadlines remain in use, with at most four
+wire attempts, no retries. No live run is claimed here. `fixtures()` returns the
+exact reusable API fixtures: foreman protocol runs should submit each `data` to
+`jev_evidence` with evidence enabled, retaining `expected` locally, never sending
+labels. Sources/IDs are synthetic path, `mem-FAKE` and `example.invalid` labels,
+not repository observations or source-authority claims. Auth docs and contradicting
+historic memory are both relevant; current truth remains unresolved.
+
+Reports compare first-optional input order (a cheap descriptor starting order,
+not a frontier baseline) against required/inspect-first/review/later bucket order.
+Optional recall, precision, wrong inspect-first priorities, non-review coverage
+and unknown counts are separate from exact required/reference preservation.
+Weak fixed labels do not tune the unchanged >=0.8 gate; unknowns are not successes.
+Live reports include actual input usage and estimated Jev cost (missing usage is
+`null`), hook/network total/p50/p95 milliseconds and serialized output-byte
+overhead. Model metadata is allowlisted; arbitrary upstream text is not printed.
+No cache results: session context is unknown. **No savings claim**: main-model
+tool-turn cost and downstream output growth costs are not measured. The output
+bytes describe added hint overhead, not saved work. No large report artifact is
+written. Offline tests:
+
+```bash
+python3 -B -m unittest discover -s jev-plugin/tests -p 'test_benchmark_evidence.py' -v
+```
