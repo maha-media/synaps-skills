@@ -7,8 +7,8 @@ description: Use when a task is many small decisions — triage, classify, route
 
 TypeSafe **Jev** is a *System One* model: it never writes, it only picks from
 answers you define and tells you how sure it is. This plugin integrates it
-through harness hooks and four explicit tools:
-`jev_decide`, `jev_select`, `jev_status`, and `jev_verify`.
+through harness hooks and five explicit tools:
+`jev_decide`, `jev_select`, `jev_status`, `jev_verify`, and `jev_evidence`.
 
 | Surface | What it does | You need to… |
 |---|---|---|
@@ -200,3 +200,25 @@ confidence ≥0.8; unknown/malformed/low-confidence answers require review. No c
 because host `hosttool.call` supplies no trusted session identity. No
 file access, shell commands, activation, or automatic hook calls. See README for
 strict character/UTF-8 byte and batch limits; never supply secrets.
+
+## Evidence descriptors: `jev_evidence` (0.5.0)
+
+Opt-in `/jev evidence on|off [--save]`, default off, independent of guard. Supply
+exactly `{task,candidates}`; each candidate is exactly
+`{id,kind,source,summary,required}`. Task <=4000, unique ID <=160, source <=300,
+summary <=800 characters AND UTF-8 bytes; nonblank valid Unicode; 1–32 candidates,
+serialized input <=32 KiB. Kind is file/document/memory/other; required is boolean.
+IDs/sources prohibit ASCII controls, task/summary allow LF/CR/TAB among C0 only.
+Output is preflight-bounded to 64 KiB without metadata truncation.
+
+Required IDs always stay first; optional partitions are inspect-first, review,
+later, stable in input order. All supplied reference metadata is preserved but
+unverified. No-key/off/all-required paths are free. Only redacted task and optional
+kind/summary go to Jev, never required descriptors or ID/source fields. No cache.
+Redacted state >40 KiB or unavailable/invalid advice returns review, not omission.
+
+Relevance != truth or source authority; lower priority != discard permission.
+Caller-required is not exhaustive: all host/user/project mandatory instructions
+still apply. No fetch authorization: obey original tool scope, provenance and
+freshness. The tool does not fetch/read/delete, activate tools or automate work.
+No evidence benchmark yet; do not claim quality or savings.

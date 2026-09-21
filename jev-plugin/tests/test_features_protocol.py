@@ -46,6 +46,9 @@ def offline_post(self, body, *, timeout_s):
         "q0": {"type": "choice", "choice": "prioritize", "confidence": .9,
                "probabilities": {"prioritize": .9, "defer": .05, "unknown": .05}},
     }
+    if "q0" in questions and "inspect_first" in questions["q0"].get("criteria", {}):
+        answers["q0"] = {"type": "choice", "choice": "inspect_first", "confidence": .9,
+                         "probabilities": {"inspect_first": .9, "later": .05, "unknown": .05}}
     answers["q1"] = {**answers["q0"], "type": None}
     answers["q2"] = {"type": "choice", "choice": "defer", "confidence": .9,
                      "probabilities": {"prioritize": .05, "defer": .9, "unknown": .05}}
@@ -215,7 +218,7 @@ class FeatureProtocolTests(unittest.TestCase):
         h = self.host(config={'compress': True})
         self.command(h, 'guard', 'off')
         self.assertEqual(h.status()['features'],
-                         {'guard': False, 'router': True, 'compress': True, 'triage': True, 'discovery': False, 'verification': False, 'tools': True})
+                         {'guard': False, 'router': True, 'compress': True, 'triage': True, 'discovery': False, 'verification': False, 'evidence': False, 'tools': True})
         result = h.hook('before_tool_call', tool_runtime_name='subagent_start',
                         tool_input={'task': 'Review the fixture'})
         self.assertEqual(result['action'], 'modify')
@@ -330,6 +333,30 @@ class FeatureProtocolTests(unittest.TestCase):
         self.assertEqual(h.request('hook.handle', p)['result'], {'action': 'continue'})
         self.assertEqual(h.status()['calls'], 1)
 
+    def test_evidence_protocol(self):
+        from test_evidence import data
+        h = self.host()
+        d = data(); d['candidates'] = d['candidates'][:2]
+        def call():
+            return json.loads(h.request('tool.call', {'name': 'jev_evidence', 'input': d})['result']['content'])
+        self.assertEqual(call()['review_ids'], ['0'])
+        self.assertEqual(h.status()['calls'], 0)
+        self.command(h, 'evidence', 'on', '--save')
+        self.command(h, 'guard', 'off')
+        self.assertEqual(call()['inspect_first_ids'], ['0'])
+        self.assertEqual(h.status()['op_stats']['evidence']['calls'], 1)
+        self.assertEqual(h.status()['counters']['evidence.questions'], 1)
+        self.assertIn(('evidence', 'true'), h.config_sets)
+        self.command(h, 'evidence', 'off')
+        self.assertEqual(call()['review_ids'], ['0'])
+        self.assertEqual(h.status()['calls'], 1)
+        d['candidates'] = d['candidates'][1:]
+        self.assertEqual(call()['required_ids'], ['1'])
+        self.assertEqual(h.status()['calls'], 1)
+        inert = self.host(config={'api_key': ''})
+        out = json.loads(inert.request('tool.call', {'name': 'jev_evidence', 'input': data()})['result']['content'])
+        self.assertIn('/jev key', out['fallback_reason'])
+
     def test_verification_protocol(self):
         from test_verification import data
         h = self.host()
@@ -376,7 +403,7 @@ class FeatureProtocolTests(unittest.TestCase):
     def test_on_off_help_and_status_events(self):
         h = self.host()
         self.assertEqual([t['name'] for t in h.init['result']['capabilities']['tools']],
-                         ['jev_decide', 'jev_status', 'jev_select', 'jev_verify'])
+                         ['jev_decide', 'jev_status', 'jev_select', 'jev_verify', 'jev_evidence'])
         for args in [(), ('help',)]:
             text = json.dumps(self.command(h, *args))
             for phrase in ['/jev guard off', '--save', '/jev off', '/jev status']:
@@ -385,10 +412,10 @@ class FeatureProtocolTests(unittest.TestCase):
             events = self.command(h, command)
             self.assertIn('this session only', json.dumps(events))
             self.assertEqual(h.status()['features'], {'guard': enabled, 'router': enabled,
-                                                      'compress': enabled, 'triage': enabled, 'discovery': enabled, 'verification': enabled, 'tools': True})
+                                                      'compress': enabled, 'triage': enabled, 'discovery': enabled, 'verification': enabled, 'evidence': enabled, 'tools': True})
             self.assertTrue(any(e['kind'] == 'table' for e in self.command(h, 'status')))
         self.command(h, 'off', '--save')
-        self.assertEqual(h.config_sets, [('guard', 'false'), ('router', 'false'), ('compress', 'false'), ('triage', 'false'), ('discovery', 'false'), ('verification', 'false')])
+        self.assertEqual(h.config_sets, [('guard', 'false'), ('router', 'false'), ('compress', 'false'), ('triage', 'false'), ('discovery', 'false'), ('verification', 'false'), ('evidence', 'false')])
         self.assertNotIn('(session)', json.dumps(self.command(h, 'status')))
 
 

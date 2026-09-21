@@ -1,7 +1,7 @@
 {
   "name": "jev",
-  "version": "0.4.0",
-  "description": "Calibrated Jev decisions: safety guard, sparse session-cached worker routing, opt-in compression and experimental discovery advice, automatic advisory bash failure triage, batched jev_decide and candidate-only jev_select. Opt-in explicit verification prioritization via jev_verify.",
+  "version": "0.5.0",
+  "description": "Calibrated Jev decisions: safety guard, sparse session-cached worker routing, opt-in compression and experimental discovery advice, automatic advisory bash failure triage, batched jev_decide and candidate-only jev_select. Opt-in explicit verification prioritization via jev_verify. Opt-in evidence descriptor relevance via jev_evidence (no fetch or trust certification).",
   "author": {
     "name": "JR Morton",
     "url": "https://github.com/maha-media"
@@ -219,13 +219,19 @@
         "type": "bool",
         "default": false,
         "description": "Enable explicit jev_verify optional-check priority advice, independent of guard. Never skip authority or test execution."
+      },
+      {
+        "key": "evidence",
+        "type": "bool",
+        "default": false,
+        "description": "Opt-in explicit descriptor relevance advice independent of guard. No source access or trust certification."
       }
     ]
   },
   "commands": [
     {
       "name": "jev",
-      "description": "Jev decision layer: `/jev key <apikey_…>` validates+saves+activates a key without restart; `/jev status`; `/jev test`; `/jev guard|router|compress|triage|discovery on|off [--save]` flips one feature (session-only unless --save); `/jev off|on [--save]` flips all five (including opt-in discovery).",
+      "description": "Jev decision layer: `/jev key <apikey_…>` validates+saves+activates a key without restart; `/jev status`; `/jev test`; `/jev guard|router|compress|triage|discovery|verification|evidence on|off [--save]` flips one feature (session-only unless --save); `/jev off|on [--save]` flips all seven (including opt-in discovery, verification and evidence).",
       "interactive": true,
       "subcommands": [
         "key",
@@ -236,6 +242,8 @@
         "compress",
         "triage",
         "discovery",
+        "verification",
+        "evidence",
         "on",
         "off"
       ]

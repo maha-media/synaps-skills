@@ -52,7 +52,7 @@ DECIDE_SPEC = {
 
 STATUS_SPEC = {
     "name": "jev_status",
-    "description": "Report the Jev plugin state: whether an API key is configured (and how to set one), plus this session's calls, tokens, cost, mean latency, guard verdict counts, router call/cache/questions/skip/fill/abstain/error counters, compression elisions, verification call/questions/skip/recommend/defer/review/error counters, triage and discovery skip/cache/recommend/abstain/error counters, per-operation estimated Jev cost/tokens/latency, errors. No savings estimate.",
+    "description": "Report the Jev plugin state: whether an API key is configured (and how to set one), plus this session's calls, tokens, cost, mean latency, guard verdict counts, router call/cache/questions/skip/fill/abstain/error counters, compression elisions, evidence call/questions/skip/inspect_first/later/review/error counters, verification call/questions/skip/recommend/defer/review/error counters, triage and discovery skip/cache/recommend/abstain/error counters, per-operation estimated Jev cost/tokens/latency, errors. No savings estimate.",
     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
 }
 

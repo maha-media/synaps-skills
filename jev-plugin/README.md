@@ -11,6 +11,7 @@ output replacement also depends on host runtime handling (see measurement limits
 | **Router** — fill omitted `role`, `write_policy` (→ `read_only` only), `model` (tier map) on `subagent_start` | `before_tool_call` → `modify` | on | open |
 | **Compress** — elide the middle of large routine `bash` outputs at ingestion | `after_tool_call` → `replace` | **off** | open |
 | **Triage** — preserve failures and append advisory diagnostic IDs | `after_tool_call` → `continue` / `replace` | on | open (abstain) |
+| **`jev_evidence`** — supplied descriptor relevance; no fetch or trust certification | tool (no hook) | advice **off** | review |
 | **`jev_verify`** — explicit optional verification priority; preserves caller-required IDs | tool (no hook) | advice **off** | review |
 | **`jev_select`** — batch choices among supplied candidate IDs | tool | on | abstain / tool error |
 | **`jev_decide`** — up to 64 typed questions about one `state` in one ~0.4 s call | tool | on | tool error |
@@ -70,7 +71,7 @@ Get a key at https://typesafe.ai.
 /jev guard off --save     # persist to plugins/jev/config
 /jev router off           # same pattern for router / compress / triage / discovery
 /jev triage off           # skip advisory failure classification; guard stays independent
-/jev off                  # guard + router + compress + triage + discovery + verification; all four tools stay
+/jev off                  # guard + router + compress + triage + discovery + verification + evidence; all five tools stay
 /jev guard                # show now / source / saved
 ```
 
@@ -122,6 +123,7 @@ All keys live under `extension.jev.*` in `~/.synaps-cli/config`, or as
 | `router_read_only_at` | `0.15` | P(needs_write) at/below which `write_policy` → `read_only` |
 | `router_models` | `""` | `small=<id>,medium=<id>`; ids must already be worker-authorised; `frontier` always inherits |
 | `discovery` | `false` | opt-in query/descriptor API calls; `/jev discovery on\|off [--save]`; independent of guard |
+| `evidence` | `false` | descriptor relevance advice; `/jev evidence on\|off [--save]`; independent of guard |
 | `verification` | `false` | optional priority advice; `/jev verification on\|off [--save]`; independent of guard |
 | `triage` | `true` | advisory failure classification; `/jev triage on\|off [--save]`; independent of guard |
 | `compress` | `false` | opt-in; `/jev compress on\|off [--save]` |
@@ -488,8 +490,8 @@ measures recommendation caching, not the new low-confidence regression.
    tokens/latency/cost, and fallback behavior before recommending cheaper tiers.
 
 These are evaluation priorities, not new tools, automatic routing authority, or
-proven savings. The four registered tools are `jev_decide`, `jev_select`,
-`jev_status`, and `jev_verify`.
+proven savings. The five registered tools are `jev_decide`, `jev_select`,
+`jev_status`, `jev_verify`, and `jev_evidence`.
 
 ## Sparse worker routing (0.3.1)
 
@@ -560,10 +562,10 @@ user configuration, or model mappings.
 
 ## Explicit verification priority (0.4.0)
 
-All four tools (`jev_decide`, `jev_select`, `jev_status`, `jev_verify`) are always
+All five tools (`jev_decide`, `jev_select`, `jev_status`, `jev_verify`, `jev_evidence`) are always
 advertised. `/jev verification on|off [--save]` controls optional verification
 advice, **default off**, independently of guard. `/jev off` and `/jev on` toggle
-**all six features**, including discovery and verification (and their opt-in API
+**all seven features**, including discovery, verification and evidence (and their opt-in API
 calls); they do not hide tools. Use the same `/jev key <apikey_…>` setup as above.
 
 Call `jev_verify` with this public synthetic input (optional advice requires
@@ -679,3 +681,52 @@ and session-only toggles with **no configuration writes**. Its one verification
 API call used **690 input tokens**, estimated **$0.00002898**, mean **393 ms**.
 The JSON's cost counter rounds this to `$0.000029`; the precise estimate uses
 690 × $0.042 / 1,000,000. Discovery and verification remain **off by default**.
+
+## Explicit evidence relevance (0.5.0)
+
+`jev_evidence` is the fifth tool. `/jev evidence on|off [--save]` controls its
+optional API advice, **off by default**, independently of guard. `/jev on` and
+`/jev off` include evidence. No key/off returns all optionals for review with
+setup guidance, without key discovery or file access. All-required requests are
+free. There is no cache, session argument, automatic hook, or source access.
+
+```json
+{"task":"Understand parser edge cases","candidates":[
+  {"id":"policy","kind":"document","source":"caller-supplied policy label","summary":"Mandatory parser requirements","required":true},
+  {"id":"parser-test","kind":"file","source":"tests/parser.py","summary":"Parser boundary tests","required":false}
+]}
+```
+
+Input is exactly `task` (nonblank, <=4000 characters and UTF-8 bytes) and
+`candidates` (1–32). Each candidate has exactly `id` (unique, nonblank, <=160),
+`kind` (`file|document|memory|other`), `source` (nonblank, <=300), `summary`
+(nonblank, <=800), and a strict boolean `required`. String limits apply to both
+characters and UTF-8 bytes; invalid Unicode is rejected. IDs/sources prohibit
+ASCII controls; task/summary permit only LF/CR/TAB among C0 controls. No extras.
+Serialized input is <=32 KiB. Before any API, a conservative worst-case local
+response is constructed and measured against **64 KiB**, including JSON escaping;
+unrepresentable inputs are statically rejected, never metadata-truncated.
+
+Output has `advisory:true`, `fetched:false`, `trust_certified:false`, input-order
+`required_ids`, and optional partitions `inspect_first_ids`, `review_ids`,
+`later_ids`. Every optional occurs exactly once. `ordered_ids` concatenates
+required, inspect-first, review, later, preserving input order inside each group.
+`references` preserves every supplied ID, kind, source and required flag exactly,
+with a local priority. Summaries are not echoed. Source labels remain unverified.
+
+Only completely redacted task and optional `{kind,summary}` descriptors reach
+Jev, under opaque question tokens; required descriptors and raw ID/source fields
+are excluded. Redaction never clips constraints. A redacted state exceeding
+40 KiB returns all-review without an API call. One choice per optional uses
+`inspect_first|later|unknown`; only valid finite confidence >=0.8 accepts a
+priority. Malformed siblings review individually; global/transport failures
+review all. Model prose is never returned.
+
+**Relevance is not truth or source authority. Lower priority is not discard
+permission.** Caller-required evidence is not exhaustive; all host/user/project
+mandatory instructions still apply. This is not fetch authorization: honor the
+original tool scope, provenance and freshness. No fetch/read/delete, tool
+activation or automation occurs. Counters are
+`evidence.call/questions/skip/inspect_first/later/review/error`; Stats uses operation
+`evidence`. No evidence payload audit records. **No evidence benchmark yet**;
+o quality, savings or live-evaluation claims are made.
