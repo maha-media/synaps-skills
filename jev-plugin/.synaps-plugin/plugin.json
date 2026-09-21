@@ -1,7 +1,7 @@
 {
   "name": "jev",
-  "version": "0.2.0",
-  "description": "Calibrated Jev decisions: safety guard, routing, opt-in compression, automatic advisory bash failure triage, batched jev_decide and candidate-only jev_select.",
+  "version": "0.3.0",
+  "description": "Calibrated Jev decisions: safety guard, routing, opt-in compression and discovery advice, automatic advisory bash failure triage, batched jev_decide and candidate-only jev_select.",
   "author": {
     "name": "JR Morton",
     "url": "https://github.com/maha-media"
@@ -59,6 +59,14 @@
       },
       {
         "hook": "on_session_start"
+      },
+      {
+        "hook": "after_tool_call",
+        "tool": "search_tools"
+      },
+      {
+        "hook": "after_tool_call",
+        "tool": "search_skills"
       }
     ],
     "config": [
@@ -199,13 +207,19 @@
         "type": "bool",
         "default": true,
         "description": "Automatic advisory-only bash failure triage; independent of guard. Off skips calls. No execution or retry."
+      },
+      {
+        "key": "discovery",
+        "type": "bool",
+        "default": false,
+        "description": "Opt-in discovery advice; sends redacted query/descriptors to Jev (API cost). Independent of guard; never activation/permission."
       }
     ]
   },
   "commands": [
     {
       "name": "jev",
-      "description": "Jev decision layer: `/jev key <apikey_…>` validates+saves+activates a key without restart; `/jev status`; `/jev test`; `/jev guard|router|compress|triage on|off [--save]` flips one feature (session-only unless --save); `/jev off|on [--save]` flips all four.",
+      "description": "Jev decision layer: `/jev key <apikey_…>` validates+saves+activates a key without restart; `/jev status`; `/jev test`; `/jev guard|router|compress|triage|discovery on|off [--save]` flips one feature (session-only unless --save); `/jev off|on [--save]` flips all five (including opt-in discovery).",
       "interactive": true,
       "subcommands": [
         "key",
@@ -215,6 +229,7 @@
         "router",
         "compress",
         "triage",
+        "discovery",
         "on",
         "off"
       ]

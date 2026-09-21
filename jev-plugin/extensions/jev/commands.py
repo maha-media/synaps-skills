@@ -7,7 +7,7 @@
     /jev guard on|off [--save]     flip the tool-call safety gate (session-only unless --save)
     /jev router on|off [--save]    flip subagent routing
     /jev compress on|off [--save]  flip output compression
-    /jev off|on [--save]           all four hooks at once (jev_decide / jev_status / jev_select stay available)
+    /jev off|on [--save]           all five hooks at once (jev_decide / jev_status / jev_select stay available)
 
 Output is streamed as `command.output` notifications (text/system/error/done)
 matched by `request_id`; the RPC response body itself is ignored by the TUI.
@@ -29,8 +29,8 @@ USAGE = (
     "| `/jev test` | one live decision: latency + cost |\n"
     "| `/jev guard off` | stop reviewing tool calls for this session (`--save` persists) |\n"
     "| `/jev guard on` | resume the safety gate |\n"
-    "| `/jev router on\\|off`, `/jev compress on\\|off` | flip the other features the same way; `/jev triage on or off` controls advisory failure triage |\n"
-    "| `/jev off` / `/jev on` | guard+router+compress+triage together; `jev_decide` stays available |\n\n"
+    "| `/jev router on\\|off`, `/jev compress on\\|off` | flip the other features the same way; `/jev triage on or off` controls advisory failure triage; `/jev discovery on or off [--save]` controls opt-in discovery advice |\n"
+    "| `/jev off` / `/jev on` | guard+router+compress+triage+discovery together (including opt-in API calls); `jev_decide` stays available |\n\n"
     "Tip: the Confirm dialog's **Allow all this session** button keeps the guard scoring+auditing "
     "but stops asking; `/jev guard off` skips the ~0.4 s review entirely.\n\n"
     f"Get a key at {keys.GET_KEY_URL}. Keys are stored in `{keys.plugin_config_path()}` (mode 600), "

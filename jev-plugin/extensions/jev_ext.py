@@ -14,7 +14,7 @@ Hooks (all subscribed in .synaps-plugin/plugin.json):
 
 Tools:   jev_select (candidate IDs), jev_decide (typed questions), jev_status (accounting) — always
          advertised; without a key they explain how to set one.
-Command: /jev key|status|test|guard|router|compress|triage|on|off — set a key or flip a
+Command: /jev key|status|test|guard|router|compress|triage|discovery|on|off — set a key or flip a
          feature without restarting (session-only unless --save).
 
 Key setup: the runtime resolves `api_key` once at initialize. If none is
@@ -38,7 +38,7 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from jev import audit as audit_mod  # noqa: E402
-from jev import commands, compress, guard, keys, router, tools, triage  # noqa: E402
+from jev import commands, compress, discovery, guard, keys, router, tools, triage  # noqa: E402
 from jev.client import DecisionClient, JevError  # noqa: E402
 
 PLUGIN_ID = "jev"
@@ -98,7 +98,7 @@ class Extension:
         self.client: DecisionClient | None = None
         self.cfg: dict = {}
         self.key_source = "none"
-        self.features = {"guard": False, "router": False, "compress": False, "triage": False, "tools": True}
+        self.features = {"guard": False, "router": False, "compress": False, "triage": False, "discovery": False, "tools": True}
         # Session-only feature overrides from `/jev guard off` etc. Applied on
         # top of config every time features are (re)computed, so a later
         # `/jev key …` re-activation cannot silently re-arm a disabled guard.
@@ -109,6 +109,7 @@ class Extension:
         self.audit = audit_mod.Audit(None)
         self.goal = ""
         self.triage = triage.Triage()
+        self.discovery = discovery.Discovery()
         self._next_recheck = 0.0
 
     # ── config / activation ─────────────────────────────────────────────
@@ -126,7 +127,7 @@ class Extension:
         self.recompute_features()
         log("active (" + ", ".join(k for k, v in self.features.items() if v) + f") key from {source}")
 
-    FEATURE_DEFAULTS = {"guard": True, "router": True, "compress": False, "triage": True}
+    FEATURE_DEFAULTS = {"guard": True, "router": True, "compress": False, "triage": True, "discovery": False}
 
     def configured_feature(self, name: str) -> bool:
         """The persisted (config) value of a feature, ignoring session overrides."""
@@ -223,6 +224,8 @@ class Extension:
             return {"action": "continue"}
 
         if kind == "after_tool_call":
+            if discovery.recognized(params):
+                return self.discovery.handle(params, self.client, self.features["discovery"], self.audit)
             if triage.recognized(params):
                 return self.triage.handle(params, self.client, self.features["triage"], self.audit)
             if self.features["compress"]:
@@ -240,7 +243,8 @@ class Extension:
                 "Jev offers jev_select for batched candidate-ID choices and jev_decide for typed questions. "
                 "Batch uncertain choices; skip obvious deterministic ones. Choice criteria are ID-to-description "
                 "objects; score criteria are ordered lists. Bash failure triage is advisory, never authority "
-                "to execute, retry, or certify success. Check jev_status for active features and estimated Jev cost."
+                "to execute, retry, or certify success. Optional discovery recommendations are advisory, "
+                "not activation/permission or authority. Check jev_status for active features and estimated Jev cost."
             )}
 
         return {"action": "continue"}
