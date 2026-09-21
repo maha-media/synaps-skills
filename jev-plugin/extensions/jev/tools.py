@@ -20,8 +20,8 @@ DECIDE_SPEC = {
         "one or many typed questions about a `state`, in a single ~0.4 s request. Use it for batched "
         "classification, triage, routing, scoring, and yes/no checks instead of reasoning through them "
         "one at a time. Question types: `noul` (yes/no → probability 0–1), `choice` (pick one of ≤255 "
-        "`criteria` options → choice + probabilities + confidence), `score` (rate on 2–10 ordered "
-        "`criteria` levels → score + probabilities + confidence). Question keys are NOT seen by the model: "
+        "`criteria` object (ID → description), NOT a list → choice + probabilities + confidence), `score` (rate on 2–10 ordered "
+        "`criteria` ordered list, NOT an object → score + probabilities + confidence). Question keys are NOT seen by the model: "
         "put all meaning in `instructions`/`criteria`. Reference fields of `state` in backticks. Include a "
         "'none of these' / 'do nothing' option where sensible and gate on confidence before acting."
     ),
@@ -52,7 +52,7 @@ DECIDE_SPEC = {
 
 STATUS_SPEC = {
     "name": "jev_status",
-    "description": "Report the Jev plugin state: whether an API key is configured (and how to set one), plus this session's calls, tokens, cost, mean latency, guard verdict counts, router fills, compression elisions, errors.",
+    "description": "Report the Jev plugin state: whether an API key is configured (and how to set one), plus this session's calls, tokens, cost, mean latency, guard verdict counts, router fills, compression elisions, triage skip/cache/abstain counters, per-operation estimated Jev cost/tokens/latency, errors. No savings estimate.",
     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
 }
 
@@ -117,6 +117,7 @@ def call_status(client: DecisionClient | None, audit, features: dict, key_source
             "key_store": str(keys.plugin_config_path()),
             "get_a_key": keys.GET_KEY_URL,
             "features": features,
+            "counters": dict(audit.counters),
         }
         return {"content": json.dumps(snap, indent=1)}
     snap = client.stats.snapshot()
@@ -126,3 +127,68 @@ def call_status(client: DecisionClient | None, audit, features: dict, key_source
     snap["counters"] = dict(audit.counters)
     snap["audit_file"] = str(audit.path) if audit.path else None
     return {"content": json.dumps(snap, indent=1)}
+
+SELECT_SPEC = {
+    "name": "jev_select",
+    "description": "Batch uncertain tests/files/tools/routes choices in one request. Returns only supplied candidate IDs or null; advisory, not authorization or evidence tests ran. Skip obvious deterministic choices. No execution or activation.",
+    "input_schema": {
+        "type": "object", "additionalProperties": False,
+        "required": ["context", "decisions"],
+        "properties": {
+            "context": {"type": "string", "minLength": 1, "maxLength": 5000},
+            "decisions": {"type": "array", "minItems": 1, "maxItems": 32, "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["instruction", "candidates"], "properties": {
+                    "instruction": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "candidates": {"type": "array", "minItems": 2, "maxItems": 32, "items": {
+                        "type": "object", "additionalProperties": False, "required": ["id", "description"],
+                        "properties": {"id": {"type": "string", "minLength": 1, "maxLength": 80},
+                                       "description": {"type": "string", "minLength": 1, "maxLength": 300}}}}}}}}}
+}
+ABSTAIN = "__jev_abstain__"
+
+
+def call_select(data, client, audit):
+    from .triage import valid_choice
+
+    def text(v, limit):
+        return isinstance(v, str) and bool(v.strip()) and len(v) <= limit and not any(ord(c) < 32 for c in v if c not in "\n\t")
+
+    if not isinstance(data, dict) or set(data) != {"context", "decisions"} or not text(data.get("context"), 5000):
+        raise ToolError("jev_select: context must be a nonblank string <=5000 chars; context and decisions required")
+    decisions = data["decisions"]
+    if not isinstance(decisions, list) or not 1 <= len(decisions) <= 32:
+        raise ToolError("jev_select: provide 1–32 decisions")
+    questions, allowed = {}, []
+    for i, d in enumerate(decisions):
+        if not isinstance(d, dict) or set(d) != {"instruction", "candidates"} or not text(d.get("instruction"), 500):
+            raise ToolError("jev_select: invalid instruction (1–500 chars)")
+        candidates = d["candidates"]
+        if not isinstance(candidates, list) or not 2 <= len(candidates) <= 32:
+            raise ToolError("jev_select: provide 2–32 candidates per decision")
+        criteria = {}
+        for c in candidates:
+            if (not isinstance(c, dict) or set(c) != {"id", "description"}
+                    or not text(c.get("id"), 80) or not text(c.get("description"), 300)
+                    or c["id"] == ABSTAIN or c["id"] in criteria):
+                raise ToolError("jev_select: invalid, duplicate, or reserved candidate ID/description")
+            criteria[c["id"]] = c["description"]
+        allowed.append(set(criteria))
+        criteria[ABSTAIN] = "Abstain: unclear, insufficient evidence, or none of the supplied candidates"
+        questions[str(i)] = {"type": "choice", "instructions": d["instruction"], "criteria": criteria}
+    if len(json.dumps(data, ensure_ascii=False)) > 50000:
+        raise ToolError("jev_select: batch exceeds 50000 chars")
+    try:
+        response = client.decide(data["context"], questions, op="select")
+        answers = response.get("answers", {})
+        if not isinstance(answers, dict):
+            answers = {}
+        reason = "abstain_or_invalid_or_low_confidence"
+    except Exception:
+        answers, reason = {}, "upstream_error"
+    results = []
+    for i, candidates in enumerate(allowed):
+        selected = valid_choice(answers.get(str(i)), candidates)
+        results.append({"id": selected, "fallback_reason": None if selected else reason})
+    audit.bump("select.batch")
+    return {"content": json.dumps({"advisory": True, "decisions": results}, ensure_ascii=False)}

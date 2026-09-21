@@ -181,3 +181,102 @@ privileges; a tool input can try to talk the classifier into a low score
 (`echo "harmless" && rm -rf /`). The audit log (`JEV_GUARD_LOG` /
 `audit_file`) is there so thresholds can be tuned against real sessions and
 misses can be studied.
+
+## Advisory failure triage and candidate selection (0.2)
+
+**Triage is ON by default when a key is available**, independently of guard.
+`/jev triage off` skips its API calls; `/jev triage on|off --save` persists
+through the existing host feature system. Without a key it is inert.
+Only anchored bash host error envelopes (nonzero exit or timeout, optionally
+`Tool execution failed:`) and a small allowlist of anchored build/test summaries
+qualify. Ordinary prose mentioning failures does not. Recognition is deliberately
+conservative: this is not a general log parser.
+
+Triage preserves the **entire original output** and can append a locally rendered,
+non-authoritative advisory (under 350 characters): a category and diagnostic
+next-step ID. It never executes, retries, authorizes work, or certifies success.
+Unknown, low-confidence, malformed/non-finite answers and upstream errors produce
+exact Continue. Outputs over 5000 characters or bearing truncation markers are
+not sent. Recognized failures never enter compression, even with triage disabled
+or abstaining. The command and user goal are not included; obvious API keys,
+bearer credentials, assignments and private-key blocks are redacted. Redaction
+is best-effort, not a guarantee against every secret format. Triage writes no
+output, command, answer text, or upstream exception text to the audit trail.
+Guard's existing audit behavior is unchanged.
+
+A 128-entry LRU keyed by session ID and output fingerprint caches advice **and
+abstentions**, avoiding repeat costs. Missing session ID disables caching; no
+anonymous cross-session advice. Entries are process-local and do not survive
+restart. Huge/off/truncated skips do not need cache entries because they cost zero.
+
+### `jev_select`: one batch, supplied IDs only
+
+Use for uncertain test targets, files to inspect, diagnostic tools, or routes.
+Skip deterministic choices (e.g. a filename already present in a traceback).
+For example:
+
+```json
+{
+  "context": "Synthetic parser change; whitespace regression reported.",
+  "decisions": [
+    {"instruction": "Which test target is most relevant?", "candidates": [
+      {"id": "parser_unit", "description": "Parser whitespace unit fixtures"},
+      {"id": "http_unit", "description": "HTTP transport unit fixtures"}
+    ]},
+    {"instruction": "Which file should be inspected first?", "candidates": [
+      {"id": "parser.py", "description": "Tokenization and whitespace handling"},
+      {"id": "transport.py", "description": "HTTP transport"}
+    ]}
+  ]
+}
+```
+
+Returns decisions in input order, each `{id, fallback_reason}`: the exact supplied
+ID or null. No model-generated commands or prose. Confidence must be finite and
+at least 0.8; a reserved `__jev_abstain__` choice is always added. IDs must be unique
+within each decision and cannot use that reserved ID. Up to 32 decisions, 2–32
+candidates each; context 5000 chars, instruction 500, ID 80, description 300,
+total JSON 50000 chars. This explicit tool transmits the supplied context and
+candidates: **do not supply secrets**. Selection does not run tests, activate tools,
+or grant model/worker authorization.
+
+`jev_decide` retains its schema: **choice criteria are an object mapping IDs to
+descriptions; score criteria are a list of 2–10 ordered levels**. Batch related
+questions in one round rather than delegating detailed reasoning.
+
+### Measurement and limits
+
+`jev_status` and `/jev status` expose operation-level calls, input tokens,
+estimated Jev input-token cost, total/mean latency and errors, plus triage
+skip/cache/abstain counters. Legacy snapshot fields remain present; calls now
+include failed batches. A retry is part of one batch; unknown billed usage on
+failed requests cannot be counted. Pricing is the existing static estimate,
+not an invoice. No frontier-token savings, cache savings, or net savings are
+inferred. Compare end-to-end task cost/latency and correctness against a matched
+baseline before claiming savings. Stable discovery guidance is injected only
+at session start, independent of guard, not each turn.
+
+Offline regressions (sequential):
+
+```sh
+python3 -B -m unittest discover -s jev-plugin/tests -p 'test*.py' -v
+```
+
+Optional **LIVE** synthetic benchmark (not part of offline verification):
+
+```sh
+python3 -B jev-plugin/scripts/benchmark_synthetic.py --live
+```
+
+It discovers the already configured key without printing it, runs at most eight
+fixed public synthetic cases, and reports correct/abstain counts, input tokens,
+estimated cost and latency. It never sends project files and never sets a key.
+Synthetic correctness is not production calibration; wall time includes network
+variance. Worker-tier optimization remains future work (existing optional router
+mapping is unchanged); compaction integration is deferred. No host/core changes.
+
+Transport deadlines include the existing single rate-limit retry within a maximum
+four-second budget (below the host's five seconds). A scoped POSIX main-thread
+timer bounds blocking DNS/response reads as well as socket operations; unavailable
+or already-owned timers fail without making a request. This process extension's
+supported execution path is the POSIX main-thread stdio loop.

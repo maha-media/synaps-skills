@@ -8,6 +8,9 @@ HANDLER_TIMEOUT is 5 s and is fail-open, so we must answer before it).
 from __future__ import annotations
 
 import json
+import math
+import signal
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -30,6 +33,8 @@ class Stats:
     last_model: str = ""
     by_op: dict[str, int] = field(default_factory=dict)
 
+    op_stats: dict[str, dict] = field(default_factory=dict)
+
     @property
     def cost_usd(self) -> float:
         return self.input_tokens * PRICE_PER_MTOK_INPUT / 1_000_000
@@ -47,6 +52,8 @@ class Stats:
             "mean_ms": self.mean_ms,
             "model": self.last_model,
             "by_op": dict(self.by_op),
+            "op_stats": {k: dict(v) for k, v in self.op_stats.items()},
+            "cost_basis": "estimated Jev input-token cost only; no savings estimate",
         }
 
 
@@ -62,7 +69,7 @@ class DecisionClient:
             raise JevError("api_key is empty")
         self.api_key = api_key
         self.model = model
-        self.timeout_s = timeout_s
+        self.timeout_s = min(4.0, max(0.1, timeout_s)) if math.isfinite(timeout_s) else 3.0
         self.base_url = base_url
         self.stats = Stats()
 
@@ -75,28 +82,63 @@ class DecisionClient:
         budget left; never sleeps past the hook deadline.
         """
         body = json.dumps({"state": state, "model": self.model, "questions": questions}).encode("utf-8")
-        deadline = time.monotonic() + self.timeout_s + 1.2  # one bounded retry window
-        attempt = 0
         t0 = time.monotonic()
-        while True:
-            attempt += 1
-            try:
-                resp = self._post(body)
-                self._record(op, resp, t0)
-                return resp
-            except _Retryable as e:
+        deadline = t0 + self.timeout_s
+        attempt = 0
+        resp = {}
+        failed = False
+        try:
+            while True:
+                attempt += 1
                 remaining = deadline - time.monotonic()
-                if attempt >= 2 or remaining < 0.6:
-                    self.stats.errors += 1
-                    raise JevError(str(e)) from e
-                time.sleep(min(e.retry_after, max(0.0, remaining - 0.5), 1.0))
-            except JevError:
-                self.stats.errors += 1
-                raise
+                if remaining <= 0:
+                    raise JevError("deadline exceeded")
+                try:
+                    resp = self._bounded_post(body, remaining)
+                    if time.monotonic() > deadline:
+                        raise JevError("deadline exceeded")
+                    if not isinstance(resp, dict):
+                        raise JevError("invalid response")
+                    return resp
+                except _Retryable as e:
+                    remaining = deadline - time.monotonic()
+                    delay = e.retry_after if math.isfinite(e.retry_after) else 0.3
+                    delay = min(max(0.0, delay), 1.0)
+                    if attempt >= 2 or remaining < delay + 0.1:
+                        raise JevError("retry budget exhausted") from e
+                    time.sleep(delay)
+        except JevError:
+            failed = True
+            self.stats.errors += 1
+            raise
+        finally:
+            self._record(op, resp if isinstance(resp, dict) else {}, t0, failed)
 
     # ── internals ───────────────────────────────────────────────────────────
 
-    def _post(self, body: bytes) -> dict:
+    def _bounded_post(self, body: bytes, remaining: float) -> dict:
+        # urllib's timeout is per socket operation, not wall time (DNS and
+        # trickling bodies can exceed it). The stdio host dispatches on the
+        # main thread: use a scoped POSIX timer for that full transport span.
+        if not hasattr(signal, "setitimer") or threading.current_thread() is not threading.main_thread():
+            raise JevError("hard transport deadline unavailable")
+        previous_handler = signal.getsignal(signal.SIGALRM)
+        previous_timer = signal.getitimer(signal.ITIMER_REAL)
+        if previous_timer != (0.0, 0.0):
+            raise JevError("transport deadline timer already in use")
+
+        def expired(signum, frame):
+            raise JevError("deadline exceeded")
+
+        signal.signal(signal.SIGALRM, expired)
+        try:
+            signal.setitimer(signal.ITIMER_REAL, remaining)
+            return self._post(body, timeout_s=remaining)
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous_handler)
+
+    def _post(self, body: bytes, *, timeout_s: float) -> dict:
         req = urllib.request.Request(
             self.base_url,
             data=body,
@@ -108,7 +150,7 @@ class DecisionClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout_s) as r:
+            with urllib.request.urlopen(req, timeout=timeout_s) as r:
                 return json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             detail = ""
@@ -131,13 +173,23 @@ class DecisionClient:
         except json.JSONDecodeError as e:
             raise JevError(f"bad json: {e}") from e
 
-    def _record(self, op: str, resp: dict, t0: float) -> None:
+    def _record(self, op: str, resp: dict, t0: float, failed: bool = False) -> None:
         s = self.stats
         s.calls += 1
         s.total_ms += int((time.monotonic() - t0) * 1000)
-        s.input_tokens += int((resp.get("usage") or {}).get("input_tokens") or 0)
+        usage = resp.get("usage")
+        tokens = usage.get("input_tokens", 0) if isinstance(usage, dict) else 0
+        tokens = tokens if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens >= 0 else 0
+        s.input_tokens += tokens
         s.last_model = str(resp.get("model") or s.last_model)
         s.by_op[op] = s.by_op.get(op, 0) + 1
+        o = s.op_stats.setdefault(op, {"calls": 0, "errors": 0, "input_tokens": 0, "total_ms": 0, "mean_ms": 0, "cost_usd": 0.0})
+        o["calls"] += 1
+        o["errors"] += int(failed)
+        o["input_tokens"] += tokens
+        o["total_ms"] += int((time.monotonic() - t0) * 1000)
+        o["mean_ms"] = o["total_ms"] // o["calls"]
+        o["cost_usd"] = o["input_tokens"] * PRICE_PER_MTOK_INPUT / 1_000_000
 
 
 class _Retryable(Exception):

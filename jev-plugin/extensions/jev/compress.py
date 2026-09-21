@@ -87,6 +87,9 @@ def should_compress(answers: dict, cfg: CompressConfig) -> bool:
 
 
 def handle(params: dict, goal: str, client: DecisionClient, cfg: CompressConfig, audit, log) -> dict:
+    from .triage import recognized
+    if recognized(params):
+        return {"action": "continue"}
     tool = params.get("tool_runtime_name") or params.get("tool_name") or ""
     output = params.get("tool_output")
     if tool not in cfg.tools or not isinstance(output, str) or len(output) < cfg.min_bytes:

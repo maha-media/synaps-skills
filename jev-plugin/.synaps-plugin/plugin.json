@@ -1,7 +1,7 @@
 {
   "name": "jev",
-  "version": "0.1.0",
-  "description": "Calibrated decision layer for the agent harness via TypeSafe Jev (System One): tool-call safety gate, subagent auto-routing, opt-in tool-output relevance compression, and a batched jev_decide tool.",
+  "version": "0.2.0",
+  "description": "Calibrated Jev decisions: safety guard, routing, opt-in compression, automatic advisory bash failure triage, batched jev_decide and candidate-only jev_select.",
   "author": {
     "name": "JR Morton",
     "url": "https://github.com/maha-media"
@@ -193,13 +193,19 @@
         "type": "number",
         "description": "Bytes kept from the end of an elided output.",
         "default": 1000
+      },
+      {
+        "key": "triage",
+        "type": "bool",
+        "default": true,
+        "description": "Automatic advisory-only bash failure triage; independent of guard. Off skips calls. No execution or retry."
       }
     ]
   },
   "commands": [
     {
       "name": "jev",
-      "description": "Jev decision layer: `/jev key <apikey_…>` validates+saves+activates a key without restart; `/jev status`; `/jev test`; `/jev guard|router|compress on|off [--save]` flips one feature (session-only unless --save); `/jev off|on [--save]` flips all three.",
+      "description": "Jev decision layer: `/jev key <apikey_…>` validates+saves+activates a key without restart; `/jev status`; `/jev test`; `/jev guard|router|compress|triage on|off [--save]` flips one feature (session-only unless --save); `/jev off|on [--save]` flips all four.",
       "interactive": true,
       "subcommands": [
         "key",
@@ -208,6 +214,7 @@
         "guard",
         "router",
         "compress",
+        "triage",
         "on",
         "off"
       ]

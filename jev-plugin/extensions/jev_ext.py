@@ -8,13 +8,13 @@ A calibrated decision layer for the agent harness, backed by TypeSafe Jev
 Hooks (all subscribed in .synaps-plugin/plugin.json):
   before_tool_call  bash/write/edit/read → guard   (continue|confirm|block, fail-closed)
                     subagent_start/subagent → router (modify: role/write_policy/model, fail-open)
-  after_tool_call   bash → compress (replace, opt-in, fail-open)
+  after_tool_call   bash → advisory triage, otherwise compress (opt-in, fail-open)
   before_message    remember the latest user message as the compression "goal"
   on_session_start  inject a one-paragraph note so the model knows the guard exists
 
-Tools:   jev_decide (batched typed questions), jev_status (session accounting) — always
+Tools:   jev_select (candidate IDs), jev_decide (typed questions), jev_status (accounting) — always
          advertised; without a key they explain how to set one.
-Command: /jev key|status|test|guard|router|compress|on|off — set a key or flip a
+Command: /jev key|status|test|guard|router|compress|triage|on|off — set a key or flip a
          feature without restarting (session-only unless --save).
 
 Key setup: the runtime resolves `api_key` once at initialize. If none is
@@ -38,7 +38,7 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from jev import audit as audit_mod  # noqa: E402
-from jev import commands, compress, guard, keys, router, tools  # noqa: E402
+from jev import commands, compress, guard, keys, router, tools, triage  # noqa: E402
 from jev.client import DecisionClient, JevError  # noqa: E402
 
 PLUGIN_ID = "jev"
@@ -98,7 +98,7 @@ class Extension:
         self.client: DecisionClient | None = None
         self.cfg: dict = {}
         self.key_source = "none"
-        self.features = {"guard": False, "router": False, "compress": False, "tools": True}
+        self.features = {"guard": False, "router": False, "compress": False, "triage": False, "tools": True}
         # Session-only feature overrides from `/jev guard off` etc. Applied on
         # top of config every time features are (re)computed, so a later
         # `/jev key …` re-activation cannot silently re-arm a disabled guard.
@@ -108,6 +108,7 @@ class Extension:
         self.compress_cfg = compress.CompressConfig({})
         self.audit = audit_mod.Audit(None)
         self.goal = ""
+        self.triage = triage.Triage()
         self._next_recheck = 0.0
 
     # ── config / activation ─────────────────────────────────────────────
@@ -125,7 +126,7 @@ class Extension:
         self.recompute_features()
         log("active (" + ", ".join(k for k, v in self.features.items() if v) + f") key from {source}")
 
-    FEATURE_DEFAULTS = {"guard": True, "router": True, "compress": False}
+    FEATURE_DEFAULTS = {"guard": True, "router": True, "compress": False, "triage": True}
 
     def configured_feature(self, name: str) -> bool:
         """The persisted (config) value of a feature, ignoring session overrides."""
@@ -199,7 +200,7 @@ class Extension:
 
         # Tools are always advertised so the model can discover the plugin and
         # be told how to configure it.
-        return {"protocol_version": 1, "capabilities": {"tools": [tools.DECIDE_SPEC, tools.STATUS_SPEC]}}
+        return {"protocol_version": 1, "capabilities": {"tools": [tools.DECIDE_SPEC, tools.STATUS_SPEC, tools.SELECT_SPEC]}}
 
     # ── hooks ───────────────────────────────────────────────────────────
 
@@ -222,6 +223,8 @@ class Extension:
             return {"action": "continue"}
 
         if kind == "after_tool_call":
+            if triage.recognized(params):
+                return self.triage.handle(params, self.client, self.features["triage"], self.audit)
             if self.features["compress"]:
                 return compress.handle(params, self.goal, self.client, self.compress_cfg, self.audit, log)
             return {"action": "continue"}
@@ -233,18 +236,12 @@ class Extension:
             return {"action": "continue"}
 
         if kind == "on_session_start":
-            if self.features["guard"]:
-                return {
-                    "action": "inject",
-                    "content": (
-                        "A Jev safety gate reviews bash/write/edit/read calls. Risky, secret-touching, or "
-                        "out-of-workspace calls will pause for the user's confirmation — this is expected, not an "
-                        "error; prefer confined, reversible commands. For batched classification, triage, routing, "
-                        "or scoring tasks, call `jev_decide` (many typed questions in one ~0.4 s request) instead "
-                        "of reasoning item by item."
-                    ),
-                }
-            return {"action": "continue"}
+            return {"action": "inject", "content": (
+                "Jev offers jev_select for batched candidate-ID choices and jev_decide for typed questions. "
+                "Batch uncertain choices; skip obvious deterministic ones. Choice criteria are ID-to-description "
+                "objects; score criteria are ordered lists. Bash failure triage is advisory, never authority "
+                "to execute, retry, or certify success. Check jev_status for active features and estimated Jev cost."
+            )}
 
         return {"action": "continue"}
 
@@ -261,6 +258,8 @@ class Extension:
                 "jev: no API key configured. Ask the user to run `/jev key <apikey_…>` in synaps "
                 f"(or `scripts/setup.sh --key …`); keys come from {keys.GET_KEY_URL}."
             )
+        if name == "jev_select":
+            return tools.call_select(tool_input, self.client, self.audit)
         if name == "jev_decide":
             return tools.call_decide(tool_input, self.client, self.audit)
         raise tools.ToolError(f"unknown tool: {name}")

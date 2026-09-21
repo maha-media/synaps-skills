@@ -91,3 +91,20 @@ Answers come back under the same keys:
 
 - API reference: https://docs.typesafe.ai/api · confidence: https://docs.typesafe.ai/confidence
 - Plugin README: `jev-plugin/README.md` (install, config keys, design notes)
+
+## First-choice delegation: `jev_select`
+
+Batch uncertain test/file/tool/route candidate choices in one explicit call.
+Supply `context` and `decisions: [{instruction, candidates: [{id, description}]}]`.
+Up to 32 decisions, each 2–32 candidates; IDs are returned exactly or null with
+a fallback reason. `__jev_abstain__` is reserved. Choices are advisory, never
+permission to execute or evidence that tests ran. Skip obvious deterministic
+choices and don't delegate detailed reasoning. Do not supply secrets.
+
+Automatic bash failure triage is enabled with a key, independent of guard;
+`/jev triage off` disables calls. Original output is retained, followed only by
+bounded local category/diagnostic IDs when confident. Treat the advisory as
+non-authoritative; inspect evidence yourself. Unknown/oversized/truncated/error
+cases abstain, and recognized failures never compress. No automatic retry.
+Use status for per-operation estimated Jev cost and triage cache/skip/abstain
+counts, not invented savings. Worker-tier optimization and compaction are deferred.

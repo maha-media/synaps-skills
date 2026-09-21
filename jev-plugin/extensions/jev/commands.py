@@ -29,8 +29,8 @@ USAGE = (
     "| `/jev test` | one live decision: latency + cost |\n"
     "| `/jev guard off` | stop reviewing tool calls for this session (`--save` persists) |\n"
     "| `/jev guard on` | resume the safety gate |\n"
-    "| `/jev router on\\|off`, `/jev compress on\\|off` | flip the other features the same way |\n"
-    "| `/jev off` / `/jev on` | guard+router+compress together; `jev_decide` stays available |\n\n"
+    "| `/jev router on\\|off`, `/jev compress on\\|off` | flip the other features the same way; `/jev triage on or off` controls advisory failure triage |\n"
+    "| `/jev off` / `/jev on` | guard+router+compress+triage together; `jev_decide` stays available |\n\n"
     "Tip: the Confirm dialog's **Allow all this session** button keeps the guard scoring+auditing "
     "but stops asking; `/jev guard off` skips the ~0.4 s review entirely.\n\n"
     f"Get a key at {keys.GET_KEY_URL}. Keys are stored in `{keys.plugin_config_path()}` (mode 600), "
@@ -220,6 +220,7 @@ def _cmd_status(ext, out: Emitter) -> None:
             ["calls / errors", f"{s['calls']} / {s['errors']}"],
             ["tokens / cost", f"{s['input_tokens']} / ${s['cost_usd']:.6f}"],
             ["mean latency", f"{s['mean_ms']} ms"],
+            ["per-op (estimated Jev cost only)", str(s["op_stats"])],
             ["verdicts", ", ".join(f"{k}={v}" for k, v in sorted(ext.audit.counters.items())) or "—"],
         ]
     out.table(["jev", ""], rows)
