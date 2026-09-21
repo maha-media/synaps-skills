@@ -39,10 +39,12 @@ Jev reviews worker tool calls. Worker reviews require host hook wiring.
 [Workflow comparison protocol and harness](docs/workflow-comparison.md) replays
 public toy tasks through an **external adapter protocol**. The default is a
 no-execution offline plan; synthetic adapter fixtures exercise the protocol.
-There is **no built-in Synaps runner**. This is not an actual Synaps integration,
-an LLM benchmark, or evidence of real savings. Real adapters and end-to-end
-measurements require separate evaluation; the six tools are not all fully
-benchmarked by this protocol.
+The opt-in `scripts/workflow_synaps.py` adapter drives bounded Synaps RPC v1
+with a fresh isolated plugin copy and same-instance local accounting. It is not a
+sandbox, a strict spend budget, or evidence of real savings. No paid full-workflow
+experiment has been run; these toy tasks do not exercise routing, and the six
+tools are not all fully benchmarked. Main billed cost and HTTP attempts remain
+unknown, so dollar comparisons are explicitly unavailable.
 
 ## Install
 
@@ -1159,3 +1161,14 @@ is a callable public synthetic fixture for future held-out testing, **not a
 benchmark or efficacy evidence**.
 
 Frozen split tooling: [evaluation protocol](scripts/evaluation/README.md).
+
+### Development-only live decision evidence
+
+The foreground's [sanitized development report](scripts/evaluation/dev-live-v1.json)
+records 12 fixed `jev-1.13.0` calls, 8,734 input tokens, estimated input cost
+$0.000366828, and zero errors. Accepted weak-label priorities: evidence 3 true / 0
+false; verification 3 / 0; reports 1 / 0 with 1 miss; diagnosis 0 / 0 with 4 misses
+and 11/12 abstentions. This is tiny public development evidence, not heldout
+calibration, source authority, production quality, or savings evidence. No
+thresholds, prompts, datasets, or heldout artifacts were changed, and this was
+not a paid full-workflow comparison.

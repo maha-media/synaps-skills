@@ -1,0 +1,323 @@
+{
+  "version": 1,
+  "split": "dev",
+  "mode": "live",
+  "model": "jev-1.13.0",
+  "thresholds": {
+    "evidence": 0.8,
+    "verification": 0.8,
+    "reports": 0.8,
+    "diagnosis_hypothesis": 0.85,
+    "diagnosis_check": 0.8
+  },
+  "warnings": [
+    "Public synthetic weak labels; heldout relative to prior fixtures, not provider-unseen proof.",
+    "No truth, source authority, safety, exhaustive coverage, or savings certification.",
+    "Confidence is not probability of correctness; small-sample agreement is not calibration.",
+    "Repeated heldout review retires this version for future tuning; freeze a new version after changes.",
+    "Router unsupported: route selection needs a separate frozen protocol."
+  ],
+  "complete": true,
+  "measurement": {
+    "evidence": {
+      "accepted_priorities": {
+        "tp": 3,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "precision_wilson95": [
+          0.4385029682449546,
+          1
+        ],
+        "recall_wilson95": [
+          0.4385029682449546,
+          1
+        ],
+        "unknown_labels": 3,
+        "abstentions": 4,
+        "coverage": 0.5555555555555556,
+        "fp_cost_weight": 1,
+        "weighted_fp_cost": 0
+      },
+      "confidence_bins_decision_agreement": [
+        {
+          "lower": 0,
+          "upper": 0.5,
+          "count": 0,
+          "agreement": null
+        },
+        {
+          "lower": 0.5,
+          "upper": 0.8,
+          "count": 3,
+          "agreement": 1.0
+        },
+        {
+          "lower": 0.8,
+          "upper": 1,
+          "count": 6,
+          "agreement": 1.0
+        }
+      ],
+      "raw_class_agreement": 1.0,
+      "raw_valid_count": 9,
+      "raw_unknown_count": 3,
+      "brier": null,
+      "brier_reason": "Not computed; confidence is not an answer-class probability.",
+      "errors": 0,
+      "executed_cases": 3,
+      "input_tokens": 2165,
+      "cost_usd": 9.093000000000001e-05
+    },
+    "verification": {
+      "accepted_priorities": {
+        "tp": 3,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "precision_wilson95": [
+          0.4385029682449546,
+          1
+        ],
+        "recall_wilson95": [
+          0.4385029682449546,
+          1
+        ],
+        "unknown_labels": 3,
+        "abstentions": 6,
+        "coverage": 0.3333333333333333,
+        "fp_cost_weight": 1,
+        "weighted_fp_cost": 0
+      },
+      "confidence_bins_decision_agreement": [
+        {
+          "lower": 0,
+          "upper": 0.5,
+          "count": 0,
+          "agreement": null
+        },
+        {
+          "lower": 0.5,
+          "upper": 0.8,
+          "count": 3,
+          "agreement": 1.0
+        },
+        {
+          "lower": 0.8,
+          "upper": 1,
+          "count": 6,
+          "agreement": 1.0
+        }
+      ],
+      "raw_class_agreement": 1.0,
+      "raw_valid_count": 9,
+      "raw_unknown_count": 3,
+      "brier": null,
+      "brier_reason": "Not computed; confidence is not an answer-class probability.",
+      "errors": 0,
+      "executed_cases": 3,
+      "input_tokens": 2147,
+      "cost_usd": 9.017400000000001e-05
+    },
+    "reports": {
+      "accepted_priorities": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 1,
+        "precision": 1.0,
+        "recall": 0.5,
+        "precision_wilson95": [
+          0.20654931437723745,
+          1
+        ],
+        "recall_wilson95": [
+          0.09453120573423074,
+          0.9054687942657693
+        ],
+        "unknown_labels": 4,
+        "abstentions": 7,
+        "coverage": 0.4166666666666667,
+        "fp_cost_weight": 1,
+        "weighted_fp_cost": 0
+      },
+      "confidence_bins_decision_agreement": [
+        {
+          "lower": 0,
+          "upper": 0.5,
+          "count": 1,
+          "agreement": 0.0
+        },
+        {
+          "lower": 0.5,
+          "upper": 0.8,
+          "count": 2,
+          "agreement": 0.5
+        },
+        {
+          "lower": 0.8,
+          "upper": 1,
+          "count": 3,
+          "agreement": 1.0
+        }
+      ],
+      "raw_class_agreement": 0.6666666666666666,
+      "raw_valid_count": 6,
+      "raw_unknown_count": 0,
+      "brier": null,
+      "brier_reason": "Not computed; confidence is not an answer-class probability.",
+      "errors": 0,
+      "executed_cases": 3,
+      "input_tokens": 1632,
+      "cost_usd": 6.8544e-05
+    },
+    "diagnosis": {
+      "accepted_priorities": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 4,
+        "precision": null,
+        "recall": 0.0,
+        "precision_wilson95": null,
+        "recall_wilson95": [
+          0,
+          0.4898908364545973
+        ],
+        "unknown_labels": 7,
+        "abstentions": 11,
+        "coverage": 0.08333333333333333,
+        "fp_cost_weight": 1,
+        "weighted_fp_cost": 0
+      },
+      "confidence_bins_decision_agreement": [
+        {
+          "lower": 0,
+          "upper": 0.5,
+          "count": 0,
+          "agreement": null
+        },
+        {
+          "lower": 0.5,
+          "upper": 0.8,
+          "count": 11,
+          "agreement": 0.9090909090909091
+        },
+        {
+          "lower": 0.8,
+          "upper": 1,
+          "count": 1,
+          "agreement": 1.0
+        }
+      ],
+      "raw_class_agreement": 0.9166666666666666,
+      "raw_valid_count": 12,
+      "raw_unknown_count": 7,
+      "brier": null,
+      "brier_reason": "Not computed; confidence is not an answer-class probability.",
+      "errors": 0,
+      "executed_cases": 3,
+      "input_tokens": 2790,
+      "cost_usd": 0.00011718000000000001
+    }
+  },
+  "cases": [
+    {
+      "id": "dev-evidence-1",
+      "tasksha": "5414ccc6db36aa8407f17cf21bf1d381586f352634d3ddfc7150a52453c287b5",
+      "error": false,
+      "input_tokens": 716,
+      "cost_usd": 3.0072000000000003e-05,
+      "actual_model": "jev-1.13.0"
+    },
+    {
+      "id": "dev-verification-1",
+      "tasksha": "f9ec324b408e92ce2dcd3e7ad53c8daf8f0f0f6f8ed2b573a5db3aa3c3e6ae12",
+      "error": false,
+      "input_tokens": 710,
+      "cost_usd": 2.982e-05,
+      "actual_model": "jev-1.13.0"
+    },
+    {
+      "id": "dev-reports-1",
+      "tasksha": "4751c0e932802d6c4c71879c2c571d0a3c80add2d2b5962785f98f29a828c567",
+      "error": false,
+      "input_tokens": 540,
+      "cost_usd": 2.268e-05,
+      "actual_model": "jev-1.13.0"
+    },
+    {
+      "id": "dev-diagnosis-1",
+      "tasksha": "5645ae4aac8b24d474dbb38c9191bc3d6a7ff499fa2a0a8459f3f7fc65979c71",
+      "error": false,
+      "input_tokens": 923,
+      "cost_usd": 3.876600000000001e-05,
+      "actual_model": "jev-1.13.0"
+    },
+    {
+      "id": "dev-evidence-2",
+      "tasksha": "bec43cb3096db18c16aa23849c3c737b9836c24e1affd3c74e1cc0097ef0a5bb",
+      "error": false,
+      "input_tokens": 720,
+      "cost_usd": 3.0240000000000002e-05,
+      "actual_model": "jev-1.13.0"
+    },
+    {
+      "id": "dev-verification-2",
+      "tasksha": "42af5c5f9284621e52487dfec2e997059249170480ec17804c7c785349be23dc",
+      "error": false,
+      "input_tokens": 714,
+      "cost_usd": 2.9988e-05,
+      "actual_model": "jev-1.13.0"
+    },
+    {
+      "id": "dev-reports-2",
+      "tasksha": "cc9b00be86ca27187c4c2094260c945888123e7ecf7eb35506f61866ba3a5bec",
+      "error": false,
+      "input_tokens": 548,
+      "cost_usd": 2.3016e-05,
+      "actual_model": "jev-1.13.0"
+    },
+    {
+      "id": "dev-diagnosis-2",
+      "tasksha": "4a718a1b801a3e0190fddea0b36879f3b39b204618537a738f11bafec15f5390",
+      "error": false,
+      "input_tokens": 929,
+      "cost_usd": 3.9018e-05,
+      "actual_model": "jev-1.13.0"
+    },
+    {
+      "id": "dev-evidence-3",
+      "tasksha": "7aa682fcde92038f7f9891df30c9950e3a47006a4945098eea136d4fc144ef43",
+      "error": false,
+      "input_tokens": 729,
+      "cost_usd": 3.0618000000000004e-05,
+      "actual_model": "jev-1.13.0"
+    },
+    {
+      "id": "dev-verification-3",
+      "tasksha": "5268137c2389dbe4fade53ba97aaaf9c3cbe9ef996cb90a932fd231c0e509f99",
+      "error": false,
+      "input_tokens": 723,
+      "cost_usd": 3.0366000000000004e-05,
+      "actual_model": "jev-1.13.0"
+    },
+    {
+      "id": "dev-reports-3",
+      "tasksha": "343af4ddfd15a936a45a1f9b618a450de8b06aaebd48e44a84afbcc671b1621e",
+      "error": false,
+      "input_tokens": 544,
+      "cost_usd": 2.2848000000000002e-05,
+      "actual_model": "jev-1.13.0"
+    },
+    {
+      "id": "dev-diagnosis-3",
+      "tasksha": "c90a9c9842c895c7ba982fe04cc9a5ab0a1738ad5541fbfab791666f35ef6207",
+      "error": false,
+      "input_tokens": 938,
+      "cost_usd": 3.9396e-05,
+      "actual_model": "jev-1.13.0"
+    }
+  ],
+  "unexecuted_ids": []
+}
