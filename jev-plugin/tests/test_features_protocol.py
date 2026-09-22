@@ -43,6 +43,8 @@ def offline_post(self, body, *, timeout_s):
         "verification": {"choice": "gap", "confidence": .9},
         "concern": {"choice": "none_reported", "confidence": .9},
         "category": {"choice": "syntax", "confidence": 1},
+        "boundary": {"type": "choice", "choice": "completed", "confidence": .9,
+                     "probabilities": {"completed": .9, "paused": .04, "partial": .04, "unclear": .02}},
         "recommendation": {"choice": "option_0", "confidence": .9},
         "0": {"choice": "source", "confidence": 1},
         "q0": {"type": "choice", "choice": "prioritize", "confidence": .9,
@@ -208,6 +210,40 @@ class FeatureProtocolTests(unittest.TestCase):
         restarted = self.host(config=h.persisted)
         self.assertTrue(restarted.status()['features']['reports'])
 
+    def test_context_boundary_protocol_pressure_only_and_off_yields_zero_calls(self):
+        h = self.host()
+        self.command(h, 'guard', 'off')
+        self.assertTrue(h.status()['features']['context'])
+        def turn_end(band='pressure', has_tool_use=False, message='Done. Tests pass. What next?', cm=True):
+            data = {'content_block_count': 1, 'has_tool_use': has_tool_use}
+            if cm:
+                data['context_management'] = {'enabled': True, 'band': band, 'phase': 'execute'}
+            return h.hook('on_message_complete', message=message, session_id=None, data=data)
+        h.hook('before_message', message='Finish the feature')
+        self.assertEqual(turn_end(), {'action': 'context_phase', 'phase': 'new_task'})
+        status = h.status()
+        self.assertEqual(status['by_op'], {'context': 1})
+        self.assertEqual(status['counters']['context.report'], 1)
+        self.assertEqual(status['counters']['context.questions'], 1)
+        self.assertEqual(status['explanations'][-1]['reason'], 'accepted')
+        for kwargs in [dict(band='normal'), dict(band='rollover'), dict(band='hard_limit'),
+                       dict(has_tool_use=True), dict(message='   '), dict(cm=False)]:
+            with self.subTest(**kwargs):
+                self.assertEqual(turn_end(**kwargs), {'action': 'continue'})
+        self.assertEqual(h.status()['by_op'], {'context': 1})
+        self.command(h, 'context', 'off')
+        self.assertFalse(h.status()['features']['context'])
+        self.assertEqual(turn_end(), {'action': 'continue'})
+        self.assertEqual(h.status()['by_op'], {'context': 1})
+        self.assertEqual(h.status()['explanations'][-1], {'sequence': h.status()['explanations'][-1]['sequence'],
+                                                          'op': 'context', 'reason': 'disabled'})
+        self.assertEqual(h.config_sets, [])
+        self.command(h, 'context', 'off', '--save')
+        self.assertIn(('context', 'false'), h.config_sets)
+        restarted = self.host(config=h.persisted)
+        self.assertFalse(restarted.status()['features']['context'])
+        self.assertIn('context', json.dumps(self.command(restarted, 'help')))
+
     def test_guard_off_skips_all_reviews_with_zero_calls(self):
         h = self.host()
         events = self.command(h, 'guard', 'off')
@@ -264,7 +300,7 @@ class FeatureProtocolTests(unittest.TestCase):
         h = self.host(config={'compress': True})
         self.command(h, 'guard', 'off')
         self.assertEqual(h.status()['features'],
-                         {'guard': False, 'router': True, 'compress': True, 'triage': True, 'discovery': False, 'verification': False, 'evidence': False, 'diagnosis': False, 'reports': False, 'tools': True})
+                         {'guard': False, 'router': True, 'compress': True, 'triage': True, 'discovery': False, 'verification': False, 'evidence': False, 'diagnosis': False, 'reports': False, 'context': True, 'tools': True})
         result = h.hook('before_tool_call', tool_runtime_name='subagent_start',
                         tool_input={'task': 'Review the fixture'})
         self.assertEqual(result['action'], 'modify')
@@ -528,10 +564,10 @@ class FeatureProtocolTests(unittest.TestCase):
             events = self.command(h, command)
             self.assertIn('this session only', json.dumps(events))
             self.assertEqual(h.status()['features'], {'guard': enabled, 'router': enabled,
-                                                      'compress': enabled, 'triage': enabled, 'discovery': enabled, 'verification': enabled, 'evidence': enabled, 'diagnosis': enabled, 'reports': enabled, 'tools': True})
+                                                      'compress': enabled, 'triage': enabled, 'discovery': enabled, 'verification': enabled, 'evidence': enabled, 'diagnosis': enabled, 'reports': enabled, 'context': enabled, 'tools': True})
             self.assertTrue(any(e['kind'] == 'table' for e in self.command(h, 'status')))
         self.command(h, 'off', '--save')
-        self.assertEqual(h.config_sets, [('guard', 'false'), ('router', 'false'), ('compress', 'false'), ('triage', 'false'), ('discovery', 'false'), ('verification', 'false'), ('evidence', 'false'), ('diagnosis', 'false'), ('reports', 'false')])
+        self.assertEqual(h.config_sets, [('guard', 'false'), ('router', 'false'), ('compress', 'false'), ('triage', 'false'), ('discovery', 'false'), ('verification', 'false'), ('evidence', 'false'), ('diagnosis', 'false'), ('reports', 'false'), ('context', 'false')])
         self.assertNotIn('(session)', json.dumps(self.command(h, 'status')))
 
 

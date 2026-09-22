@@ -12,10 +12,11 @@ Hooks (all subscribed in .synaps-plugin/plugin.json):
                     subagent_collect → worker-report annotation (opt-in, advisory only; no host authority)
   before_message    remember the latest user message as the compression "goal"
   on_session_start  inject a one-paragraph note so the model knows the guard exists
+  on_message_complete  under host context pressure at turn end → advisory context_phase report (fail-open)
 
 Tools:   jev_diagnose (supplied hypotheses/checks), jev_evidence (descriptor relevance), jev_verify (verification priority), jev_select (candidate IDs), jev_decide (typed questions), jev_status (accounting) — always
          advertised; without a key they explain how to set one.
-Command: /jev economy|key|status|test|guard|router|compress|triage|discovery|verification|evidence|diagnosis|reports|on|off — set a key or flip a
+Command: /jev economy|key|status|test|guard|router|compress|triage|discovery|verification|evidence|diagnosis|reports|context|on|off — set a key or flip a
          feature without restarting (session-only unless --save).
 
 Key setup: the runtime resolves `api_key` once at initialize. If none is
@@ -39,7 +40,7 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from jev import audit as audit_mod  # noqa: E402
-from jev import commands, compress, discovery, diagnose, evidence, guard, keys, reports, router, tools, triage, verify  # noqa: E402
+from jev import commands, compress, context, discovery, diagnose, evidence, guard, keys, reports, router, tools, triage, verify  # noqa: E402
 from jev.policy import BudgetPolicy
 from jev.client import DecisionClient, JevError, Stats  # noqa: E402
 
@@ -102,7 +103,7 @@ class Extension:
         self.cfg: dict = {}
         self.policy = BudgetPolicy()
         self.key_source = "none"
-        self.features = {"guard": False, "router": False, "compress": False, "triage": False, "discovery": False, "verification": False, "evidence": False, "diagnosis": False, "reports": False, "tools": True}
+        self.features = {"guard": False, "router": False, "compress": False, "triage": False, "discovery": False, "verification": False, "evidence": False, "diagnosis": False, "reports": False, "context": False, "tools": True}
         # Session-only feature overrides from `/jev guard off` etc. Applied on
         # top of config every time features are (re)computed, so a later
         # `/jev key …` re-activation cannot silently re-arm a disabled guard.
@@ -116,6 +117,7 @@ class Extension:
         self.triage = triage.Triage()
         self.reports = reports.Reports()
         self.discovery = discovery.Discovery()
+        self.context = context.ContextBoundary()
         self._next_recheck = 0.0
 
     # ── config / activation ─────────────────────────────────────────────
@@ -151,7 +153,7 @@ class Extension:
         self.recompute_features()
         log("active (" + ", ".join(k for k, v in self.features.items() if v) + f") key from {source}")
 
-    FEATURE_DEFAULTS = {"guard": True, "router": True, "compress": False, "triage": True, "discovery": False, "verification": False, "evidence": False, "diagnosis": False, "reports": False}
+    FEATURE_DEFAULTS = {"guard": True, "router": True, "compress": False, "triage": True, "discovery": False, "verification": False, "evidence": False, "diagnosis": False, "reports": False, "context": True}
 
     def configured_feature(self, name: str) -> bool:
         """The persisted (config) value of a feature, ignoring session overrides."""
@@ -245,6 +247,10 @@ class Extension:
         kind = params.get("kind", "")
         tool = params.get("tool_runtime_name") or params.get("tool_name") or ""
 
+        if kind == context.KIND:
+            # Advisory only; inert on hosts without context_management.
+            return self.context.handle(params, self.client, self.features["context"], self.audit, goal=self.goal)
+
         if kind == "before_tool_call":
             if tool in router.SUBAGENT_TOOLS:
                 return self.router.handle(params, self.client, self.router_cfg, self.audit, log,
@@ -287,7 +293,9 @@ class Extension:
                 "Batch uncertain choices; skip obvious deterministic ones. Choice criteria are ID-to-description "
                 "objects; score criteria are ordered lists. Bash failure triage is advisory, never authority "
                 "to execute, retry, or certify success. Optional discovery recommendations are advisory, "
-                "not activation/permission or authority. Check jev_status for active features and estimated Jev cost."
+                "not activation/permission or authority. Under context pressure, Jev may report task boundaries "
+                "to the host; this is advisory and replaces no context_checkpoint discipline. "
+                "Check jev_status for active features and estimated Jev cost."
             )}
 
         return {"action": "continue"}

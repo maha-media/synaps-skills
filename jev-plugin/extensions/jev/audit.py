@@ -20,7 +20,7 @@ def synaps_base_dir() -> Path:
     return Path(configured) if configured else Path.home() / ".synaps-cli"
 
 
-OPS = frozenset("compress router triage discovery reports verification evidence select decide guard diagnose".split())
+OPS = frozenset("compress router triage discovery reports verification evidence select decide guard diagnose context".split())
 GLOSS = {
     "lowconfidence": "Valid answer below the local confidence threshold.",
     "modelabstention": "Model selected the supplied abstention option.",
@@ -40,6 +40,7 @@ GLOSS = {
     "budget_latency": "Optional latency budget exhausted.",
     "budget_unknown_usage": "Unknown usage prevents optional budget admission.",
     "circuit_open": "Optional error circuit denied admission.",
+    "notpressure": "No host context pressure at a finished turn; no boundary decision.",
 }
 
 
@@ -59,7 +60,7 @@ def classify_choice(answer, criteria, threshold=.8, *, validator=None):
         choice = validator(answer)
         if choice is None or choice is False:
             return "invalidresponse"
-        if answer.get("choice") in ("unknown", "abstain", "__jev_abstain__", "keep"):
+        if answer.get("choice") in ("unknown", "abstain", "__jev_abstain__", "keep", "unclear"):
             return "modelabstention"
         if answer["confidence"] < threshold:
             return "lowconfidence"

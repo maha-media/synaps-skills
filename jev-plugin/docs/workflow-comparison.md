@@ -75,7 +75,7 @@ is intentionally tiny; publicly inspectable labels are not a blind evaluation.
 | `deterministic` | compress only | `deterministic` |
 
 `mode_config` uses actual plugin configuration keys: guard, router, triage,
-reports, evidence, verification, discovery, diagnosis, compress, and compress_mode.
+reports, evidence, verification, discovery, diagnosis, context, compress, and compress_mode.
 Adapters must accept only the exact `CONFIGS[mode]` constant, not arbitrary mode
 configurations. All feature toggles not listed as enabled are false. Guard=false
 is for this isolated benchmark only, never a recommendation to change host-global

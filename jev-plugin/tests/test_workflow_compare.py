@@ -28,7 +28,7 @@ assert digest({p.name: p.read_text() for p in ws.iterdir()}) == t['result_templa
 assert digest(t['task']) == t['result_template']['task_sha']
 c = t['mode_config']
 expected_config = dict.fromkeys(('guard', 'router', 'triage', 'reports', 'evidence',
-                                 'verification', 'discovery', 'diagnosis', 'compress'), False)
+                                 'verification', 'discovery', 'diagnosis', 'context', 'compress'), False)
 expected_config['compress_mode'] = 'jev'
 if a.mode == 'selected': expected_config.update(router=True, triage=True)
 if a.mode == 'deterministic': expected_config.update(compress=True, compress_mode='deterministic')

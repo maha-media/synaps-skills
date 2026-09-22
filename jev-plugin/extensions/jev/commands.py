@@ -7,6 +7,7 @@
     /jev guard on|off [--save]     flip the tool-call safety gate (session-only unless --save)
     /jev router on|off [--save]    flip subagent routing
     /jev compress on|off [--save]  flip output compression
+    /jev context on|off [--save]   flip advisory context-boundary reports (pressure only)
     /jev off|on [--save]           all features at once (all six tools stay advertised)
 
 Output is streamed as `command.output` notifications (text/system/error/done)
@@ -26,7 +27,7 @@ USAGE = (
     "**/jev** — TypeSafe Jev decision layer\n\n"
     "| command | does |\n|---|---|\n"
     "| `/jev key <apikey_…>` | validate, save, and activate an API key (no restart) |\n"
-    "| `/jev economy [--save]` | preset: guard unchanged; router+triage on, deterministic compression; optional advice off; no savings claim |\n"
+    "| `/jev economy [--save]` | preset: guard unchanged; router+triage+context on, deterministic compression; optional advice off; no savings claim |\n"
     "| `/jev compress mode jev\\|deterministic [--save]` | choose compression mode without enabling it |\n"
     "| `/jev budget [on\\|off\\|reset]` | optional session API budgets; limits: calls, cost, latency, errors, cooldown; --save for settings |\n"
     "| `/jev explain [clear]` | bounded local diagnostics; clear only the ring, not accounting |\n"
@@ -39,7 +40,8 @@ USAGE = (
     "| `/jev diagnosis on\\|off [--save]` | supplied hypotheses/checks only; advisory, no fixes or execution |\n"
     "| `/jev verification on\\|off [--save]` | opt-in explicit optional-check prioritization, independent of guard |\n"
     "| `/jev reports on\\|off [--save]` | opt-in worker-report claim triage, independent of guard; no lifecycle authority |\n"
-    "| `/jev off` / `/jev on` | guard+router+compress+triage+discovery+verification+evidence+diagnosis+reports together (including opt-in API calls); mode unchanged; all six tools stay advertised |\n\n"
+    "| `/jev context on\\|off [--save]` | advisory task-boundary reports only under host context pressure at turn end; no rollover authority |\n"
+    "| `/jev off` / `/jev on` | guard+router+compress+triage+discovery+verification+evidence+diagnosis+reports+context together (including opt-in API calls); mode unchanged; all six tools stay advertised |\n\n"
     "Tip: the Confirm dialog's **Allow all this session** button keeps the guard scoring+auditing "
     "but stops asking; `/jev guard off` skips the ~0.4 s review entirely.\n\n"
     f"Get a key at {keys.GET_KEY_URL}. Keys are stored in `{keys.plugin_config_path()}` (mode 600), "
@@ -211,7 +213,7 @@ def _cmd_compress_mode(rest, ext, out, host_call) -> None:
 
 def _cmd_economy(rest, ext, out, host_call) -> None:
     _, persist = _setting_args(rest)
-    settings = {name: name in ("router", "triage", "compress")
+    settings = {name: name in ("router", "triage", "compress", "context")
                 for name in ext.FEATURE_DEFAULTS if name != "guard"}
     if persist:
         _save_setting("compress_mode", "deterministic", host_call)
@@ -222,7 +224,7 @@ def _cmd_economy(rest, ext, out, host_call) -> None:
         ext.set_feature(name, enabled, persist=persist)
     out.system("Economy preset applied; guard unchanged; compression deterministic — "
                + ("saved" if persist else "session only; --save persists"))
-    out.text("Router and triage configured on; discovery, verification, evidence, diagnosis and reports off. "
+    out.text("Router, triage and context configured on; discovery, verification, evidence, diagnosis and reports off. "
              "Economy is a preset, not a savings estimate. /jev on enables all features including guard; "
              "it leaves the chosen compression mode alone.")
     if ext.client is None:
@@ -305,7 +307,7 @@ def _cmd_status(ext, out: Emitter) -> None:
     rows.append(["budget", json.dumps(ext.policy.snapshot(), sort_keys=True)])
     out.table(["jev", ""], rows)
     out.text("/jev on [--save]: all features including guard, mode unchanged. "
-             "/jev economy [--save]: guard unchanged, router/triage on, deterministic compression; "
+             "/jev economy [--save]: guard unchanged, router/triage/context on, deterministic compression; "
              "other optional advice off. Remote features require a key; no savings estimate.")
 
 

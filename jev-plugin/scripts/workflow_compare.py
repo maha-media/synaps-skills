@@ -14,7 +14,7 @@ import tempfile
 import time
 
 MODES = ("off", "selected", "deterministic")
-FEATURES = ("guard", "router", "triage", "reports", "evidence", "verification", "discovery", "diagnosis", "compress")
+FEATURES = ("guard", "router", "triage", "reports", "evidence", "verification", "discovery", "diagnosis", "context", "compress")
 CONFIGS = {mode: {**{k: False for k in FEATURES}, "compress_mode": "jev"} for mode in MODES}
 CONFIGS["selected"].update(router=True, triage=True)
 CONFIGS["deterministic"].update(compress=True, compress_mode="deterministic")

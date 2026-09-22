@@ -327,3 +327,18 @@ IDs cannot grant fresh budgets. Cache hits and local operations need no API call
 shared across sessions. Clear affects only that ring, not accounting, budgets,
 circuits or caches. `jev_status` includes these local diagnostics; no seventh
 tool is introduced. See the README for configuration limits and reset semantics.
+
+## After a context rollover
+
+When the host rolled the context over (task boundary or pressure), do not reread
+the whole archive. Recover only what the current task needs:
+
+1. `memory_search(source=history)` to list archived descriptors (ids + snippets).
+2. `jev_evidence` with those descriptors as candidates (`kind=memory`,
+   `required=false`, `summary=<snippet>`) and the current task as `task` to rank
+   which are worth fetching. Relevance is advice, not truth or authority.
+3. `memory_fetch` only the top-ranked one or two; fetch more only if a specific
+   gap remains.
+
+Jev may also have reported the boundary itself (`context_phase` under pressure);
+that report is advisory and replaces no `context_checkpoint` discipline.

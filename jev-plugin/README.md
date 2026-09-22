@@ -1,7 +1,8 @@
 # jev — calibrated decision layer for Synaps CLI
 
-Release **0.8.0**: six tools, supplied-candidate diagnosis, an explicit economy
-preset, optional API budgets, and local explanations. No net-savings claim.
+Release **0.9.0**: six tools, supplied-candidate diagnosis, an explicit economy
+preset, optional API budgets, local explanations, and advisory context-boundary
+reports under host context pressure. No net-savings claim.
 
 Puts [TypeSafe Jev](https://docs.typesafe.ai) — a fast, calibrated *System One*
 decision model that never writes, only picks — into the agent harness as a
@@ -16,6 +17,7 @@ output replacement also depends on host runtime handling (see measurement limits
 | **Triage** — preserve failures and append advisory diagnostic IDs | `after_tool_call` → `continue` / `replace` | on | open (abstain) |
 | **Reports** — append unverified worker-claim flags without lifecycle changes | `subagent_collect` → `continue` / `replace` | **off** | open |
 | **Discovery** — supplied search-result ID advice, not activation | `search_tools` / `search_skills` → `continue` / `replace` | **off** | open (abstain) |
+| **Context** — advisory task-boundary report only under host context pressure at a tool-free turn end | `on_message_complete` → `continue` / `context_phase` | on | open (continue) |
 | **`jev_diagnose`** — prioritize supplied hypotheses/checks; no fixes or execution | tool (no hook) | advice **off** | review |
 | **`jev_evidence`** — supplied descriptor relevance; no fetch or trust certification | tool (no hook) | advice **off** | review |
 | **`jev_verify`** — explicit optional verification priority; preserves caller-required IDs | tool (no hook) | advice **off** | review |
@@ -88,10 +90,10 @@ Get a key at https://typesafe.ai.
 ## All-on versus economy (explicit presets)
 
 - **`/jev on [--save]`** enables every feature, **including guard** and opt-in
-  discovery, verification, evidence, reports and diagnosis. It leaves the chosen compression
+  discovery, verification, evidence, reports, diagnosis and context. It leaves the chosen compression
   mode alone. A key is required for all-on.
-- **`/jev economy [--save]`** leaves guard **unchanged**, configures router and
-  triage on, enables **deterministic** compression, and turns discovery,
+- **`/jev economy [--save]`** leaves guard **unchanged**, configures router,
+  triage and context on, enables **deterministic** compression, and turns discovery,
   verification, evidence, reports and diagnosis off. Economy is a preset, not a feature flag
   or a claim of savings. No setup or defaults are changed automatically.
 - **`/jev off [--save]`** disables every feature, including deterministic
@@ -123,7 +125,8 @@ reviews are never cached. `/jev status` shows mode and preset guidance.
 /jev guard off --save     # persist to plugins/jev/config
 /jev router off           # same pattern for router / compress / triage / discovery
 /jev triage off           # skip advisory failure classification; guard stays independent
-/jev off                  # guard + router + compress + triage + discovery + verification + evidence + reports + diagnosis; all six tools stay
+/jev context off          # skip advisory context-boundary reports (one call per turn end under pressure)
+/jev off                  # guard + router + compress + triage + discovery + verification + evidence + reports + diagnosis + context; all six tools stay
 /jev guard                # show now / source / saved
 ```
 
@@ -179,6 +182,7 @@ All keys live under `extension.jev.*` in `~/.synaps-cli/config`, or as
 | `evidence` | `false` | descriptor relevance advice; `/jev evidence on\|off [--save]`; independent of guard |
 | `verification` | `false` | optional priority advice; `/jev verification on\|off [--save]`; independent of guard |
 | `diagnosis` | `false` | supplied hypotheses/checks only; `/jev diagnosis on\|off [--save]`; independent of guard |
+| `context` | `true` | advisory `context_phase` boundary reports only under host context `pressure` at a tool-free turn end; `/jev context on\|off [--save]`; independent of guard; inert on older hosts |
 | `budget_*` | enforcement `false` | optional API budgets/circuit; see [defaults, limits and accounting](#optional-session-budgets-and-circuit-breaker) |
 | `triage` | `true` | advisory failure classification; `/jev triage on\|off [--save]`; independent of guard |
 | `compress_mode` | `jev` | Only `jev` or `deterministic`; mode alone does not enable compression |
@@ -389,7 +393,7 @@ Underlying `search_tools` and `search_skills` discovery is **pure local**. The
 `discovery` experiment defaults to **false** and is **not recommended as a
 savings technique yet**. `/jev discovery on|off [--save]`
 controls it independently of guard; without `--save` the override is session-only.
-`/jev on` enables **all nine** features, including this opt-in API cost/privacy
+`/jev on` enables **all ten** features, including this opt-in API cost/privacy
 contract (and compression); `/jev off` disables them. Explicit Jev tools remain
 available, including their no-key setup guidance.
 
@@ -613,7 +617,7 @@ current full-suite total. No live measurements were rerun for the 0.8.0 release.
 All six tools (`jev_decide`, `jev_select`, `jev_status`, `jev_verify`, `jev_evidence`, `jev_diagnose`) are always
 advertised. `/jev verification on|off [--save]` controls optional verification
 advice, **default off**, independently of guard. `/jev off` and `/jev on` toggle
-**all nine features**, including discovery, verification, evidence, reports and diagnosis (and their opt-in API
+**all ten features**, including discovery, verification, evidence, reports, diagnosis and context (and their opt-in API
 calls); they do not hide tools. Use the same `/jev key <apikey_…>` setup as above.
 
 Call `jev_verify` with this public synthetic input (optional advice requires
@@ -1088,6 +1092,31 @@ exception strings, or timing. They are not written to files, logs, or traces and
 do not change the existing audit configuration. Clearing them is not an
 accounting reset. They do not certify truth, source authority, execution, or
 permission to fetch/read/delete anything; they never authorize an action.
+
+## Advisory context boundaries (0.9.0)
+
+Hosts with automatic context management emit `on_message_complete` with
+`data.context_management = {enabled, band, phase}`. When the feature is on and
+the host reports band **`pressure`** at a turn end with **no tool use**, Jev asks
+one bounded `choice` question (completed / paused / partial / unclear) about the
+redacted final assistant text (≤ 6000 chars, explicit truncation marker) and the
+latest user request (≤ 1500 chars). Only `completed` at confidence ≥ 0.85
+(`context.BOUNDARY_THRESHOLD`, fixed, not tuned) returns
+`{"action": "context_phase", "phase": "new_task"}`; everything else returns
+`continue`. Tool outputs, keys and session ids are never sent; nothing from the
+state is written to the audit trail.
+
+The report is **advisory**, identical to the model's own
+`context_checkpoint(phase)` without a note. It carries no authority to roll
+context over, replaces no checkpoint discipline, and never fires under
+`normal`, `rollover` or `hard_limit`, so the host cannot enter a loop on it.
+Cost is about one ~0.4 s call per turn end **while under pressure only**; no
+savings claim is made. Requires a host version with `context_phase` support;
+older hosts omit `context_management` and the feature is inert (continue, zero
+calls). No cache: each turn end is unique. Counters: `context.call`,
+`context.questions`, `context.skip`, `context.report`, `context.abstain`,
+`context.error`; explanations include `notpressure`. `/jev context on|off
+[--save]`; on by default and in `/jev economy`.
 
 ## Explicit diagnosis priority: `jev_diagnose`
 
