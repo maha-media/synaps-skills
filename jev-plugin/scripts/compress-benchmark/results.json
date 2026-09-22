@@ -1,0 +1,380 @@
+{
+  "mode": "live",
+  "model": "jev-1.13.0",
+  "caveat": "Fixed synthetic fixtures, expected=None: no perfect-decision or accuracy claim. Deterministic RLE may be sufficient; Jev adds a readability veto, not unique savings. Bytes measure tool-output payload within the host/downstream boundary, not end-to-end traffic, tokens or dollars saved. Jev input-token cost is a separate estimate. No synthetic commands or workers execute. No cache or repeats.",
+  "raw_baseline": {
+    "cases": [
+      {
+        "case": "progress",
+        "expected": null,
+        "folded": false,
+        "roundtrip": true,
+        "raw_bytes": 44000,
+        "transmitted_output_bytes": 44000,
+        "delta_bytes": 0,
+        "hook_latency_ms": null,
+        "calls": 0,
+        "questions": 0,
+        "errors": 0
+      },
+      {
+        "case": "status",
+        "expected": null,
+        "folded": false,
+        "roundtrip": true,
+        "raw_bytes": 21000,
+        "transmitted_output_bytes": 21000,
+        "delta_bytes": 0,
+        "hook_latency_ms": null,
+        "calls": 0,
+        "questions": 0,
+        "errors": 0
+      },
+      {
+        "case": "blocks",
+        "expected": null,
+        "folded": false,
+        "roundtrip": true,
+        "raw_bytes": 17552,
+        "transmitted_output_bytes": 17552,
+        "delta_bytes": 0,
+        "hook_latency_ms": null,
+        "calls": 0,
+        "questions": 0,
+        "errors": 0
+      },
+      {
+        "case": "crlf-unicode",
+        "expected": null,
+        "folded": false,
+        "roundtrip": true,
+        "raw_bytes": 18432,
+        "transmitted_output_bytes": 18432,
+        "delta_bytes": 0,
+        "hook_latency_ms": null,
+        "calls": 0,
+        "questions": 0,
+        "errors": 0
+      }
+    ],
+    "fold_count": 0,
+    "keep_count": 4,
+    "raw_bytes": 100984,
+    "transmitted_output_bytes": 100984,
+    "delta_bytes": 0
+  },
+  "deterministic_baseline": {
+    "cases": [
+      {
+        "case": "progress",
+        "expected": null,
+        "folded": true,
+        "roundtrip": true,
+        "raw_bytes": 44000,
+        "transmitted_output_bytes": 353,
+        "delta_bytes": -43647,
+        "hook_latency_ms": null,
+        "calls": 1,
+        "questions": 1,
+        "errors": 0
+      },
+      {
+        "case": "status",
+        "expected": null,
+        "folded": true,
+        "roundtrip": true,
+        "raw_bytes": 21000,
+        "transmitted_output_bytes": 352,
+        "delta_bytes": -20648,
+        "hook_latency_ms": null,
+        "calls": 1,
+        "questions": 1,
+        "errors": 0
+      },
+      {
+        "case": "blocks",
+        "expected": null,
+        "folded": true,
+        "roundtrip": true,
+        "raw_bytes": 17552,
+        "transmitted_output_bytes": 572,
+        "delta_bytes": -16980,
+        "hook_latency_ms": null,
+        "calls": 1,
+        "questions": 1,
+        "errors": 0
+      },
+      {
+        "case": "crlf-unicode",
+        "expected": null,
+        "folded": true,
+        "roundtrip": true,
+        "raw_bytes": 18432,
+        "transmitted_output_bytes": 459,
+        "delta_bytes": -17973,
+        "hook_latency_ms": null,
+        "calls": 1,
+        "questions": 1,
+        "errors": 0
+      }
+    ],
+    "fold_count": 4,
+    "keep_count": 0,
+    "raw_bytes": 100984,
+    "transmitted_output_bytes": 1736,
+    "delta_bytes": -99248
+  },
+  "deterministic_description": "Forced readability compact decision; production safety/profit checks; no API",
+  "free_variants": [
+    {
+      "case": "small",
+      "expected": null,
+      "folded": false,
+      "roundtrip": true,
+      "raw_bytes": 6,
+      "transmitted_output_bytes": 6,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0
+    },
+    {
+      "case": "no-repetition",
+      "expected": null,
+      "folded": false,
+      "roundtrip": true,
+      "raw_bytes": 16000,
+      "transmitted_output_bytes": 16000,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0
+    },
+    {
+      "case": "failure-beginning",
+      "expected": null,
+      "folded": false,
+      "roundtrip": true,
+      "raw_bytes": 44018,
+      "transmitted_output_bytes": 44018,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0
+    },
+    {
+      "case": "failure-middle",
+      "expected": null,
+      "folded": false,
+      "roundtrip": true,
+      "raw_bytes": 44018,
+      "transmitted_output_bytes": 44018,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0
+    },
+    {
+      "case": "failure-tail",
+      "expected": null,
+      "folded": false,
+      "roundtrip": true,
+      "raw_bytes": 44018,
+      "transmitted_output_bytes": 44018,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0
+    },
+    {
+      "case": "json",
+      "expected": null,
+      "folded": false,
+      "roundtrip": true,
+      "raw_bytes": 18011,
+      "transmitted_output_bytes": 18011,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0
+    },
+    {
+      "case": "truncated",
+      "expected": null,
+      "folded": false,
+      "roundtrip": true,
+      "raw_bytes": 44012,
+      "transmitted_output_bytes": 44012,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0
+    },
+    {
+      "case": "already-envelope",
+      "expected": null,
+      "folded": false,
+      "roundtrip": true,
+      "raw_bytes": 353,
+      "transmitted_output_bytes": 353,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0
+    },
+    {
+      "case": "missing-client",
+      "expected": null,
+      "folded": false,
+      "roundtrip": true,
+      "raw_bytes": 44000,
+      "transmitted_output_bytes": 44000,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0
+    },
+    {
+      "case": "wrong-tool",
+      "expected": null,
+      "folded": false,
+      "roundtrip": true,
+      "raw_bytes": 44000,
+      "transmitted_output_bytes": 44000,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0
+    },
+    {
+      "case": "truncation-metadata",
+      "expected": null,
+      "folded": false,
+      "roundtrip": true,
+      "raw_bytes": 44000,
+      "transmitted_output_bytes": 44000,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0
+    }
+  ],
+  "jev": {
+    "cases": [
+      {
+        "case": "progress",
+        "expected": null,
+        "folded": false,
+        "roundtrip": true,
+        "raw_bytes": 44000,
+        "transmitted_output_bytes": 44000,
+        "delta_bytes": 0,
+        "hook_latency_ms": 481.494173000101,
+        "calls": 1,
+        "questions": 1,
+        "errors": 0
+      },
+      {
+        "case": "status",
+        "expected": null,
+        "folded": false,
+        "roundtrip": true,
+        "raw_bytes": 21000,
+        "transmitted_output_bytes": 21000,
+        "delta_bytes": 0,
+        "hook_latency_ms": 544.4942920003086,
+        "calls": 1,
+        "questions": 1,
+        "errors": 0
+      },
+      {
+        "case": "blocks",
+        "expected": null,
+        "folded": false,
+        "roundtrip": true,
+        "raw_bytes": 17552,
+        "transmitted_output_bytes": 17552,
+        "delta_bytes": 0,
+        "hook_latency_ms": 407.5009360094555,
+        "calls": 1,
+        "questions": 1,
+        "errors": 0
+      },
+      {
+        "case": "crlf-unicode",
+        "expected": null,
+        "folded": false,
+        "roundtrip": true,
+        "raw_bytes": 18432,
+        "transmitted_output_bytes": 18432,
+        "delta_bytes": 0,
+        "hook_latency_ms": 411.6746510262601,
+        "calls": 1,
+        "questions": 1,
+        "errors": 0
+      }
+    ],
+    "fold_count": 0,
+    "keep_count": 4,
+    "raw_bytes": 100984,
+    "transmitted_output_bytes": 100984,
+    "delta_bytes": 0,
+    "wire_calls": 4,
+    "questions": 4,
+    "measurements": [
+      {
+        "input_tokens": 440,
+        "output_tokens": 38,
+        "total_tokens": null,
+        "estimated_jev_cost_usd": 1.848e-05,
+        "model": "jev-1.13.0",
+        "network_latency_ms": 467.1195370028727
+      },
+      {
+        "input_tokens": 440,
+        "output_tokens": 38,
+        "total_tokens": null,
+        "estimated_jev_cost_usd": 1.848e-05,
+        "model": "jev-1.13.0",
+        "network_latency_ms": 537.8465329995379
+      },
+      {
+        "input_tokens": 544,
+        "output_tokens": 38,
+        "total_tokens": null,
+        "estimated_jev_cost_usd": 2.2848000000000002e-05,
+        "model": "jev-1.13.0",
+        "network_latency_ms": 401.2486389838159
+      },
+      {
+        "input_tokens": 490,
+        "output_tokens": 38,
+        "total_tokens": null,
+        "estimated_jev_cost_usd": 2.0580000000000003e-05,
+        "model": "jev-1.13.0",
+        "network_latency_ms": 406.7934249760583
+      }
+    ],
+    "input_tokens": 1914,
+    "estimated_jev_cost_usd": 8.0388e-05,
+    "hook_latency": {
+      "median_ms": 446.58441201318055,
+      "p95_ms": 535.0442741502775
+    },
+    "network_latency": {
+      "median_ms": 436.9564809894655,
+      "p95_ms": 527.2374836000381
+    }
+  }
+}

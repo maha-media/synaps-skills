@@ -1,0 +1,579 @@
+{
+  "mode": "live",
+  "caveat": "Weak fixture labels, not calibrated ground truth. Required preservation is structural, not evidence that all mandatory checks were enumerated. Injection fixture is not a safety proof. No checks/tools execute and no real tests are claimed passed. This does not demonstrate reduced tests, reasoning turns, or end-to-end savings; not a frontier baseline or net-money estimate.",
+  "labels": "Explicit weak expected priorities; unchanged production confidence gate >=0.8.",
+  "baseline": {
+    "description": "First optional in input order; deterministic counts, NOT task savings.",
+    "no_hint_overhead": {
+      "calls": 0,
+      "questions": 0,
+      "input_tokens": 0,
+      "estimated_cost_usd": 0,
+      "latency_ms": 0,
+      "output_bytes": 0,
+      "measured": false
+    },
+    "cases": [
+      {
+        "case": "parser",
+        "expected": {
+          "http": "defer",
+          "parser-edge": "prioritize",
+          "unclear": "review"
+        },
+        "actual": {
+          "http": "prioritize",
+          "parser-edge": "defer",
+          "unclear": "defer"
+        },
+        "quality": {
+          "correct_priorities": 0,
+          "false_priorities": 1,
+          "optional_recall": 0.0,
+          "relevant_count": 1,
+          "review_count": 0,
+          "correct_abstentions": 0,
+          "correct_deferred": 0
+        }
+      },
+      {
+        "case": "auth",
+        "expected": {
+          "css": "defer",
+          "binding": "prioritize",
+          "expiry": "prioritize"
+        },
+        "actual": {
+          "css": "prioritize",
+          "binding": "defer",
+          "expiry": "defer"
+        },
+        "quality": {
+          "correct_priorities": 0,
+          "false_priorities": 1,
+          "optional_recall": 0.0,
+          "relevant_count": 2,
+          "review_count": 0,
+          "correct_abstentions": 0,
+          "correct_deferred": 0
+        }
+      },
+      {
+        "case": "ui",
+        "expected": {
+          "billing": "defer",
+          "keyboard": "prioritize",
+          "unclear-ui": "review"
+        },
+        "actual": {
+          "billing": "prioritize",
+          "keyboard": "defer",
+          "unclear-ui": "defer"
+        },
+        "quality": {
+          "correct_priorities": 0,
+          "false_priorities": 1,
+          "optional_recall": 0.0,
+          "relevant_count": 1,
+          "review_count": 0,
+          "correct_abstentions": 0,
+          "correct_deferred": 0
+        }
+      },
+      {
+        "case": "underspecified",
+        "expected": {
+          "parse": "review",
+          "login": "review",
+          "layout": "review"
+        },
+        "actual": {
+          "parse": "prioritize",
+          "login": "defer",
+          "layout": "defer"
+        },
+        "quality": {
+          "correct_priorities": 0,
+          "false_priorities": 1,
+          "optional_recall": null,
+          "relevant_count": 0,
+          "review_count": 0,
+          "correct_abstentions": 0,
+          "correct_deferred": 0
+        }
+      }
+    ],
+    "optional_quality": {
+      "correct_priorities": 0,
+      "false_priorities": 4,
+      "optional_recall": 0.0,
+      "relevant_count": 4,
+      "review_count": 0,
+      "correct_abstentions": 0,
+      "correct_deferred": 0
+    }
+  },
+  "variants": [
+    {
+      "case": "parser:required-only",
+      "expected": {},
+      "actual": {},
+      "quality": {
+        "correct_priorities": 0,
+        "false_priorities": 0,
+        "optional_recall": null,
+        "relevant_count": 0,
+        "review_count": 0,
+        "correct_abstentions": 0,
+        "correct_deferred": 0
+      },
+      "required_retained": true,
+      "optional_partition": true,
+      "exact_ids_only": true,
+      "no_execution": true,
+      "output_bytes": 467,
+      "hook_latency_ms": null,
+      "calls": 0
+    },
+    {
+      "case": "parser:no-key",
+      "expected": {
+        "http": "defer",
+        "parser-edge": "prioritize",
+        "unclear": "review"
+      },
+      "actual": {
+        "http": "review",
+        "parser-edge": "review",
+        "unclear": "review"
+      },
+      "quality": {
+        "correct_priorities": 0,
+        "false_priorities": 0,
+        "optional_recall": 0.0,
+        "relevant_count": 1,
+        "review_count": 3,
+        "correct_abstentions": 1,
+        "correct_deferred": 0
+      },
+      "required_retained": true,
+      "optional_partition": true,
+      "exact_ids_only": true,
+      "no_execution": true,
+      "output_bytes": 816,
+      "hook_latency_ms": null,
+      "calls": 0
+    },
+    {
+      "case": "parser:disabled",
+      "expected": {
+        "http": "defer",
+        "parser-edge": "prioritize",
+        "unclear": "review"
+      },
+      "actual": {
+        "http": "review",
+        "parser-edge": "review",
+        "unclear": "review"
+      },
+      "quality": {
+        "correct_priorities": 0,
+        "false_priorities": 0,
+        "optional_recall": 0.0,
+        "relevant_count": 1,
+        "review_count": 3,
+        "correct_abstentions": 1,
+        "correct_deferred": 0
+      },
+      "required_retained": true,
+      "optional_partition": true,
+      "exact_ids_only": true,
+      "no_execution": true,
+      "output_bytes": 860,
+      "hook_latency_ms": null,
+      "calls": 0
+    },
+    {
+      "case": "auth:required-only",
+      "expected": {},
+      "actual": {},
+      "quality": {
+        "correct_priorities": 0,
+        "false_priorities": 0,
+        "optional_recall": null,
+        "relevant_count": 0,
+        "review_count": 0,
+        "correct_abstentions": 0,
+        "correct_deferred": 0
+      },
+      "required_retained": true,
+      "optional_partition": true,
+      "exact_ids_only": true,
+      "no_execution": true,
+      "output_bytes": 476,
+      "hook_latency_ms": null,
+      "calls": 0
+    },
+    {
+      "case": "auth:no-key",
+      "expected": {
+        "css": "defer",
+        "binding": "prioritize",
+        "expiry": "prioritize"
+      },
+      "actual": {
+        "css": "review",
+        "binding": "review",
+        "expiry": "review"
+      },
+      "quality": {
+        "correct_priorities": 0,
+        "false_priorities": 0,
+        "optional_recall": 0.0,
+        "relevant_count": 2,
+        "review_count": 3,
+        "correct_abstentions": 0,
+        "correct_deferred": 0
+      },
+      "required_retained": true,
+      "optional_partition": true,
+      "exact_ids_only": true,
+      "no_execution": true,
+      "output_bytes": 813,
+      "hook_latency_ms": null,
+      "calls": 0
+    },
+    {
+      "case": "auth:disabled",
+      "expected": {
+        "css": "defer",
+        "binding": "prioritize",
+        "expiry": "prioritize"
+      },
+      "actual": {
+        "css": "review",
+        "binding": "review",
+        "expiry": "review"
+      },
+      "quality": {
+        "correct_priorities": 0,
+        "false_priorities": 0,
+        "optional_recall": 0.0,
+        "relevant_count": 2,
+        "review_count": 3,
+        "correct_abstentions": 0,
+        "correct_deferred": 0
+      },
+      "required_retained": true,
+      "optional_partition": true,
+      "exact_ids_only": true,
+      "no_execution": true,
+      "output_bytes": 857,
+      "hook_latency_ms": null,
+      "calls": 0
+    },
+    {
+      "case": "ui:required-only",
+      "expected": {},
+      "actual": {},
+      "quality": {
+        "correct_priorities": 0,
+        "false_priorities": 0,
+        "optional_recall": null,
+        "relevant_count": 0,
+        "review_count": 0,
+        "correct_abstentions": 0,
+        "correct_deferred": 0
+      },
+      "required_retained": true,
+      "optional_partition": true,
+      "exact_ids_only": true,
+      "no_execution": true,
+      "output_bytes": 464,
+      "hook_latency_ms": null,
+      "calls": 0
+    },
+    {
+      "case": "ui:no-key",
+      "expected": {
+        "billing": "defer",
+        "keyboard": "prioritize",
+        "unclear-ui": "review"
+      },
+      "actual": {
+        "billing": "review",
+        "keyboard": "review",
+        "unclear-ui": "review"
+      },
+      "quality": {
+        "correct_priorities": 0,
+        "false_priorities": 0,
+        "optional_recall": 0.0,
+        "relevant_count": 1,
+        "review_count": 3,
+        "correct_abstentions": 1,
+        "correct_deferred": 0
+      },
+      "required_retained": true,
+      "optional_partition": true,
+      "exact_ids_only": true,
+      "no_execution": true,
+      "output_bytes": 819,
+      "hook_latency_ms": null,
+      "calls": 0
+    },
+    {
+      "case": "ui:disabled",
+      "expected": {
+        "billing": "defer",
+        "keyboard": "prioritize",
+        "unclear-ui": "review"
+      },
+      "actual": {
+        "billing": "review",
+        "keyboard": "review",
+        "unclear-ui": "review"
+      },
+      "quality": {
+        "correct_priorities": 0,
+        "false_priorities": 0,
+        "optional_recall": 0.0,
+        "relevant_count": 1,
+        "review_count": 3,
+        "correct_abstentions": 1,
+        "correct_deferred": 0
+      },
+      "required_retained": true,
+      "optional_partition": true,
+      "exact_ids_only": true,
+      "no_execution": true,
+      "output_bytes": 863,
+      "hook_latency_ms": null,
+      "calls": 0
+    },
+    {
+      "case": "underspecified:required-only",
+      "expected": {},
+      "actual": {},
+      "quality": {
+        "correct_priorities": 0,
+        "false_priorities": 0,
+        "optional_recall": null,
+        "relevant_count": 0,
+        "review_count": 0,
+        "correct_abstentions": 0,
+        "correct_deferred": 0
+      },
+      "required_retained": true,
+      "optional_partition": true,
+      "exact_ids_only": true,
+      "no_execution": true,
+      "output_bytes": 465,
+      "hook_latency_ms": null,
+      "calls": 0
+    },
+    {
+      "case": "underspecified:no-key",
+      "expected": {
+        "parse": "review",
+        "login": "review",
+        "layout": "review"
+      },
+      "actual": {
+        "parse": "review",
+        "login": "review",
+        "layout": "review"
+      },
+      "quality": {
+        "correct_priorities": 0,
+        "false_priorities": 0,
+        "optional_recall": null,
+        "relevant_count": 0,
+        "review_count": 3,
+        "correct_abstentions": 3,
+        "correct_deferred": 0
+      },
+      "required_retained": true,
+      "optional_partition": true,
+      "exact_ids_only": true,
+      "no_execution": true,
+      "output_bytes": 802,
+      "hook_latency_ms": null,
+      "calls": 0
+    },
+    {
+      "case": "underspecified:disabled",
+      "expected": {
+        "parse": "review",
+        "login": "review",
+        "layout": "review"
+      },
+      "actual": {
+        "parse": "review",
+        "login": "review",
+        "layout": "review"
+      },
+      "quality": {
+        "correct_priorities": 0,
+        "false_priorities": 0,
+        "optional_recall": null,
+        "relevant_count": 0,
+        "review_count": 3,
+        "correct_abstentions": 3,
+        "correct_deferred": 0
+      },
+      "required_retained": true,
+      "optional_partition": true,
+      "exact_ids_only": true,
+      "no_execution": true,
+      "output_bytes": 846,
+      "hook_latency_ms": null,
+      "calls": 0
+    }
+  ],
+  "variant_required_preservation_rate": 1.0,
+  "jev": {
+    "status": "executed",
+    "cases": [
+      {
+        "case": "parser",
+        "expected": {
+          "http": "defer",
+          "parser-edge": "prioritize",
+          "unclear": "review"
+        },
+        "actual": {
+          "http": "review",
+          "parser-edge": "prioritize",
+          "unclear": "review"
+        },
+        "quality": {
+          "correct_priorities": 1,
+          "false_priorities": 0,
+          "optional_recall": 1.0,
+          "relevant_count": 1,
+          "review_count": 2,
+          "correct_abstentions": 1,
+          "correct_deferred": 0
+        },
+        "required_retained": true,
+        "optional_partition": true,
+        "exact_ids_only": true,
+        "no_execution": true,
+        "output_bytes": 745,
+        "hook_latency_ms": 378.3954860409722
+      },
+      {
+        "case": "auth",
+        "expected": {
+          "css": "defer",
+          "binding": "prioritize",
+          "expiry": "prioritize"
+        },
+        "actual": {
+          "css": "review",
+          "binding": "prioritize",
+          "expiry": "prioritize"
+        },
+        "quality": {
+          "correct_priorities": 2,
+          "false_priorities": 0,
+          "optional_recall": 1.0,
+          "relevant_count": 2,
+          "review_count": 1,
+          "correct_abstentions": 0,
+          "correct_deferred": 0
+        },
+        "required_retained": true,
+        "optional_partition": true,
+        "exact_ids_only": true,
+        "no_execution": true,
+        "output_bytes": 709,
+        "hook_latency_ms": 386.35235297260806
+      },
+      {
+        "case": "ui",
+        "expected": {
+          "billing": "defer",
+          "keyboard": "prioritize",
+          "unclear-ui": "review"
+        },
+        "actual": {
+          "billing": "review",
+          "keyboard": "prioritize",
+          "unclear-ui": "review"
+        },
+        "quality": {
+          "correct_priorities": 1,
+          "false_priorities": 0,
+          "optional_recall": 1.0,
+          "relevant_count": 1,
+          "review_count": 2,
+          "correct_abstentions": 1,
+          "correct_deferred": 0
+        },
+        "required_retained": true,
+        "optional_partition": true,
+        "exact_ids_only": true,
+        "no_execution": true,
+        "output_bytes": 748,
+        "hook_latency_ms": 421.5073799714446
+      },
+      {
+        "case": "underspecified",
+        "expected": {
+          "parse": "review",
+          "login": "review",
+          "layout": "review"
+        },
+        "actual": {
+          "parse": "review",
+          "login": "review",
+          "layout": "review"
+        },
+        "quality": {
+          "correct_priorities": 0,
+          "false_priorities": 0,
+          "optional_recall": null,
+          "relevant_count": 0,
+          "review_count": 3,
+          "correct_abstentions": 3,
+          "correct_deferred": 0
+        },
+        "required_retained": true,
+        "optional_partition": true,
+        "exact_ids_only": true,
+        "no_execution": true,
+        "output_bytes": 765,
+        "hook_latency_ms": 374.56151202786714
+      }
+    ],
+    "optional_quality": {
+      "correct_priorities": 4,
+      "false_priorities": 0,
+      "optional_recall": 1.0,
+      "relevant_count": 4,
+      "review_count": 8,
+      "correct_abstentions": 5,
+      "correct_deferred": 0
+    },
+    "calls": 4,
+    "questions": 12,
+    "input_tokens": 2777,
+    "estimated_cost_usd": 0.000116634,
+    "network_latency_ms": {
+      "total": 1559.944613953121,
+      "p50": 382.0933129754849,
+      "p95": 416.0718020168133
+    },
+    "hook_latency_ms": {
+      "total": 1560.816731012892,
+      "p50": 382.3739195067901,
+      "p95": 416.2341259216191
+    },
+    "output_bytes": 2967,
+    "required_preservation_rate": 1.0,
+    "optional_partition": true,
+    "no_execution": true
+  }
+}

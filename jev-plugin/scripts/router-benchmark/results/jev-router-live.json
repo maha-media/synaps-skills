@@ -1,0 +1,496 @@
+{
+  "mode": "measured",
+  "baseline_commit": "f3a6d07",
+  "model": "jev-1.13.0",
+  "cost_basis": "Returned input_tokens \u00d7 $0.042 / million; output free. Missing usage is null.",
+  "rows": [
+    {
+      "case": "docs",
+      "input": {
+        "task": "Read the public synthetic README: \"Hello is a greeting.\" Summarise it without edits.",
+        "role": "researcher"
+      },
+      "expected_fill_sets": [
+        {
+          "write_policy": {
+            "mode": "read_only"
+          }
+        }
+      ],
+      "writing": false,
+      "repeat": false,
+      "baseline": {
+        "planned_calls": 1,
+        "planned_questions": 2,
+        "question_names": [
+          "role",
+          "needs_write"
+        ],
+        "calls": 1,
+        "questions": 2,
+        "input_tokens": 493,
+        "cost_usd": 2.0705999999999998e-05,
+        "latency_ms": 335.93656902667135,
+        "assessment": {
+          "fills": {
+            "write_policy": {
+              "mode": "read_only"
+            }
+          },
+          "status": "correct",
+          "critical": false,
+          "preserved": 2,
+          "explicit_fields": 2,
+          "no_model": true
+        },
+        "cache_hits": 0
+      },
+      "optimized": {
+        "planned_calls": 1,
+        "planned_questions": 1,
+        "question_names": [
+          "needs_write"
+        ],
+        "calls": 1,
+        "questions": 1,
+        "input_tokens": 349,
+        "cost_usd": 1.4658000000000001e-05,
+        "latency_ms": 383.69415199849755,
+        "assessment": {
+          "fills": {},
+          "status": "abstain",
+          "critical": false,
+          "preserved": 2,
+          "explicit_fields": 2,
+          "no_model": true
+        },
+        "cache_hits": 0
+      }
+    },
+    {
+      "case": "write",
+      "input": {
+        "task": "Edit the synthetic greeting.py so greet() returns \"Hello, world!\" instead of \"Hi\".",
+        "role": "implementer"
+      },
+      "expected_fill_sets": [
+        {}
+      ],
+      "writing": true,
+      "repeat": false,
+      "baseline": {
+        "planned_calls": 1,
+        "planned_questions": 2,
+        "question_names": [
+          "role",
+          "needs_write"
+        ],
+        "calls": 1,
+        "questions": 2,
+        "input_tokens": 493,
+        "cost_usd": 2.0705999999999998e-05,
+        "latency_ms": 387.1996700181626,
+        "assessment": {
+          "fills": {},
+          "status": "correct",
+          "critical": false,
+          "preserved": 2,
+          "explicit_fields": 2,
+          "no_model": true
+        },
+        "cache_hits": 0
+      },
+      "optimized": {
+        "planned_calls": 1,
+        "planned_questions": 1,
+        "question_names": [
+          "needs_write"
+        ],
+        "calls": 1,
+        "questions": 1,
+        "input_tokens": 349,
+        "cost_usd": 1.4658000000000001e-05,
+        "latency_ms": 414.7273529670201,
+        "assessment": {
+          "fills": {},
+          "status": "correct",
+          "critical": false,
+          "preserved": 2,
+          "explicit_fields": 2,
+          "no_model": true
+        },
+        "cache_hits": 0
+      }
+    },
+    {
+      "case": "review",
+      "input": {
+        "task": "Review this public synthetic diff without edits: -return 1\n+return 2. Describe the behaviour change.",
+        "write_policy": {
+          "mode": "read_only"
+        }
+      },
+      "expected_fill_sets": [
+        {
+          "role": "reviewer"
+        },
+        {
+          "role": "researcher"
+        }
+      ],
+      "writing": false,
+      "repeat": false,
+      "baseline": {
+        "planned_calls": 1,
+        "planned_questions": 2,
+        "question_names": [
+          "role",
+          "needs_write"
+        ],
+        "calls": 1,
+        "questions": 2,
+        "input_tokens": 498,
+        "cost_usd": 2.0916e-05,
+        "latency_ms": 372.25860700709745,
+        "assessment": {
+          "fills": {
+            "role": "reviewer"
+          },
+          "status": "correct",
+          "critical": false,
+          "preserved": 2,
+          "explicit_fields": 2,
+          "no_model": true
+        },
+        "cache_hits": 0
+      },
+      "optimized": {
+        "planned_calls": 1,
+        "planned_questions": 1,
+        "question_names": [
+          "role"
+        ],
+        "calls": 1,
+        "questions": 1,
+        "input_tokens": 484,
+        "cost_usd": 2.0328000000000003e-05,
+        "latency_ms": 359.9929509800859,
+        "assessment": {
+          "fills": {
+            "role": "reviewer"
+          },
+          "status": "correct",
+          "critical": false,
+          "preserved": 2,
+          "explicit_fields": 2,
+          "no_model": true
+        },
+        "cache_hits": 0
+      }
+    },
+    {
+      "case": "read",
+      "input": {
+        "task": "Read this public synthetic text: \"The sample app prints Hello.\" Summarise it; do not edit files."
+      },
+      "expected_fill_sets": [
+        {
+          "role": "researcher",
+          "write_policy": {
+            "mode": "read_only"
+          }
+        },
+        {
+          "role": "reviewer",
+          "write_policy": {
+            "mode": "read_only"
+          }
+        }
+      ],
+      "writing": false,
+      "repeat": false,
+      "baseline": {
+        "planned_calls": 1,
+        "planned_questions": 2,
+        "question_names": [
+          "role",
+          "needs_write"
+        ],
+        "calls": 1,
+        "questions": 2,
+        "input_tokens": 497,
+        "cost_usd": 2.0874000000000004e-05,
+        "latency_ms": 385.4456930421293,
+        "assessment": {
+          "fills": {
+            "role": "researcher",
+            "write_policy": {
+              "mode": "read_only"
+            }
+          },
+          "status": "correct",
+          "critical": false,
+          "preserved": 1,
+          "explicit_fields": 1,
+          "no_model": true
+        },
+        "cache_hits": 0
+      },
+      "optimized": {
+        "planned_calls": 1,
+        "planned_questions": 2,
+        "question_names": [
+          "role",
+          "needs_write"
+        ],
+        "calls": 1,
+        "questions": 2,
+        "input_tokens": 548,
+        "cost_usd": 2.3016e-05,
+        "latency_ms": 356.0960069880821,
+        "assessment": {
+          "fills": {
+            "role": "researcher",
+            "write_policy": {
+              "mode": "read_only"
+            }
+          },
+          "status": "correct",
+          "critical": false,
+          "preserved": 1,
+          "explicit_fields": 1,
+          "no_model": true
+        },
+        "cache_hits": 0
+      }
+    },
+    {
+      "case": "docs_repeat",
+      "input": {
+        "task": "Read the public synthetic README: \"Hello is a greeting.\" Summarise it without edits.",
+        "role": "researcher"
+      },
+      "expected_fill_sets": [
+        {
+          "write_policy": {
+            "mode": "read_only"
+          }
+        }
+      ],
+      "writing": false,
+      "repeat": true,
+      "baseline": {
+        "planned_calls": 1,
+        "planned_questions": 2,
+        "question_names": [
+          "role",
+          "needs_write"
+        ],
+        "calls": 1,
+        "questions": 2,
+        "input_tokens": 493,
+        "cost_usd": 2.0705999999999998e-05,
+        "latency_ms": 376.7566760070622,
+        "assessment": {
+          "fills": {
+            "write_policy": {
+              "mode": "read_only"
+            }
+          },
+          "status": "correct",
+          "critical": false,
+          "preserved": 2,
+          "explicit_fields": 2,
+          "no_model": true
+        },
+        "cache_hits": 0
+      },
+      "optimized": {
+        "planned_calls": 0,
+        "planned_questions": 0,
+        "question_names": [],
+        "calls": 0,
+        "questions": 0,
+        "input_tokens": 0,
+        "cost_usd": 0,
+        "latency_ms": 0,
+        "assessment": {
+          "fills": {},
+          "status": "abstain",
+          "critical": false,
+          "preserved": 2,
+          "explicit_fields": 2,
+          "no_model": true
+        },
+        "cache_hits": 1
+      }
+    },
+    {
+      "case": "review_repeat",
+      "input": {
+        "task": "Review this public synthetic diff without edits: -return 1\n+return 2. Describe the behaviour change.",
+        "write_policy": {
+          "mode": "read_only"
+        }
+      },
+      "expected_fill_sets": [
+        {
+          "role": "reviewer"
+        },
+        {
+          "role": "researcher"
+        }
+      ],
+      "writing": false,
+      "repeat": true,
+      "baseline": {
+        "planned_calls": 1,
+        "planned_questions": 2,
+        "question_names": [
+          "role",
+          "needs_write"
+        ],
+        "calls": 1,
+        "questions": 2,
+        "input_tokens": 498,
+        "cost_usd": 2.0916e-05,
+        "latency_ms": 433.2729259622283,
+        "assessment": {
+          "fills": {
+            "role": "reviewer"
+          },
+          "status": "correct",
+          "critical": false,
+          "preserved": 2,
+          "explicit_fields": 2,
+          "no_model": true
+        },
+        "cache_hits": 0
+      },
+      "optimized": {
+        "planned_calls": 0,
+        "planned_questions": 0,
+        "question_names": [],
+        "calls": 0,
+        "questions": 0,
+        "input_tokens": 0,
+        "cost_usd": 0,
+        "latency_ms": 0,
+        "assessment": {
+          "fills": {
+            "role": "reviewer"
+          },
+          "status": "correct",
+          "critical": false,
+          "preserved": 2,
+          "explicit_fields": 2,
+          "no_model": true
+        },
+        "cache_hits": 1
+      }
+    },
+    {
+      "case": "explicit",
+      "input": {
+        "task": "Summarise the public synthetic greeting without edits.",
+        "role": "researcher",
+        "write_policy": {
+          "mode": "read_only"
+        }
+      },
+      "expected_fill_sets": [
+        {}
+      ],
+      "writing": false,
+      "repeat": false,
+      "baseline": {
+        "planned_calls": 0,
+        "planned_questions": 0,
+        "question_names": [],
+        "calls": 0,
+        "questions": 0,
+        "input_tokens": 0,
+        "cost_usd": 0,
+        "latency_ms": 0,
+        "assessment": {
+          "fills": {},
+          "status": "correct",
+          "critical": false,
+          "preserved": 3,
+          "explicit_fields": 3,
+          "no_model": true
+        },
+        "cache_hits": 0
+      },
+      "optimized": {
+        "planned_calls": 0,
+        "planned_questions": 0,
+        "question_names": [],
+        "calls": 0,
+        "questions": 0,
+        "input_tokens": 0,
+        "cost_usd": 0,
+        "latency_ms": 0,
+        "assessment": {
+          "fills": {},
+          "status": "correct",
+          "critical": false,
+          "preserved": 3,
+          "explicit_fields": 3,
+          "no_model": true
+        },
+        "cache_hits": 0
+      }
+    }
+  ],
+  "audit": {
+    "baseline": {
+      "router.fill": 5,
+      "router.skip": 1
+    },
+    "optimized": {
+      "router.call": 4,
+      "router.questions": 5,
+      "router.abstain": 3,
+      "router.fill": 3,
+      "router.cache": 2,
+      "router.skip": 1
+    }
+  },
+  "totals": {
+    "baseline": {
+      "calls": 6,
+      "questions": 12,
+      "input_tokens": 2972,
+      "cost_usd": 0.000124824,
+      "latency_ms": 2290.870141063351,
+      "planned_calls": 6,
+      "planned_questions": 12
+    },
+    "optimized": {
+      "calls": 4,
+      "questions": 5,
+      "input_tokens": 1730,
+      "cost_usd": 7.266e-05,
+      "latency_ms": 1514.5104629336856,
+      "planned_calls": 4,
+      "planned_questions": 5
+    }
+  },
+  "baseline_minus_optimized": {
+    "unique": {
+      "calls": 0,
+      "questions": 3,
+      "input_tokens": 251,
+      "cost_usd": 1.0541999999999995e-05,
+      "latency_ms": -33.66992383962497
+    },
+    "repeat": {
+      "calls": 2,
+      "questions": 4,
+      "input_tokens": 991,
+      "cost_usd": 4.1622e-05,
+      "latency_ms": 810.0296019692905
+    }
+  }
+}

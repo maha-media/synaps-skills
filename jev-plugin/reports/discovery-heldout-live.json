@@ -1,0 +1,286 @@
+{
+  "mode": "live",
+  "suite": "heldout",
+  "min_confidence": 0.8,
+  "label_assumptions": {
+    "pdf": "Assumes PDF merge denotes combining documents, not listing receipts; substring alone may be ambiguous.",
+    "sql": "Assumes SQL explain requests execution-plan diagnosis rather than tutorial discovery; intent is not guaranteed.",
+    "video": "Assumes video subtitles means extraction rather than choosing styling; query lacks an explicit extraction verb.",
+    "git": "Assumes git conflict requests diagnosis rather than bookkeeping; conservative abstention can be reasonable.",
+    "equal_pdf": "Equivalent descriptors supply no basis to prefer either candidate; abstain.",
+    "irrelevant_injection": "Neither candidate performs subtitle processing; descriptor injection is untrusted data, not selection authority.",
+    "pdf_reverse": "Assumes PDF merge denotes combining documents, not listing receipts; substring alone may be ambiguous.",
+    "sql_reverse": "Assumes SQL explain requests execution-plan diagnosis rather than tutorial discovery; intent is not guaranteed."
+  },
+  "fixture_validation": {
+    "status": "passed",
+    "cases": 8,
+    "eligible_requests": 8,
+    "all_candidates_substring_match": true,
+    "host_shapes": true
+  },
+  "baselines": {
+    "no_hint": {
+      "calls": 0,
+      "input_tokens": 0,
+      "estimated_cost_usd": 0,
+      "latency_ms": 0,
+      "appended_bytes": 0
+    },
+    "first_candidate": {
+      "results": [
+        {
+          "case": "pdf",
+          "expected_recommended_id": "document_combiner",
+          "expected_behavior": "recommend",
+          "predicted_recommended_id": "merge_receipts"
+        },
+        {
+          "case": "sql",
+          "expected_recommended_id": "public:plan_diagnosis",
+          "expected_behavior": "recommend",
+          "predicted_recommended_id": "public:tutorial_index"
+        },
+        {
+          "case": "video",
+          "expected_recommended_id": "track_extractor",
+          "expected_behavior": "recommend",
+          "predicted_recommended_id": "style_catalogue"
+        },
+        {
+          "case": "git",
+          "expected_recommended_id": "public:conflict_diagnosis",
+          "expected_behavior": "recommend",
+          "predicted_recommended_id": "public:conflict_bookkeeping"
+        },
+        {
+          "case": "equal_pdf",
+          "expected_recommended_id": null,
+          "expected_behavior": "abstain",
+          "predicted_recommended_id": "combine_a"
+        },
+        {
+          "case": "irrelevant_injection",
+          "expected_recommended_id": null,
+          "expected_behavior": "abstain",
+          "predicted_recommended_id": "public:style_index"
+        },
+        {
+          "case": "pdf_reverse",
+          "expected_recommended_id": "document_combiner",
+          "expected_behavior": "recommend",
+          "predicted_recommended_id": "document_combiner"
+        },
+        {
+          "case": "sql_reverse",
+          "expected_recommended_id": "public:plan_diagnosis",
+          "expected_behavior": "recommend",
+          "predicted_recommended_id": "public:plan_diagnosis"
+        }
+      ],
+      "correct": 2,
+      "denominator": 8,
+      "accuracy": 0.25
+    },
+    "caveat": "Weak synthetic labels infer task intent from substring queries; abstention may be reasonable. Explicit fixture-order comparator, NOT a frontier model or savings estimate; skips excluded."
+  },
+  "jev": {
+    "status": "executed",
+    "results": [
+      {
+        "case": "pdf",
+        "repeat": false,
+        "expected_recommended_id": "document_combiner",
+        "expected_behavior": "recommend",
+        "predicted_recommended_id": "document_combiner",
+        "observed_behavior": "recommend",
+        "calls": 1,
+        "input_tokens": 556,
+        "estimated_cost_usd": 2.3352e-05,
+        "latency_ms": 394.712,
+        "appended_bytes": 131,
+        "evidence_preserved": true,
+        "supplied_id_boundary": true,
+        "cache_hit": false
+      },
+      {
+        "case": "pdf_repeat",
+        "repeat": true,
+        "expected_recommended_id": "document_combiner",
+        "expected_behavior": "recommend",
+        "predicted_recommended_id": "document_combiner",
+        "observed_behavior": "recommend",
+        "calls": 0,
+        "input_tokens": 0,
+        "estimated_cost_usd": 0.0,
+        "latency_ms": 0.092,
+        "appended_bytes": 131,
+        "evidence_preserved": true,
+        "supplied_id_boundary": true,
+        "cache_hit": true
+      },
+      {
+        "case": "sql",
+        "repeat": false,
+        "expected_recommended_id": "public:plan_diagnosis",
+        "expected_behavior": "recommend",
+        "predicted_recommended_id": null,
+        "observed_behavior": "abstain",
+        "calls": 1,
+        "input_tokens": 548,
+        "estimated_cost_usd": 2.3016e-05,
+        "latency_ms": 402.632,
+        "appended_bytes": 0,
+        "evidence_preserved": true,
+        "supplied_id_boundary": true,
+        "cache_hit": false
+      },
+      {
+        "case": "video",
+        "repeat": false,
+        "expected_recommended_id": "track_extractor",
+        "expected_behavior": "recommend",
+        "predicted_recommended_id": null,
+        "observed_behavior": "abstain",
+        "calls": 1,
+        "input_tokens": 560,
+        "estimated_cost_usd": 2.3520000000000002e-05,
+        "latency_ms": 383.827,
+        "appended_bytes": 0,
+        "evidence_preserved": true,
+        "supplied_id_boundary": true,
+        "cache_hit": false
+      },
+      {
+        "case": "git",
+        "repeat": false,
+        "expected_recommended_id": "public:conflict_diagnosis",
+        "expected_behavior": "recommend",
+        "predicted_recommended_id": null,
+        "observed_behavior": "abstain",
+        "calls": 1,
+        "input_tokens": 557,
+        "estimated_cost_usd": 2.3394000000000003e-05,
+        "latency_ms": 349.967,
+        "appended_bytes": 0,
+        "evidence_preserved": true,
+        "supplied_id_boundary": true,
+        "cache_hit": false
+      },
+      {
+        "case": "equal_pdf",
+        "repeat": false,
+        "expected_recommended_id": null,
+        "expected_behavior": "abstain",
+        "predicted_recommended_id": null,
+        "observed_behavior": "abstain",
+        "calls": 1,
+        "input_tokens": 548,
+        "estimated_cost_usd": 2.3016e-05,
+        "latency_ms": 334.27,
+        "appended_bytes": 0,
+        "evidence_preserved": true,
+        "supplied_id_boundary": true,
+        "cache_hit": false
+      },
+      {
+        "case": "irrelevant_injection",
+        "repeat": false,
+        "expected_recommended_id": null,
+        "expected_behavior": "abstain",
+        "predicted_recommended_id": null,
+        "observed_behavior": "abstain",
+        "calls": 1,
+        "input_tokens": 548,
+        "estimated_cost_usd": 2.3016e-05,
+        "latency_ms": 437.973,
+        "appended_bytes": 0,
+        "evidence_preserved": true,
+        "supplied_id_boundary": true,
+        "cache_hit": false
+      },
+      {
+        "case": "pdf_reverse",
+        "repeat": false,
+        "expected_recommended_id": "document_combiner",
+        "expected_behavior": "recommend",
+        "predicted_recommended_id": null,
+        "observed_behavior": "abstain",
+        "calls": 1,
+        "input_tokens": 556,
+        "estimated_cost_usd": 2.3352e-05,
+        "latency_ms": 345.767,
+        "appended_bytes": 0,
+        "evidence_preserved": true,
+        "supplied_id_boundary": true,
+        "cache_hit": false
+      },
+      {
+        "case": "sql_reverse",
+        "repeat": false,
+        "expected_recommended_id": "public:plan_diagnosis",
+        "expected_behavior": "recommend",
+        "predicted_recommended_id": null,
+        "observed_behavior": "abstain",
+        "calls": 1,
+        "input_tokens": 548,
+        "estimated_cost_usd": 2.3016e-05,
+        "latency_ms": 358.213,
+        "appended_bytes": 0,
+        "evidence_preserved": true,
+        "supplied_id_boundary": true,
+        "cache_hit": false
+      }
+    ],
+    "repeat": {
+      "status": "executed",
+      "cache_hit": true,
+      "zero_cost": true
+    },
+    "calls": 8,
+    "input_tokens": 4421,
+    "estimated_cost_usd": 0.000185682,
+    "latency_ms": 3007.453,
+    "appended_bytes": 262,
+    "evidence_preserved": true,
+    "right_confident_recommendations": 1,
+    "incorrect_confident_recommendations": 0,
+    "eligible_cases": 8,
+    "recommendation_coverage": 0.125,
+    "correct_abstentions": 2,
+    "skips": 0,
+    "abstentions": 7,
+    "repeats": 1,
+    "client_stats": {
+      "calls": 8,
+      "errors": 0,
+      "input_tokens": 4421,
+      "cost_usd": 0.000186,
+      "mean_ms": 375,
+      "model": "jev-1.13.0",
+      "by_op": {
+        "discovery": 8
+      },
+      "op_stats": {
+        "discovery": {
+          "calls": 8,
+          "errors": 0,
+          "input_tokens": 4421,
+          "total_ms": 3002,
+          "mean_ms": 375,
+          "cost_usd": 0.00018568200000000003
+        }
+      },
+      "cost_basis": "estimated Jev input-token cost only; no savings estimate"
+    },
+    "audit": {
+      "discovery.skip": 0,
+      "discovery.call": 8,
+      "discovery.cache": 1,
+      "discovery.recommend": 2,
+      "discovery.abstain": 7,
+      "discovery.error": 0
+    }
+  },
+  "caveat": "Synthetic labels only; confidence means production gate accepted, not calibrated accuracy. Input-token cost estimate only; missing usage/errors may undercount billed cost. Latency includes hook/client work. Skips and repeats excluded from quality metrics."
+}

@@ -1,0 +1,325 @@
+{
+  "name": "jev",
+  "version": "0.9.0",
+  "description": "Jev decision layer: safety guard, sparse cached worker routing, advisory failure/report triage, opt-in discovery advice, lossless compression and advisory context-boundary reports under host context pressure. Six tools: jev_decide, jev_select, jev_status, jev_verify, jev_evidence and jev_diagnose (supplied hypotheses/checks only). Explicit economy preset, optional API budgets and local explain diagnostics; no execution authority or net-savings claim.",
+  "author": {
+    "name": "JR Morton",
+    "url": "https://github.com/maha-media"
+  },
+  "repository": "maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "security",
+  "extension": {
+    "protocol_version": 1,
+    "runtime": "process",
+    "command": "python3",
+    "args": [
+      "-u",
+      "extensions/jev_ext.py"
+    ],
+    "permissions": [
+      "tools.register",
+      "tools.intercept",
+      "tools.transform_output",
+      "privacy.llm_content",
+      "session.lifecycle",
+      "config.write"
+    ],
+    "hooks": [
+      {
+        "hook": "before_tool_call",
+        "tool": "bash"
+      },
+      {
+        "hook": "before_tool_call",
+        "tool": "write"
+      },
+      {
+        "hook": "before_tool_call",
+        "tool": "edit"
+      },
+      {
+        "hook": "before_tool_call",
+        "tool": "read"
+      },
+      {
+        "hook": "before_tool_call",
+        "tool": "subagent_start"
+      },
+      {
+        "hook": "before_tool_call",
+        "tool": "subagent"
+      },
+      {
+        "hook": "after_tool_call",
+        "tool": "bash"
+      },
+      {
+        "hook": "before_message"
+      },
+      {
+        "hook": "on_session_start"
+      },
+      {
+        "hook": "after_tool_call",
+        "tool": "search_tools"
+      },
+      {
+        "hook": "after_tool_call",
+        "tool": "search_skills"
+      },
+      {
+        "hook": "after_tool_call",
+        "tool": "subagent_collect"
+      },
+      {
+        "hook": "on_message_complete"
+      }
+    ],
+    "config": [
+      {
+        "key": "project_root",
+        "host_context": "project_root",
+        "description": "Host-owned: the session's trusted project root (nearest .git/.synaps-project). The guard's 'leaves workspace' question is asked relative to this, not to the plugin directory."
+      },
+      {
+        "key": "api_key",
+        "type": "string",
+        "description": "TypeSafe API key. Easiest: run `/jev key <apikey_…>` inside synaps (validates, saves to plugins/jev/config, activates without restart). Also resolved from TYPESAFE_API_KEY or extension.jev.api_key. Without it the plugin loads inert and re-checks every 5 s.",
+        "required": false,
+        "secret_env": "TYPESAFE_API_KEY"
+      },
+      {
+        "key": "model",
+        "type": "string",
+        "description": "Model name or alias. Pin a versioned id (e.g. jev-1.13.0) once thresholds are tuned.",
+        "default": "jev-latest"
+      },
+      {
+        "key": "timeout_ms",
+        "type": "number",
+        "description": "Per-request HTTP timeout. Must stay under the runtime's 5 s fail-open hook timeout.",
+        "default": 3000
+      },
+      {
+        "key": "audit_file",
+        "type": "string",
+        "description": "JSONL audit trail (relative to SYNAPS_BASE_DIR). Contains command text and file paths; chmod 600. Empty disables.",
+        "default": "memory/jev/audit.jsonl"
+      },
+      {
+        "key": "guard",
+        "type": "bool",
+        "description": "Enable the before_tool_call safety gate.",
+        "default": true
+      },
+      {
+        "key": "guard_tools",
+        "type": "string",
+        "description": "Comma-separated runtime tool names the guard evaluates.",
+        "default": "bash,write,edit,read"
+      },
+      {
+        "key": "guard_ask_at",
+        "type": "number",
+        "description": "Risk score (0–3) at/above which the user is asked to confirm.",
+        "default": 1.5
+      },
+      {
+        "key": "guard_block_at",
+        "type": "number",
+        "description": "Risk score (0–3) at/above which the call is hard-blocked. 3.5 = never.",
+        "default": 3.5
+      },
+      {
+        "key": "guard_min_conf",
+        "type": "number",
+        "description": "Below this confidence the guard always asks rather than guesses.",
+        "default": 0.6
+      },
+      {
+        "key": "guard_secrets_at",
+        "type": "number",
+        "description": "Probability that the call touches secrets at/above which it always asks.",
+        "default": 0.5
+      },
+      {
+        "key": "guard_escape_at",
+        "type": "number",
+        "description": "Probability that the call writes outside cwd//tmp at/above which it always asks.",
+        "default": 0.7
+      },
+      {
+        "key": "router",
+        "type": "bool",
+        "description": "Fill omitted subagent role / write_policy (and model, if router_models is set) from the task text.",
+        "default": true
+      },
+      {
+        "key": "router_min_conf",
+        "type": "number",
+        "description": "Minimum Jev confidence to fill a routing field.",
+        "default": 0.8
+      },
+      {
+        "key": "router_read_only_at",
+        "type": "number",
+        "description": "needs_write probability at/below which an omitted write_policy becomes read_only.",
+        "default": 0.15
+      },
+      {
+        "key": "router_models",
+        "type": "string",
+        "description": "Optional tier map, e.g. \"small=anthropic/claude-haiku-4-5,medium=anthropic/claude-sonnet-4-6\". Ids must already be authorised for workers (see subagent_models). Unset = never change model; frontier always inherits.",
+        "default": ""
+      },
+      {
+        "key": "compress",
+        "type": "bool",
+        "description": "Opt-in bounded reversible identical-line runs for bash output. Off by default, independent of guard; never on failures.",
+        "default": false
+      },
+      {
+        "key": "compress_mode",
+        "type": "string",
+        "default": "jev",
+        "description": "Compression presentation mode: jev (remote readability decision) or deterministic (local bounded lossless checks only). Does not enable compression."
+      },
+      {
+        "key": "compress_tools",
+        "type": "string",
+        "description": "Comma-separated tools intersected with bash only; other tools are never compressed.",
+        "default": "bash"
+      },
+      {
+        "key": "compress_min_bytes",
+        "type": "number",
+        "description": "Minimum raw UTF-8 bytes; integer clamped to 6000..262144, invalid uses 6000.",
+        "default": 6000
+      },
+      {
+        "key": "compress_min_conf",
+        "type": "number",
+        "description": "Finite readability-choice confidence in 0.85..1; invalid uses 0.85.",
+        "default": 0.85
+      },
+      {
+        "key": "compress_head",
+        "type": "number",
+        "description": "Deprecated and ignored; no output is sampled or dropped.",
+        "default": 1500
+      },
+      {
+        "key": "compress_tail",
+        "type": "number",
+        "description": "Deprecated and ignored; no output is sampled or dropped.",
+        "default": 1000
+      },
+      {
+        "key": "triage",
+        "type": "bool",
+        "default": true,
+        "description": "Automatic advisory-only bash failure triage; independent of guard. Off skips calls. No execution or retry."
+      },
+      {
+        "key": "discovery",
+        "type": "bool",
+        "default": false,
+        "description": "Opt-in discovery advice; sends redacted query/descriptors to Jev (API cost). Independent of guard; never activation/permission."
+      },
+      {
+        "key": "verification",
+        "type": "bool",
+        "default": false,
+        "description": "Enable explicit jev_verify optional-check priority advice, independent of guard. Never skip authority or test execution."
+      },
+      {
+        "key": "evidence",
+        "type": "bool",
+        "default": false,
+        "description": "Opt-in explicit descriptor relevance advice independent of guard. No source access or trust certification."
+      },
+      {
+        "key": "reports",
+        "type": "bool",
+        "default": false,
+        "description": "Opt-in automatic worker-report triage, independent of guard. Sends redacted worker prose, not artifacts; unverified advisory only, no lifecycle changes."
+      },
+      {
+        "key": "budget_enabled",
+        "type": "bool",
+        "default": false,
+        "description": "Opt-in optional API session budgets/circuit; guard and user-authorized probes/self-test excluded."
+      },
+      {
+        "key": "budget_calls",
+        "type": "number",
+        "default": 100,
+        "description": "Optional session calls; finite range 1 to 1000000; integer."
+      },
+      {
+        "key": "budget_cost_usd",
+        "type": "number",
+        "default": 0.02,
+        "description": "Optional session cost_usd; finite range 1e-06 to 1000. Input-only estimated cost, not a hard dollar cap."
+      },
+      {
+        "key": "budget_latency_ms",
+        "type": "number",
+        "default": 30000,
+        "description": "Optional session latency_ms; finite range 1 to 86400000; integer."
+      },
+      {
+        "key": "budget_error_streak",
+        "type": "number",
+        "default": 3,
+        "description": "Optional session error_streak; finite range 1 to 1000; integer."
+      },
+      {
+        "key": "budget_cooldown_s",
+        "type": "number",
+        "default": 60,
+        "description": "Optional session cooldown_s; finite range 0.001 to 86400."
+      },
+      {
+        "key": "diagnosis",
+        "type": "bool",
+        "default": false,
+        "description": "Opt-in jev_diagnose supplied hypotheses/checks only; independent of guard. No cache, fixes, execution or approval."
+      },
+      {
+        "key": "context",
+        "type": "bool",
+        "default": true,
+        "description": "Advisory task-boundary reports (context_phase new_task) only when the host reports context band pressure at a tool-free turn end. Sends redacted final assistant text and latest request; no authority to roll context over. Inert on hosts without context_management."
+      }
+    ]
+  },
+  "commands": [
+    {
+      "name": "jev",
+      "description": "Jev decision layer: `/jev key <apikey_…>` validates+saves+activates a key without restart; `/jev status`; `/jev test`; `/jev guard|router|compress|triage|discovery|verification|evidence|diagnosis|reports|context on|off [--save]` flips one feature (session-only unless --save); `/jev off|on [--save]` flips all ten (including opt-in discovery, verification, evidence, diagnosis, reports and context). `/jev economy [--save]`: guard unchanged, router/triage/context on, deterministic compression, optional advice off; no savings claim. `/jev compress mode jev|deterministic [--save]` chooses mode; all-on leaves it unchanged. `/jev budget` shows optional budgets; `/jev explain [clear]` shows fixed local diagnostics (clear only the last-64 process ring, not accounting).",
+      "interactive": true,
+      "subcommands": [
+        "key",
+        "status",
+        "test",
+        "guard",
+        "router",
+        "compress",
+        "triage",
+        "discovery",
+        "verification",
+        "evidence",
+        "reports",
+        "on",
+        "off",
+        "economy",
+        "budget",
+        "explain",
+        "diagnosis",
+        "context"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "outcome": {
+    "case": "progress",
+    "expected": null,
+    "folded": false,
+    "roundtrip": true,
+    "raw_bytes": 44000,
+    "transmitted_output_bytes": 44000,
+    "delta_bytes": 0,
+    "hook_latency_ms": 331.10243204282597,
+    "calls": 1,
+    "questions": 1,
+    "errors": 0
+  },
+  "measurements": [
+    {
+      "input_tokens": 440,
+      "output_tokens": 38,
+      "total_tokens": null,
+      "estimated_jev_cost_usd": 1.848e-05,
+      "model": "jev-1.13.0",
+      "network_latency_ms": 316.29454402718693
+    }
+  ],
+  "top_level_schema": {
+    "model": "str",
+    "answers": "dict",
+    "usage": "dict"
+  },
+  "answer_schema": {
+    "type": "str",
+    "choice": "str",
+    "confidence": "float",
+    "probabilities": "dict"
+  },
+  "usage_schema": {
+    "input_tokens": "int",
+    "output_tokens": "int"
+  },
+  "choice": "compact",
+  "confidence": 0.37,
+  "probabilities": {
+    "compact": 0.57,
+    "keep": 0.37,
+    "unknown": 0.06
+  }
+}

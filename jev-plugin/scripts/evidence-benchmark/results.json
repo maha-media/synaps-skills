@@ -1,0 +1,841 @@
+{
+  "mode": "live",
+  "protocol": {
+    "cases": 4,
+    "eligible_calls": 4,
+    "questions": 12,
+    "max_wire_calls": 4,
+    "retries": 0,
+    "model": "jev-1.13.0",
+    "confidence_gate": "production unchanged >=0.8"
+  },
+  "baseline": {
+    "description": "First optional priority; remaining later; input order unchanged.",
+    "calls": 0,
+    "cases": [
+      {
+        "case": "parser",
+        "expected": {
+          "http": "later",
+          "parser": "inspect_first",
+          "edge": "inspect_first"
+        },
+        "actual": {
+          "http": "inspect_first",
+          "parser": "later",
+          "edge": "later"
+        },
+        "ordered_ids": [
+          "parser-required",
+          "http",
+          "parser",
+          "edge"
+        ],
+        "quality": {
+          "relevant_count": 2,
+          "selected_count": 1,
+          "relevant_selected": 0,
+          "wrong_priorities": 1,
+          "optional_recall": 0.0,
+          "optional_precision": 0.0,
+          "priority_coverage": 1.0,
+          "review_count": 0,
+          "expected_review_count": 0
+        }
+      },
+      {
+        "case": "auth",
+        "expected": {
+          "css": "later",
+          "current": "inspect_first",
+          "historic": "inspect_first"
+        },
+        "actual": {
+          "css": "inspect_first",
+          "current": "later",
+          "historic": "later"
+        },
+        "ordered_ids": [
+          "auth-required",
+          "css",
+          "current",
+          "historic"
+        ],
+        "quality": {
+          "relevant_count": 2,
+          "selected_count": 1,
+          "relevant_selected": 0,
+          "wrong_priorities": 1,
+          "optional_recall": 0.0,
+          "optional_precision": 0.0,
+          "priority_coverage": 1.0,
+          "review_count": 0,
+          "expected_review_count": 0
+        }
+      },
+      {
+        "case": "ui",
+        "expected": {
+          "injected": "later",
+          "keyboard": "inspect_first",
+          "unclear": "review"
+        },
+        "actual": {
+          "injected": "inspect_first",
+          "keyboard": "later",
+          "unclear": "later"
+        },
+        "ordered_ids": [
+          "ui-required",
+          "injected",
+          "keyboard",
+          "unclear"
+        ],
+        "quality": {
+          "relevant_count": 1,
+          "selected_count": 1,
+          "relevant_selected": 0,
+          "wrong_priorities": 1,
+          "optional_recall": 0.0,
+          "optional_precision": 0.0,
+          "priority_coverage": 1.0,
+          "review_count": 0,
+          "expected_review_count": 1
+        }
+      },
+      {
+        "case": "vague",
+        "expected": {
+          "note": "review",
+          "page": "review",
+          "item": "review"
+        },
+        "actual": {
+          "note": "inspect_first",
+          "page": "later",
+          "item": "later"
+        },
+        "ordered_ids": [
+          "vague-required",
+          "note",
+          "page",
+          "item"
+        ],
+        "quality": {
+          "relevant_count": 0,
+          "selected_count": 1,
+          "relevant_selected": 0,
+          "wrong_priorities": 1,
+          "optional_recall": null,
+          "optional_precision": 0.0,
+          "priority_coverage": 1.0,
+          "review_count": 0,
+          "expected_review_count": 3
+        }
+      }
+    ],
+    "quality": {
+      "relevant_count": 5,
+      "selected_count": 4,
+      "relevant_selected": 0,
+      "wrong_priorities": 4,
+      "optional_recall": 0.0,
+      "optional_precision": 0.0,
+      "priority_coverage": 1.0,
+      "review_count": 0,
+      "expected_review_count": 4
+    }
+  },
+  "variants": [
+    {
+      "case": "parser:all-required",
+      "expected": {},
+      "actual": {
+        "parser-required": "required",
+        "http": "required",
+        "parser": "required",
+        "edge": "required"
+      },
+      "ordered_ids": [
+        "parser-required",
+        "http",
+        "parser",
+        "edge"
+      ],
+      "quality": {
+        "relevant_count": 0,
+        "selected_count": 0,
+        "relevant_selected": 0,
+        "wrong_priorities": 0,
+        "optional_recall": null,
+        "optional_precision": null,
+        "priority_coverage": null,
+        "review_count": 0,
+        "expected_review_count": 0
+      },
+      "required_preserved": true,
+      "references_exact": true,
+      "input_unchanged": true,
+      "all_ids_once": true,
+      "bucket_order_exact": true,
+      "fetched": false,
+      "trust_certified": false,
+      "questions": 0,
+      "output_bytes": 1021,
+      "hook_latency_ms": null,
+      "wire_calls": 0
+    },
+    {
+      "case": "parser:off",
+      "expected": {
+        "http": "later",
+        "parser": "inspect_first",
+        "edge": "inspect_first"
+      },
+      "actual": {
+        "parser-required": "required",
+        "http": "review",
+        "parser": "review",
+        "edge": "review"
+      },
+      "ordered_ids": [
+        "parser-required",
+        "http",
+        "parser",
+        "edge"
+      ],
+      "quality": {
+        "relevant_count": 2,
+        "selected_count": 0,
+        "relevant_selected": 0,
+        "wrong_priorities": 0,
+        "optional_recall": 0.0,
+        "optional_precision": null,
+        "priority_coverage": 0.0,
+        "review_count": 3,
+        "expected_review_count": 0
+      },
+      "required_preserved": true,
+      "references_exact": true,
+      "input_unchanged": true,
+      "all_ids_once": true,
+      "bucket_order_exact": true,
+      "fetched": false,
+      "trust_certified": false,
+      "questions": 0,
+      "output_bytes": 1076,
+      "hook_latency_ms": null,
+      "wire_calls": 0
+    },
+    {
+      "case": "parser:no-key",
+      "expected": {
+        "http": "later",
+        "parser": "inspect_first",
+        "edge": "inspect_first"
+      },
+      "actual": {
+        "parser-required": "required",
+        "http": "review",
+        "parser": "review",
+        "edge": "review"
+      },
+      "ordered_ids": [
+        "parser-required",
+        "http",
+        "parser",
+        "edge"
+      ],
+      "quality": {
+        "relevant_count": 2,
+        "selected_count": 0,
+        "relevant_selected": 0,
+        "wrong_priorities": 0,
+        "optional_recall": 0.0,
+        "optional_precision": null,
+        "priority_coverage": 0.0,
+        "review_count": 3,
+        "expected_review_count": 0
+      },
+      "required_preserved": true,
+      "references_exact": true,
+      "input_unchanged": true,
+      "all_ids_once": true,
+      "bucket_order_exact": true,
+      "fetched": false,
+      "trust_certified": false,
+      "questions": 0,
+      "output_bytes": 1069,
+      "hook_latency_ms": null,
+      "wire_calls": 0
+    },
+    {
+      "case": "auth:all-required",
+      "expected": {},
+      "actual": {
+        "auth-required": "required",
+        "css": "required",
+        "current": "required",
+        "historic": "required"
+      },
+      "ordered_ids": [
+        "auth-required",
+        "css",
+        "current",
+        "historic"
+      ],
+      "quality": {
+        "relevant_count": 0,
+        "selected_count": 0,
+        "relevant_selected": 0,
+        "wrong_priorities": 0,
+        "optional_recall": null,
+        "optional_precision": null,
+        "priority_coverage": null,
+        "review_count": 0,
+        "expected_review_count": 0
+      },
+      "required_preserved": true,
+      "references_exact": true,
+      "input_unchanged": true,
+      "all_ids_once": true,
+      "bucket_order_exact": true,
+      "fetched": false,
+      "trust_certified": false,
+      "questions": 0,
+      "output_bytes": 1029,
+      "hook_latency_ms": null,
+      "wire_calls": 0
+    },
+    {
+      "case": "auth:off",
+      "expected": {
+        "css": "later",
+        "current": "inspect_first",
+        "historic": "inspect_first"
+      },
+      "actual": {
+        "auth-required": "required",
+        "css": "review",
+        "current": "review",
+        "historic": "review"
+      },
+      "ordered_ids": [
+        "auth-required",
+        "css",
+        "current",
+        "historic"
+      ],
+      "quality": {
+        "relevant_count": 2,
+        "selected_count": 0,
+        "relevant_selected": 0,
+        "wrong_priorities": 0,
+        "optional_recall": 0.0,
+        "optional_precision": null,
+        "priority_coverage": 0.0,
+        "review_count": 3,
+        "expected_review_count": 0
+      },
+      "required_preserved": true,
+      "references_exact": true,
+      "input_unchanged": true,
+      "all_ids_once": true,
+      "bucket_order_exact": true,
+      "fetched": false,
+      "trust_certified": false,
+      "questions": 0,
+      "output_bytes": 1084,
+      "hook_latency_ms": null,
+      "wire_calls": 0
+    },
+    {
+      "case": "auth:no-key",
+      "expected": {
+        "css": "later",
+        "current": "inspect_first",
+        "historic": "inspect_first"
+      },
+      "actual": {
+        "auth-required": "required",
+        "css": "review",
+        "current": "review",
+        "historic": "review"
+      },
+      "ordered_ids": [
+        "auth-required",
+        "css",
+        "current",
+        "historic"
+      ],
+      "quality": {
+        "relevant_count": 2,
+        "selected_count": 0,
+        "relevant_selected": 0,
+        "wrong_priorities": 0,
+        "optional_recall": 0.0,
+        "optional_precision": null,
+        "priority_coverage": 0.0,
+        "review_count": 3,
+        "expected_review_count": 0
+      },
+      "required_preserved": true,
+      "references_exact": true,
+      "input_unchanged": true,
+      "all_ids_once": true,
+      "bucket_order_exact": true,
+      "fetched": false,
+      "trust_certified": false,
+      "questions": 0,
+      "output_bytes": 1077,
+      "hook_latency_ms": null,
+      "wire_calls": 0
+    },
+    {
+      "case": "ui:all-required",
+      "expected": {},
+      "actual": {
+        "ui-required": "required",
+        "injected": "required",
+        "keyboard": "required",
+        "unclear": "required"
+      },
+      "ordered_ids": [
+        "ui-required",
+        "injected",
+        "keyboard",
+        "unclear"
+      ],
+      "quality": {
+        "relevant_count": 0,
+        "selected_count": 0,
+        "relevant_selected": 0,
+        "wrong_priorities": 0,
+        "optional_recall": null,
+        "optional_precision": null,
+        "priority_coverage": null,
+        "review_count": 0,
+        "expected_review_count": 0
+      },
+      "required_preserved": true,
+      "references_exact": true,
+      "input_unchanged": true,
+      "all_ids_once": true,
+      "bucket_order_exact": true,
+      "fetched": false,
+      "trust_certified": false,
+      "questions": 0,
+      "output_bytes": 1041,
+      "hook_latency_ms": null,
+      "wire_calls": 0
+    },
+    {
+      "case": "ui:off",
+      "expected": {
+        "injected": "later",
+        "keyboard": "inspect_first",
+        "unclear": "review"
+      },
+      "actual": {
+        "ui-required": "required",
+        "injected": "review",
+        "keyboard": "review",
+        "unclear": "review"
+      },
+      "ordered_ids": [
+        "ui-required",
+        "injected",
+        "keyboard",
+        "unclear"
+      ],
+      "quality": {
+        "relevant_count": 1,
+        "selected_count": 0,
+        "relevant_selected": 0,
+        "wrong_priorities": 0,
+        "optional_recall": 0.0,
+        "optional_precision": null,
+        "priority_coverage": 0.0,
+        "review_count": 3,
+        "expected_review_count": 1
+      },
+      "required_preserved": true,
+      "references_exact": true,
+      "input_unchanged": true,
+      "all_ids_once": true,
+      "bucket_order_exact": true,
+      "fetched": false,
+      "trust_certified": false,
+      "questions": 0,
+      "output_bytes": 1096,
+      "hook_latency_ms": null,
+      "wire_calls": 0
+    },
+    {
+      "case": "ui:no-key",
+      "expected": {
+        "injected": "later",
+        "keyboard": "inspect_first",
+        "unclear": "review"
+      },
+      "actual": {
+        "ui-required": "required",
+        "injected": "review",
+        "keyboard": "review",
+        "unclear": "review"
+      },
+      "ordered_ids": [
+        "ui-required",
+        "injected",
+        "keyboard",
+        "unclear"
+      ],
+      "quality": {
+        "relevant_count": 1,
+        "selected_count": 0,
+        "relevant_selected": 0,
+        "wrong_priorities": 0,
+        "optional_recall": 0.0,
+        "optional_precision": null,
+        "priority_coverage": 0.0,
+        "review_count": 3,
+        "expected_review_count": 1
+      },
+      "required_preserved": true,
+      "references_exact": true,
+      "input_unchanged": true,
+      "all_ids_once": true,
+      "bucket_order_exact": true,
+      "fetched": false,
+      "trust_certified": false,
+      "questions": 0,
+      "output_bytes": 1089,
+      "hook_latency_ms": null,
+      "wire_calls": 0
+    },
+    {
+      "case": "vague:all-required",
+      "expected": {},
+      "actual": {
+        "vague-required": "required",
+        "note": "required",
+        "page": "required",
+        "item": "required"
+      },
+      "ordered_ids": [
+        "vague-required",
+        "note",
+        "page",
+        "item"
+      ],
+      "quality": {
+        "relevant_count": 0,
+        "selected_count": 0,
+        "relevant_selected": 0,
+        "wrong_priorities": 0,
+        "optional_recall": null,
+        "optional_precision": null,
+        "priority_coverage": null,
+        "review_count": 0,
+        "expected_review_count": 0
+      },
+      "required_preserved": true,
+      "references_exact": true,
+      "input_unchanged": true,
+      "all_ids_once": true,
+      "bucket_order_exact": true,
+      "fetched": false,
+      "trust_certified": false,
+      "questions": 0,
+      "output_bytes": 1009,
+      "hook_latency_ms": null,
+      "wire_calls": 0
+    },
+    {
+      "case": "vague:off",
+      "expected": {
+        "note": "review",
+        "page": "review",
+        "item": "review"
+      },
+      "actual": {
+        "vague-required": "required",
+        "note": "review",
+        "page": "review",
+        "item": "review"
+      },
+      "ordered_ids": [
+        "vague-required",
+        "note",
+        "page",
+        "item"
+      ],
+      "quality": {
+        "relevant_count": 0,
+        "selected_count": 0,
+        "relevant_selected": 0,
+        "wrong_priorities": 0,
+        "optional_recall": null,
+        "optional_precision": null,
+        "priority_coverage": 0.0,
+        "review_count": 3,
+        "expected_review_count": 3
+      },
+      "required_preserved": true,
+      "references_exact": true,
+      "input_unchanged": true,
+      "all_ids_once": true,
+      "bucket_order_exact": true,
+      "fetched": false,
+      "trust_certified": false,
+      "questions": 0,
+      "output_bytes": 1064,
+      "hook_latency_ms": null,
+      "wire_calls": 0
+    },
+    {
+      "case": "vague:no-key",
+      "expected": {
+        "note": "review",
+        "page": "review",
+        "item": "review"
+      },
+      "actual": {
+        "vague-required": "required",
+        "note": "review",
+        "page": "review",
+        "item": "review"
+      },
+      "ordered_ids": [
+        "vague-required",
+        "note",
+        "page",
+        "item"
+      ],
+      "quality": {
+        "relevant_count": 0,
+        "selected_count": 0,
+        "relevant_selected": 0,
+        "wrong_priorities": 0,
+        "optional_recall": null,
+        "optional_precision": null,
+        "priority_coverage": 0.0,
+        "review_count": 3,
+        "expected_review_count": 3
+      },
+      "required_preserved": true,
+      "references_exact": true,
+      "input_unchanged": true,
+      "all_ids_once": true,
+      "bucket_order_exact": true,
+      "fetched": false,
+      "trust_certified": false,
+      "questions": 0,
+      "output_bytes": 1057,
+      "hook_latency_ms": null,
+      "wire_calls": 0
+    }
+  ],
+  "jev": {
+    "status": "executed",
+    "cases": [
+      {
+        "case": "parser",
+        "expected": {
+          "http": "later",
+          "parser": "inspect_first",
+          "edge": "inspect_first"
+        },
+        "actual": {
+          "parser-required": "required",
+          "http": "review",
+          "parser": "inspect_first",
+          "edge": "review"
+        },
+        "ordered_ids": [
+          "parser-required",
+          "parser",
+          "http",
+          "edge"
+        ],
+        "quality": {
+          "relevant_count": 2,
+          "selected_count": 1,
+          "relevant_selected": 1,
+          "wrong_priorities": 0,
+          "optional_recall": 0.5,
+          "optional_precision": 1.0,
+          "priority_coverage": 0.3333333333333333,
+          "review_count": 2,
+          "expected_review_count": 0
+        },
+        "required_preserved": true,
+        "references_exact": true,
+        "input_unchanged": true,
+        "all_ids_once": true,
+        "bucket_order_exact": true,
+        "fetched": false,
+        "trust_certified": false,
+        "questions": 3,
+        "output_bytes": 1023,
+        "hook_latency_ms": 424.72109996015206
+      },
+      {
+        "case": "auth",
+        "expected": {
+          "css": "later",
+          "current": "inspect_first",
+          "historic": "inspect_first"
+        },
+        "actual": {
+          "auth-required": "required",
+          "css": "later",
+          "current": "inspect_first",
+          "historic": "inspect_first"
+        },
+        "ordered_ids": [
+          "auth-required",
+          "current",
+          "historic",
+          "css"
+        ],
+        "quality": {
+          "relevant_count": 2,
+          "selected_count": 2,
+          "relevant_selected": 2,
+          "wrong_priorities": 0,
+          "optional_recall": 1.0,
+          "optional_precision": 1.0,
+          "priority_coverage": 1.0,
+          "review_count": 0,
+          "expected_review_count": 0
+        },
+        "required_preserved": true,
+        "references_exact": true,
+        "input_unchanged": true,
+        "all_ids_once": true,
+        "bucket_order_exact": true,
+        "fetched": false,
+        "trust_certified": false,
+        "questions": 3,
+        "output_bytes": 1037,
+        "hook_latency_ms": 406.72828804235905
+      },
+      {
+        "case": "ui",
+        "expected": {
+          "injected": "later",
+          "keyboard": "inspect_first",
+          "unclear": "review"
+        },
+        "actual": {
+          "ui-required": "required",
+          "injected": "review",
+          "keyboard": "review",
+          "unclear": "review"
+        },
+        "ordered_ids": [
+          "ui-required",
+          "injected",
+          "keyboard",
+          "unclear"
+        ],
+        "quality": {
+          "relevant_count": 1,
+          "selected_count": 0,
+          "relevant_selected": 0,
+          "wrong_priorities": 0,
+          "optional_recall": 0.0,
+          "optional_precision": null,
+          "priority_coverage": 0.0,
+          "review_count": 3,
+          "expected_review_count": 1
+        },
+        "required_preserved": true,
+        "references_exact": true,
+        "input_unchanged": true,
+        "all_ids_once": true,
+        "bucket_order_exact": true,
+        "fetched": false,
+        "trust_certified": false,
+        "questions": 3,
+        "output_bytes": 1037,
+        "hook_latency_ms": 373.62033600220457
+      },
+      {
+        "case": "vague",
+        "expected": {
+          "note": "review",
+          "page": "review",
+          "item": "review"
+        },
+        "actual": {
+          "vague-required": "required",
+          "note": "review",
+          "page": "review",
+          "item": "review"
+        },
+        "ordered_ids": [
+          "vague-required",
+          "note",
+          "page",
+          "item"
+        ],
+        "quality": {
+          "relevant_count": 0,
+          "selected_count": 0,
+          "relevant_selected": 0,
+          "wrong_priorities": 0,
+          "optional_recall": null,
+          "optional_precision": null,
+          "priority_coverage": 0.0,
+          "review_count": 3,
+          "expected_review_count": 3
+        },
+        "required_preserved": true,
+        "references_exact": true,
+        "input_unchanged": true,
+        "all_ids_once": true,
+        "bucket_order_exact": true,
+        "fetched": false,
+        "trust_certified": false,
+        "questions": 3,
+        "output_bytes": 1005,
+        "hook_latency_ms": 352.3393770447001
+      }
+    ],
+    "calls": 4,
+    "questions": 12,
+    "quality": {
+      "relevant_count": 5,
+      "selected_count": 3,
+      "relevant_selected": 3,
+      "wrong_priorities": 0,
+      "optional_recall": 0.6,
+      "optional_precision": 1.0,
+      "priority_coverage": 0.3333333333333333,
+      "review_count": 8,
+      "expected_review_count": 4
+    },
+    "input_tokens": 2872,
+    "estimated_cost_usd": 0.00012062400000000002,
+    "actual_models": [
+      "jev-1.13.0",
+      "jev-1.13.0",
+      "jev-1.13.0",
+      "jev-1.13.0"
+    ],
+    "network_latency_ms": {
+      "total": 1556.3945209723897,
+      "p50": 389.9670584942214,
+      "p95": 421.6253908147337
+    },
+    "hook_latency_ms": {
+      "total": 1557.4091010494158,
+      "p50": 390.1743120222818,
+      "p95": 422.0221781724831
+    },
+    "output_bytes": 4102,
+    "required_preservation_rate": 1.0
+  }
+}

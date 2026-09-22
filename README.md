@@ -7,6 +7,11 @@
 
 Give your coding agent web search, YouTube downloads, speech-to-text, browser automation, persistent memory, tmux orchestration, terminal-code integration, and battle-tested engineering disciplines — all in one repo.
 
+## Offline workflow comparison
+
+[Jev workflow comparison](jev-plugin/docs/workflow-comparison.md) provides an
+offline toy harness, not evidence of production savings. See the [Jev plugin](jev-plugin/README.md).
+
 ## ⚡ Quick Start
 
 ```bash
@@ -90,6 +95,12 @@ Skills are bundled into plugins. Each plugin lives in its own directory and decl
 | Extension | What it does | Requires |
 |-----------|-------------|----------|
 | **[bell](bell-plugin/README.md)** | Rings the terminal bell + tab badge and plays a sound when the assistant's turn completes (streaming → ready); Ghostty-friendly, terminal-agnostic | Python 3.8+; optional `pw-play`/`paplay` for audio |
+
+### 🛡️ jev-plugin
+
+| Extension / Skill | What it does | Requires |
+|-------------------|-------------|----------|
+| **[jev](jev-plugin/README.md)** | Calibrated decision layer via TypeSafe Jev (System One): fail-closed tool-call safety gate on `bash`/`write`/`edit`/`read`, subagent auto-routing (`role`/`write_policy`/tier), opt-in lossless identical-line bash compression (0.7.0) and worker-report triage (no host authority), six explicit tools (`jev_decide`, `jev_select`, `jev_status`, `jev_verify`, `jev_evidence`, `jev_diagnose`); evidence descriptor relevance is opt-in and never fetch or trust authorization | Python 3.9+; `TYPESAFE_API_KEY` |
 
 ## 🔧 Install Script
 
