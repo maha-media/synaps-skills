@@ -1118,6 +1118,12 @@ calls). No cache: each turn end is unique. Counters: `context.call`,
 `context.error`; explanations include `notpressure`. `/jev context on|off
 [--save]`; on by default and in `/jev economy`.
 
+The extension also answers the optional `info.get` RPC (feature inventory as
+`capabilities`, the decision model as `models`; no secrets). Hosts that see
+extension tools probe it once at boot, and the unknown-method error older
+versions returned was treated as a transport failure — costing one process
+restart per session start.
+
 ## Explicit diagnosis priority: `jev_diagnose`
 
 The sixth tool is always advertised but **off by default**. Enable with

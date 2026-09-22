@@ -296,6 +296,29 @@ class FeatureProtocolTests(unittest.TestCase):
         self.assertEqual(mixed['input']['model'], 'exact/id')
         self.assertEqual(other.status()['counters']['router.questions'], 1)
 
+    def test_info_get_answers_without_error_and_without_secrets(self):
+        """Hosts that see extension tools probe `info.get` once at boot; an
+        unknown-method error there is treated as a transport failure by the
+        host and costs a process restart, so the extension must answer."""
+        h = self.host()
+        response = h.request('info.get', None)
+        self.assertNotIn('error', response)
+        info = response['result']
+        self.assertEqual(set(info), {'capabilities', 'models'})
+        names = {c['name']: c for c in info['capabilities']}
+        self.assertEqual(set(names), set(h.status()['features']))
+        for c in names.values():
+            self.assertEqual(set(c), {'kind', 'name', 'modes'})
+            self.assertEqual(c['kind'], 'decision')
+            self.assertIn(c['modes'], (['on'], ['off']))
+        self.assertEqual(names['tools']['modes'], ['on'])
+        self.assertEqual(names['discovery']['modes'], ['off'])
+        self.assertEqual(len(info['models']), 1)
+        self.assertEqual(set(info['models'][0]), {'id', 'display_name', 'installed'})
+        self.assertFalse(info['models'][0]['installed'])
+        self.assertNotIn('apikey_', json.dumps(info))
+        self.assertEqual(h.request('no.such.method', None)['error']['code'], -32601)
+
     def test_other_features_and_tools_remain_independent(self):
         h = self.host(config={'compress': True})
         self.command(h, 'guard', 'off')

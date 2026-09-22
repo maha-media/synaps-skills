@@ -136,6 +136,18 @@ class Extension:
         self.compress_cfg.mode = mode
         self.recompute_features()
 
+    def info(self) -> dict:
+        """Optional `info.get` metadata ({build, capabilities, models}); no secrets.
+
+        Hosts that expose tools probe this once at boot; answering keeps the
+        boot path free of the unknown-method error (which older hosts treat as
+        a transport failure and answer with a process restart).
+        """
+        caps = [{"kind": "decision", "name": k, "modes": ["on" if v else "off"]}
+                for k, v in self.features.items()]
+        return {"capabilities": caps,
+                "models": [{"id": self.model_name(), "display_name": "TypeSafe Jev", "installed": False}]}
+
     def model_name(self) -> str:
         return str(self.cfg.get("model") or "jev-latest")
 
@@ -378,6 +390,8 @@ def dispatch(ext: Extension, req: dict) -> bool:
                 reply_error(req_id, -32000, str(e))
         elif method == "command.invoke":
             reply(req_id, commands.handle(req.get("params") or {}, ext, send, host_call))
+        elif method == "info.get":
+            reply(req_id, ext.info())
         elif method == "shutdown":
             reply(req_id, None)
             return False
