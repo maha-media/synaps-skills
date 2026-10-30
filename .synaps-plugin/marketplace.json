@@ -44,7 +44,7 @@
     {
       "name": "tmux-tools",
       "description": "Use when `$TMUX` is set to drive long-running, interactive, or streaming work in a side worker pane — installs needing sudo, log tailing, build/test daemons, parallel shells, user-injectable input.",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "author": {
         "name": "JR Morton",
         "url": "https://github.com/maha-media"

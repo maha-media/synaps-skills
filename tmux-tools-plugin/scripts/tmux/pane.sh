@@ -23,9 +23,27 @@ PROG="$(basename "$0")"
 die()  { echo "$PROG: error: $*" >&2; exit 1; }
 warn() { echo "$PROG: $*" >&2; }
 
+# Install hint for a missing tmux. The only place that branches on OS.
+tmux_install_hint() {
+    case "$(uname -s 2>/dev/null || echo unknown)" in
+        Darwin)
+            echo "install it with: brew install tmux (or: sudo port install tmux)" ;;
+        Linux)
+            if command -v apt-get >/dev/null 2>&1; then echo "install it with: sudo apt-get install tmux"
+            elif command -v dnf >/dev/null 2>&1; then echo "install it with: sudo dnf install tmux"
+            elif command -v pacman >/dev/null 2>&1; then echo "install it with: sudo pacman -S tmux"
+            elif command -v zypper >/dev/null 2>&1; then echo "install it with: sudo zypper install tmux"
+            elif command -v apk >/dev/null 2>&1; then echo "install it with: sudo apk add tmux"
+            else echo "install tmux with your distribution's package manager"
+            fi ;;
+        *)
+            echo "install tmux: https://github.com/tmux/tmux/wiki/Installing" ;;
+    esac
+}
+
 require_tmux() {
+    command -v tmux >/dev/null 2>&1 || die "tmux command not found on PATH; $(tmux_install_hint)"
     [ -n "${TMUX:-}" ] || die "not inside a tmux session (TMUX env var unset)"
-    command -v tmux >/dev/null 2>&1 || die "tmux command not found on PATH"
 }
 
 # Find pane id by title. Echoes pane id (e.g. %2) or empty.
@@ -241,7 +259,7 @@ cmd_id() {
 }
 
 usage() {
-    sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
+    sed -n '2,/^$/p' "$0" | sed 's/^# //;s/^#//'
     exit 2
 }
 

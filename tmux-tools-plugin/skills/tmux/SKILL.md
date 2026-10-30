@@ -14,8 +14,8 @@ When you're running inside tmux (`$TMUX` is set), you have a superpower beyond t
 Use this skill when:
 
 - A command needs **sudo** or any interactive prompt (password, "Are you sure? [y/N]", ssh fingerprint accept)
-- You're starting a **long-running process** (apt install, large pip install, cargo build, docker pull) and want to keep working
-- You want to **tail logs** while doing other work (`tail -f app.log`, `journalctl -fu service`)
+- You're starting a **long-running process** (apt/brew install, large pip install, cargo build, docker pull) and want to keep working
+- You want to **tail logs** while doing other work (`tail -f app.log`; Linux `journalctl -fu service`; macOS `log stream --predicate 'process == "name"'`)
 - You're running **multiple things in parallel** (build + test + lint)
 - You want the user to **see what you're doing** in real time (debugging, demos, anything novel)
 
@@ -41,7 +41,7 @@ PANE=${CLAUDE_PLUGIN_ROOT}/scripts/tmux/pane.sh
 $PANE spawn install --size 30 --side below
 
 # 2. Run a command, wait for prompt return, get output
-$PANE run install "sudo apt-get update" --timeout 60
+$PANE run install "sudo apt-get update" --timeout 60   # macOS: "brew update"
 
 # 3. Close when done
 $PANE close install
@@ -96,7 +96,9 @@ The user enters the password directly in the pane. You don't see it; you just wa
 
 ```bash
 $PANE spawn install --size 30
-$PANE send install "sudo apt-get install -y python3.14-venv"
+$PANE send install "sudo apt-get install -y python3.14-venv"   # Linux (Debian/Ubuntu)
+# macOS: Homebrew needs no sudo (e.g. "brew install python@3.14"); the
+# password flow below is the same for any sudo command.
 # Tell the user: "Waiting for sudo password in pane 'install' — please enter it"
 $PANE wait install --timeout 120
 $PANE poll install --lines 20      # confirm success
@@ -187,10 +189,10 @@ Pick one name per concern, not per command. Reuse across the session.
 
 | Name | What runs there |
 |---|---|
-| `install` | apt/pip/cargo install workflows |
+| `install` | apt/brew/pip/cargo install workflows |
 | `build` | compile/bundle |
 | `test` | test runners |
-| `logs` | tail -f / journalctl -f |
+| `logs` | tail -f / journalctl -f (Linux) / log stream (macOS) |
 | `repl` | interactive interpreter |
 | `db` | psql / mysql / redis-cli |
 | `ssh` | remote session |
@@ -233,7 +235,7 @@ In the meantime, a one-liner check at session start is enough:
 - **Prompt detection is heuristic.** It looks for lines ending in `$ `, `# `, `> `, `% `. If you have a custom PS1 (powerline, multi-line), `wait` may time out even when idle. Check with `poll` and assume idle if last line stable across two polls.
 - **`capture-pane` returns the visible screen**, ~30-50 lines. For history beyond that, use `--full` to grab the entire scrollback.
 - **`send` includes Enter automatically.** For input without newline, use `keys NAME "text"` (no Enter) then `keys NAME Enter` separately.
-- **The script requires `$TMUX` to be set** — won't work outside tmux.
+- **The script requires `$TMUX` to be set** — won't work outside tmux. If tmux itself is missing, `pane.sh` exits with an install hint for the OS (e.g. `brew install tmux` on macOS, `sudo apt-get install tmux` on Debian/Ubuntu).
 
 ## End-to-end smoke test
 
