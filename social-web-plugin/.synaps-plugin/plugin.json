@@ -1,0 +1,12 @@
+{
+  "name": "social-web",
+  "version": "0.1.2",
+  "description": "Polite, read-only, logged-out look at public social media pages (YouTube, TikTok, Instagram, X, Spotify, SoundCloud, Bandcamp, Suno): profiles, recent posts, single items, and an honest 'needs login' when a site requires sign-in.",
+  "author": {
+    "name": "JR Morton",
+    "url": "https://github.com/maha-media"
+  },
+  "repository": "maha-media/synaps-skills",
+  "license": "MIT",
+  "category": "productivity"
+}

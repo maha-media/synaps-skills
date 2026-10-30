@@ -25,6 +25,8 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/browser/browser-start.js                # fresh pr
 ${CLAUDE_PLUGIN_ROOT}/scripts/browser/browser-start.js --profile      # copy your default Chrome profile (cookies/logins)
 ${CLAUDE_PLUGIN_ROOT}/scripts/browser/browser-start.js --headless     # headless
 ${CLAUDE_PLUGIN_ROOT}/scripts/browser/browser-start.js --port=9333    # custom CDP port
+${CLAUDE_PLUGIN_ROOT}/scripts/browser/browser-start.js --data-dir DIR # dedicated profile dir instead of ~/.cache/browser-tools (or env BROWSER_TOOLS_DATA_DIR; flag wins; refuses real Chrome profiles, $HOME, /; not with --profile)
+${CLAUDE_PLUGIN_ROOT}/scripts/browser/browser-start.js --wayland      # native Wayland window (--ozone-platform=wayland, no X); default with --data-dir when WAYLAND_DISPLAY is set; --no-wayland opts out; with --data-dir/--wayland, an unset DBUS_SESSION_BUS_ADDRESS is set to $XDG_RUNTIME_DIR/bus if that socket exists
 ```
 
 `--profile` syncs `~/.config/google-chrome/` (Linux), `~/Library/Application Support/Google/Chrome/`

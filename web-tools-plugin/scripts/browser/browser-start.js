@@ -5,42 +5,67 @@
  */
 import { chromium } from "playwright";
 import { execSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, platform } from "node:os";
 import { recallAndEmit, failAndExit } from "../_lib/hooks.mjs";
+import { parseStartArgs, DATA_DIR_ENV, chromeExtraArgs, chromeEnv } from "./start-args.mjs";
 
-const args = process.argv.slice(2);
-const useProfile = args.includes("--profile");
-const headless = args.includes("--headless");
-const port = parseInt(args.find((a) => a.startsWith("--port="))?.split("=")[1] || "9222", 10);
+let parsed;
+try {
+  parsed = parseStartArgs(process.argv.slice(2), process.env);
+} catch (e) {
+  console.error(`browser-start.js: ${e.message}`);
+  process.exit(2);
+}
+const { useProfile, headless, port, dataDirSource } = parsed;
 
-if (args.includes("--help") || args.includes("-h")) {
+if (parsed.help) {
   console.log("Usage: browser-start.js [options]");
   console.log("");
   console.log("Options:");
   console.log("  --profile   Copy your default Chrome profile (cookies, logins)");
   console.log("  --headless  Run in headless mode");
   console.log("  --port=N    Remote debugging port (default: 9222)");
+  console.log("  --data-dir DIR  Use a dedicated profile dir instead of ~/.cache/browser-tools");
+  console.log(`              (or env ${DATA_DIR_ENV}; the flag wins; not allowed with --profile)`);
+  console.log("  --wayland   Native Wayland window (--ozone-platform=wayland, no X); default with --data-dir");
+  console.log("              when WAYLAND_DISPLAY is set. --no-wayland opts out.");
   process.exit(0);
 }
 
 const OP = "browser-start";
 recallAndEmit(`browser launch ${headless ? "headless" : ""}`.trim(), { op: OP });
 
-const DATA_DIR = join(homedir(), ".cache", "browser-tools");
+const DATA_DIR = parsed.dataDir; // default: ~/.cache/browser-tools
+const customDir = dataDirSource !== "default";
 
 // Check if already running
+let alreadyRunning = false;
 try {
   const browser = await chromium.connectOverCDP(`http://localhost:${port}`);
   await browser.close();
+  alreadyRunning = true;
+} catch {}
+if (alreadyRunning) {
+  if (customDir) {
+    // The running browser may use a different profile; never hand it out as the dedicated one.
+    console.error(`browser-start.js: a browser is already running on :${port} and its profile may not be ${DATA_DIR}. ` +
+                  "Close it, or use another --port.");
+    process.exit(1);
+  }
   console.log(`✓ Browser already running on :${port}`);
   process.exit(0);
-} catch {}
+}
 
 try {
-  // Setup data directory
-  mkdirSync(DATA_DIR, { recursive: true });
+  // Setup data directory (a dedicated --data-dir is private to the user)
+  if (customDir) {
+    mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    chmodSync(DATA_DIR, 0o700);
+  } else {
+    mkdirSync(DATA_DIR, { recursive: true });
+  }
 
   // Clean stale lock files
   for (const lock of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
@@ -113,10 +138,12 @@ try {
   ];
 
   if (headless) launchArgs.push("--headless=new");
+  launchArgs.push(...chromeExtraArgs(parsed));
 
   const child = spawn(execPath, launchArgs, {
     detached: true,
     stdio: "ignore",
+    env: chromeEnv(parsed, process.env),
   });
   child.unref();
 
@@ -143,7 +170,8 @@ try {
     });
   }
 
-  console.log(`✓ Browser started on :${port}${useProfile ? " with your profile" : ""}${headless ? " (headless)" : ""}`);
+  console.log(`✓ Browser started on :${port}${useProfile ? " with your profile" : ""}${headless ? " (headless)" : ""}${customDir ? ` (profile dir ${DATA_DIR})` : ""}${parsed.wayland ? " (native Wayland)" : ""}`);
+  if (customDir) console.log(`  pid ${child.pid}`);
 } catch (e) {
   failAndExit({
     host: null, op: OP,
