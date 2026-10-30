@@ -20,6 +20,7 @@ from pathlib import Path
 # Wire in self-healing hooks
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _lib import hooks  # noqa: E402
+from _lib.host import host_get  # noqa: E402
 
 
 SUPPORTED_EXT = {".mp3", ".mp4", ".m4a", ".wav", ".ogg", ".flac", ".webm", ".mpeg", ".mpga", ".avi", ".mkv", ".mov"}
@@ -68,19 +69,40 @@ def check_dependencies():
         )
 
 
+def mps_available(torch) -> bool:
+    """Apple-silicon GPU (Metal Performance Shaders) usable by this torch build."""
+    mps = getattr(getattr(torch, "backends", None), "mps", None)
+    try:
+        return bool(mps is not None and mps.is_available())
+    except Exception:
+        return False
+
+
 def detect_device():
-    """Detect the best available device and report details."""
+    """Detect the best available device and report details.
+
+    Order: CUDA (NVIDIA; ROCm builds report here too), then MPS (Apple silicon),
+    then CPU. The host profile's gpu.kind=none forces the CPU; unset means probe.
+    """
     import torch
 
+    kind = host_get("gpu.kind")
+    if kind == "none":
+        print("Host profile gpu.kind=none — using CPU (transcription will be slower)", file=sys.stderr)
+        return "cpu", 0
     if torch.cuda.is_available():
         name = torch.cuda.get_device_name(0)
         vram_bytes = torch.cuda.get_device_properties(0).total_memory
         vram_gb = vram_bytes / (1024 ** 3)
         print(f"GPU detected: {name} ({vram_gb:.1f} GB VRAM)", file=sys.stderr)
         return "cuda", vram_gb
-    else:
-        print("No GPU detected — using CPU (transcription will be slower)", file=sys.stderr)
-        return "cpu", 0
+    if mps_available(torch):
+        print("Apple GPU detected (MPS)", file=sys.stderr)
+        return "mps", 0
+    if kind:
+        print(f"Host profile gpu.kind={kind}, but torch can't use it here", file=sys.stderr)
+    print("No GPU detected — using CPU (transcription will be slower)", file=sys.stderr)
+    return "cpu", 0
 
 
 def auto_select_model(device: str, vram_gb: float) -> str:
@@ -88,6 +110,10 @@ def auto_select_model(device: str, vram_gb: float) -> str:
     if device == "cpu":
         model = "base"
         print(f"Auto-selected model: {model} (best for CPU)", file=sys.stderr)
+        return model
+    if device == "mps":
+        model = "small"
+        print(f"Auto-selected model: {model} (Apple GPU, shared memory)", file=sys.stderr)
         return model
 
     if vram_gb >= 8:
@@ -174,10 +200,11 @@ def transcribe(
     print(f"Transcribing: {file_path.name} ({size_mb:.1f} MB)", file=sys.stderr)
     print(f"Model: {model_name} | Language: {language or 'auto-detect'} | Device: {device}", file=sys.stderr)
 
-    # Load model and transcribe
+    # Load model and transcribe. Some whisper/torch builds can't run whisper on
+    # MPS (e.g. its sparse alignment heads): then use the CPU instead of failing.
     try:
         model = whisper.load_model(model_name, device=device)
-    except RuntimeError as e:
+    except RuntimeError as e:  # NotImplementedError is a RuntimeError
         if "out of memory" in str(e).lower() or "CUDA" in str(e):
             hooks.fail_and_exit(
                 host=HOST, op=OP, err=e,
@@ -185,7 +212,11 @@ def transcribe(
                 cmd=f"transcribe.py {file_path} --model {model_name}",
                 args={"model": model_name, "device": device},
             )
-        raise
+        if device != "mps":
+            raise
+        print(f"MPS could not load the model ({type(e).__name__}); falling back to CPU", file=sys.stderr)
+        device = "cpu"
+        model = whisper.load_model(model_name, device=device)
 
     transcribe_kwargs = {"verbose": False}
     if language:
@@ -201,7 +232,12 @@ def transcribe(
                 cmd=f"transcribe.py {file_path} --model {model_name}",
                 args={"model": model_name, "device": device},
             )
-        raise
+        if device != "mps":
+            raise
+        print(f"MPS failed while transcribing ({type(e).__name__}); retrying on CPU", file=sys.stderr)
+        device = "cpu"
+        model = whisper.load_model(model_name, device=device)
+        result = model.transcribe(str(file_path), **transcribe_kwargs)
 
     text = result["text"].strip()
     segments = result.get("segments", [])
@@ -271,7 +307,7 @@ def main():
                         help="Whisper model: tiny, base, small, medium, large-v3, turbo (default: auto)")
     parser.add_argument("--language", default=None,
                         help="Language code, e.g. en, es, fr (default: auto-detect)")
-    parser.add_argument("--device", help="Device: cuda, cpu (default: auto-detect)")
+    parser.add_argument("--device", help="Device: cuda, mps (Apple silicon), cpu (default: auto-detect)")
     parser.add_argument("--stdout", action="store_true",
                         help="Print plain text to stdout only (no files written)")
     args = parser.parse_args()

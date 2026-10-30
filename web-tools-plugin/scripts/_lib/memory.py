@@ -3,7 +3,7 @@ web-tools/_lib/memory.py
 
 Thin wrapper around VelociRAG for the `web` plugin namespace.
 
-    ~/.synaps-cli/memory/web/
+    $SYNAPS_BASE_DIR/memory/web/     (SYNAPS_BASE_DIR defaults to ~/.synaps-cli)
       notes/         ← markdown files we write (source of truth)
       db/            ← VelociRAG's index (derived)
       failures.jsonl ← raw operational failure log
@@ -20,7 +20,8 @@ API:
     reindex()                                             -> bool
 
 Env:
-    WEB_MEMORY_ROOT   override root path (default: ~/.synaps-cli/memory/web)
+    WEB_MEMORY_ROOT   override root path (default: $SYNAPS_BASE_DIR/memory/web)
+    SYNAPS_BASE_DIR   Synaps base dir (default: ~/.synaps-cli)
     WEB_MEMORY_DEBUG  if set, log diagnostics to stderr
 """
 from __future__ import annotations
@@ -36,7 +37,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-ROOT = Path(os.environ.get("WEB_MEMORY_ROOT") or Path.home() / ".synaps-cli" / "memory" / "web")
+BASE_DIR = Path(os.environ.get("SYNAPS_BASE_DIR") or Path.home() / ".synaps-cli").expanduser()
+ROOT = Path(os.environ.get("WEB_MEMORY_ROOT") or BASE_DIR / "memory" / "web")
 NOTES = ROOT / "notes"
 INDEX = ROOT / "db"
 FAILURES = ROOT / "failures.jsonl"

@@ -183,7 +183,7 @@ export function failAndExit(opts) {
   _stderr(`  err_class=${errClass}${host ? ` host=${host}` : ""}`);
   if (stale) {
     _stderr(`STALE: (${host}, ${op}, ${errClass}) seen ≥2× in last 7d — recall + re-investigate.`);
-    _stderr(`       velocirag search "${host} ${errClass}" --db ~/.synaps-cli/memory/web/db -l 5`);
+    _stderr(`       velocirag search "${host} ${errClass}" --db ${memory.INDEX} -l 5`);
   }
   if (opts.stdout) process.stdout.write(opts.stdout);
   _stderr(`__error_json__ ${JSON.stringify(errorOut)}`);

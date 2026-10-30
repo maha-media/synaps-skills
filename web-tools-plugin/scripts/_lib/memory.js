@@ -4,7 +4,7 @@
  *
  * Thin wrapper around VelociRAG for the `web` plugin namespace.
  *
- *   ~/.synaps-cli/memory/web/
+ *   $SYNAPS_BASE_DIR/memory/web/     (SYNAPS_BASE_DIR defaults to ~/.synaps-cli)
  *     notes/        ← markdown files we write (source of truth)
  *     db/           ← VelociRAG's index (derived)
  *     failures.jsonl ← raw operational failure log
@@ -20,7 +20,8 @@
  *   reindex()                       -> bool
  *
  * Env:
- *   WEB_MEMORY_ROOT   override root path (default: ~/.synaps-cli/memory/web)
+ *   WEB_MEMORY_ROOT   override root path (default: $SYNAPS_BASE_DIR/memory/web)
+ *   SYNAPS_BASE_DIR   Synaps base dir (default: ~/.synaps-cli)
  *   WEB_MEMORY_DEBUG  if set, log diagnostics to stderr
  */
 
@@ -30,7 +31,8 @@ const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
 
-const ROOT     = process.env.WEB_MEMORY_ROOT || path.join(os.homedir(), '.synaps-cli', 'memory', 'web');
+const BASE_DIR = process.env.SYNAPS_BASE_DIR || path.join(os.homedir(), '.synaps-cli');
+const ROOT     = process.env.WEB_MEMORY_ROOT || path.join(BASE_DIR, 'memory', 'web');
 const NOTES    = path.join(ROOT, 'notes');
 const INDEX    = path.join(ROOT, 'db');
 const FAILURES = path.join(ROOT, 'failures.jsonl');

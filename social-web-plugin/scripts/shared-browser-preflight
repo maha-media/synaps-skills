@@ -5,19 +5,24 @@ Read-only, local checks only. It never opens, reads, copies or prints cookies,
 tokens, profile files or the X authority file; it only checks that things exist
 (and their type/permissions via stat).
 
-    shared-browser-preflight [--data-dir DIR] [--port 9222] [--json]
+    shared-browser-preflight [--data-dir DIR | --lane] [--port 9222] [--json]
 
 The shared browser uses its own profile dir, by default ~/.cache/browser-tools-shared
-(mode 0700), or a lane's own 0700 scratch dir given with --data-dir (e.g.
-/var/tmp/social/chrome-shared), and any free --port (one browser per port):
-    browser-start.js --data-dir ~/.cache/browser-tools-shared --wayland --port=9222
+(mode 0700), or a lane's own 0700 scratch dir: any dir given with --data-dir, or with
+--lane <scratch.dir>/social-web/chrome-shared (scratch.dir from the host profile,
+else ~/.cache/pria/scratch on Linux, ~/Library/Caches/Pria/scratch on macOS; an
+existing /var/tmp/social/chrome-shared is kept while scratch.dir is unset), and any
+free --port (one browser per port):
+    browser-start.js --data-dir ~/.cache/browser-tools-shared [--wayland] --port=9222
+(--wayland is Linux-only; the preflight adds it only when native Wayland is ready.)
 It is for sessions shared with the user only; never point other agent work at it.
 The web skill's normal dir (~/.cache/browser-tools) is not used and not checked.
 
 Checks:
   1. web-tools' browser-start.js is installed and supports --data-dir (web-tools >= 1.3.2);
   2. HOME is not overridden (a scratch HOME breaks X auth for headed windows);
-  3. display: if WAYLAND_DISPLAY is set and $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY exists,
+  3. display (Linux only; elsewhere Chrome opens a normal window):
+     if WAYLAND_DISPLAY is set and $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY exists,
      ready as a native Wayland window (--wayland; no X access). Only without Wayland:
      DISPLAY set and the X authority file exists ($XAUTHORITY, else ~/.Xauthority),
      existence only; XAUTHORITY pointing at the compositor's cookie is refused;
@@ -36,7 +41,12 @@ import socket
 import stat
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from _lib.host import host_get  # noqa: E402
+
 SHARED_DIR_NAME = os.path.join(".cache", "browser-tools-shared")
+# Lane dir used before scratch.dir existed (Linux lanes). Kept while scratch.dir is unset.
+LEGACY_LANE_DIR = "/var/tmp/social/chrome-shared"
 
 
 def real_home():
@@ -69,6 +79,18 @@ def shared_dir(home, data_dir=None):
     if d == "~" or d.startswith("~/"):
         d = os.path.join(home, d[2:])
     return os.path.abspath(d)
+
+
+def lane_dir():
+    """A lane's own shared-profile dir: <scratch.dir>/social-web/chrome-shared.
+
+    An existing /var/tmp/social/chrome-shared (the old lane dir) is kept while
+    scratch.dir is unset, so earlier shared sign-ins are still found.
+    """
+    scratch = host_get("scratch.dir", None)
+    if scratch is None and os.path.lexists(LEGACY_LANE_DIR):
+        return LEGACY_LANE_DIR
+    return os.path.join(scratch or host_get("scratch.dir"), "social-web", "chrome-shared")
 
 
 def port_in_use(port, host="127.0.0.1"):
@@ -129,10 +151,10 @@ def display_checks(env, home):
     elif xa:
         if not os.path.isfile(xa):
             blockers.append(f"XAUTHORITY points to {xa}, which does not exist: X will refuse the window on "
-                            f"{x11}. Ask the user to start it from his desktop session.")
+                            f"{x11}. Ask the user to start it from their desktop session.")
     elif not os.path.isfile(os.path.join(home, ".Xauthority")):
         blockers.append(f"no Wayland, XAUTHORITY not set and ~/.Xauthority missing: X will likely refuse the "
-                        f"window on {x11}. Ask the user to start the shared browser from his desktop session. "
+                        f"window on {x11}. Ask the user to start the shared browser from their desktop session. "
                         "Never point XAUTHORITY at the compositor's cookie or another session's X auth.")
     return blockers, issues, notes, "x11"
 
@@ -197,18 +219,23 @@ def preflight(port, env=None, data_dir=None):
     return {"status": status, "blockers": blockers, "issues": issues, "notes": notes, "start_command": cmd,
             "shared_dir": sdir,
             "rules": "headed (no --headless), dedicated --data-dir (never --profile, never a HOME override), "
-                     "user signs in himself, read-only, close the browser when the session ends"}
+                     "the user signs in to their own accounts, read-only, close the browser when the session "
+                     "ends"}
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="shared-browser-preflight", description=__doc__.splitlines()[0])
     ap.add_argument("--port", type=int, default=9222, help="CDP port (one browser per port; default 9222)")
-    ap.add_argument("--data-dir", default=None,
-                    help="shared profile dir (default ~/.cache/browser-tools-shared; or a lane's own 0700 "
-                         "scratch dir, e.g. /var/tmp/social/chrome-shared)")
+    where = ap.add_mutually_exclusive_group()
+    where.add_argument("--data-dir", default=None,
+                       help="shared profile dir (default ~/.cache/browser-tools-shared; or a lane's own 0700 "
+                            "scratch dir)")
+    where.add_argument("--lane", action="store_true",
+                       help="use the lane dir <scratch.dir>/social-web/chrome-shared (an existing "
+                            f"{LEGACY_LANE_DIR} is kept while scratch.dir is unset)")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
-    r = preflight(a.port, data_dir=a.data_dir)
+    r = preflight(a.port, data_dir=lane_dir() if a.lane else a.data_dir)
     if a.json:
         print(json.dumps(r, indent=2))
     else:

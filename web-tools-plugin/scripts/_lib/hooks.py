@@ -197,7 +197,7 @@ def fail_and_exit(*, host: str | None, op: str | None, err: Any,
     _stderr(f"  err_class={cls}" + (f" host={host}" if host else ""))
     if stale:
         _stderr(f"STALE: ({host}, {op}, {cls}) seen ≥2× in last 7d — recall + re-investigate.")
-        _stderr(f"       velocirag search \"{host} {cls}\" --db ~/.synaps-cli/memory/web/db -l 5")
+        _stderr(f"       velocirag search \"{host} {cls}\" --db {memory.INDEX} -l 5")
     _stderr(f"__error_json__ {json.dumps(err_out)}")
     sys.exit(exit)
 

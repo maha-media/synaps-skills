@@ -13,6 +13,7 @@ import sys
 sys.dont_write_bytecode = True
 import tempfile
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.parse
 
@@ -708,6 +709,94 @@ class PreflightTests(unittest.TestCase):
         j = json.loads(out.getvalue())
         self.assertIn("--port=9444", j["start_command"])
         self.assertIn(code, (0, 1, 2))
+
+
+# --------------------------------------------------------------------------- host facts
+
+class HostFactTests(unittest.TestCase):
+    """scripts/_lib/host.py and the preflight's --lane dir, with a fake (or no) pria-fleet."""
+
+    def setUp(self):
+        path = os.path.join(os.path.dirname(HERE), "scripts", "shared-browser-preflight")
+        loader = importlib.machinery.SourceFileLoader("preflight_host", path)
+        self.pf = importlib.util.module_from_spec(importlib.util.spec_from_loader("preflight_host", loader))
+        loader.exec_module(self.pf)
+        self.host = sys.modules["_lib.host"]
+        self.tmp = tempfile.mkdtemp()
+        self.bin = os.path.join(self.tmp, "bin")
+        os.makedirs(self.bin)
+        self.home = os.path.join(self.tmp, "home")
+        os.makedirs(self.home)
+        self.old = dict(os.environ)
+        os.environ.update(PATH=self.bin, HOME=self.home)
+        self.host._cache.clear()
+        del self.host._warned[:]
+        self.pf.LEGACY_LANE_DIR = os.path.join(self.tmp, "var-tmp-social", "chrome-shared")
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.old)
+        self.host._cache.clear()
+        del self.host._warned[:]
+
+    def fake_fleet(self, out, rc):
+        p = os.path.join(self.bin, "pria-fleet")
+        with open(p, "w") as f:
+            f.write(f"#!/bin/sh\n[ \"$1 $2\" = 'host get' ] || exit 2\nprintf '%s\\n' '{out}'\nexit {rc}\n")
+        os.chmod(p, 0o755)
+
+    def os_scratch(self):
+        if sys.platform == "darwin":
+            return os.path.join(self.home, "Library", "Caches", "Pria", "scratch")
+        return os.path.join(self.home, ".cache", "pria", "scratch")
+
+    def test_no_pria_fleet_uses_os_default(self):
+        self.assertEqual(self.host.host_get("scratch.dir"), self.os_scratch())
+        self.assertIsNone(self.host.host_get("scratch.dir", None))
+        self.assertEqual(self.host.host_get("browser.cdp_port", "9222"), "9222")
+
+    def test_value_and_non_zero_exits(self):
+        self.fake_fleet("/srv/scratch", 0)
+        self.assertEqual(self.host.host_get("scratch.dir"), "/srv/scratch")
+        for rc in (9, 2):                                              # unset; unknown key / old pria-fleet
+            self.host._cache.clear()
+            self.fake_fleet("ignored", rc)
+            err = io.StringIO()
+            with unittest.mock.patch("sys.stderr", err):
+                self.assertEqual(self.host.host_get("scratch.dir"), self.os_scratch())
+            self.assertEqual(err.getvalue(), "")
+
+    def test_profile_problem_warns_once(self):
+        for rc in (6, 1):
+            self.host._cache.clear()
+            del self.host._warned[:]
+            self.fake_fleet("ignored", rc)
+            err = io.StringIO()
+            with unittest.mock.patch("sys.stderr", err):
+                self.assertIsNone(self.host.host_get("scratch.dir", None))
+                self.assertIsNone(self.host.host_get("gpu.kind", None))
+            self.assertEqual(err.getvalue().count("warning"), 1, err.getvalue())
+
+    def test_lane_dir(self):
+        self.assertEqual(self.pf.lane_dir(), os.path.join(self.os_scratch(), "social-web", "chrome-shared"))
+        os.makedirs(self.pf.LEGACY_LANE_DIR)                          # old lane dir, scratch.dir unset: keep it
+        self.assertEqual(self.pf.lane_dir(), self.pf.LEGACY_LANE_DIR)
+        self.host._cache.clear()
+        self.fake_fleet("/srv/scratch", 0)                            # scratch.dir set: the new dir wins
+        self.assertEqual(self.pf.lane_dir(), "/srv/scratch/social-web/chrome-shared")
+
+    def test_cli_lane(self):
+        self.fake_fleet(self.tmp, 0)
+        self.pf.port_in_use = lambda port, host="127.0.0.1": False
+        out = io.StringIO()
+        import contextlib
+        with contextlib.redirect_stdout(out):
+            self.pf.main(["--json", "--lane", "--port", "9340"])
+        j = json.loads(out.getvalue())
+        self.assertEqual(j["shared_dir"], os.path.join(self.tmp, "social-web", "chrome-shared"))
+        self.assertIn("--port=9340", j["start_command"])
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.pf.main(["--lane", "--data-dir", self.tmp])
 
 
 # --------------------------------------------------------------------------- cli
