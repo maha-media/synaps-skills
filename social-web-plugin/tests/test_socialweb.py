@@ -375,13 +375,13 @@ class SunoTests(unittest.TestCase):
     def test_posts_newest_first_own_songs_only(self):
         r = sw.cmd_posts(make_ctx({self.URL: fx("suno_profile.html")}), "suno", "@examplehandle", 10)
         titles = [i["title"] for i in r["items"]]
-        self.assertEqual(titles, ["IT'S SO OVER (Remastered)", "STOP / DON'T STOP", "ONTOLOGICAL"])
+        self.assertEqual(titles, ["IT'S A FIXTURE (Remastered)", "GO / DON'T GO", "FIXTURE SONG"])
         self.assertEqual(r["items"][0]["counts"], {"plays": 6, "likes": 1, "comments": 0})
 
     def test_post(self):
-        u = "https://suno.com/song/e9572465-10f8-4443-a7f9-1683a6978356"
+        u = "https://suno.com/song/11111111-1111-4111-8111-111111111111"
         r = sw.cmd_post(make_ctx({u: fx("suno_song.html")}), u)
-        self.assertEqual(r["title"], "ONTOLOGICAL")
+        self.assertEqual(r["title"], "FIXTURE SONG")
         self.assertEqual(r["author_url"], "https://suno.com/@examplehandle")
         self.assertEqual(r["duration_s"], 181)
 
@@ -718,7 +718,7 @@ class CliTests(unittest.TestCase):
         code, out, _ = run_main(["posts", "suno", "examplehandle", "--limit", "2"], ctx)
         self.assertEqual(code, 0)
         self.assertIn("DATE", out)
-        self.assertIn("IT'S SO OVER", out)
+        self.assertIn("IT'S A FIXTURE", out)
         code, out, _ = run_main(["--json", "posts", "suno", "examplehandle", "--limit", "2"], ctx)
         self.assertEqual(len(json.loads(out)["items"]), 2)
 
