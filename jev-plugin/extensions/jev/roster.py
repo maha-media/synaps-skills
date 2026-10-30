@@ -6,7 +6,8 @@ A fleet session is one whose id is listed in the fleet's own files:
 - every team.toml under <fleet>/projects/ (searched recursively; lanes
   can live in subfolders): `foreman` and every `[[worker]].session`.
 
-<fleet> is ~/.pria/fleet. A file is read again when its mtime, size or
+<fleet> is the host profile's app.fleet_dir (~/.pria/fleet; the reader
+computes it, there is no stored override). A file is read again when its mtime, size or
 inode changes; the projects tree is searched again at most every REWALK_S
 seconds, or every MISS_REWALK_S when a session is not found (a lane just
 added). Only the ids are kept, never other file content.
@@ -28,9 +29,10 @@ import time
 import tomllib
 from pathlib import Path
 
+from . import host_profile
 from .logs import Notice
 
-FLEET_DIR = None        # None: ~/.pria/fleet. Tests point it at a scratch tree.
+FLEET_DIR = None        # None: the host profile's app.fleet_dir. Tests point it at a scratch tree.
 REWALK_S = 30.0         # look for new or removed team.toml files at most this often
 MISS_REWALK_S = 2.0     # ... or this often when a session is not found
 MAX_FILE_BYTES = 1 << 20
@@ -49,7 +51,8 @@ class _Vanished(Exception):
 def default_fleet_dir() -> Path:
     if FLEET_DIR:
         return Path(FLEET_DIR)
-    return Path(os.path.expanduser("~")) / ".pria" / "fleet"
+    p = host_profile.HostProfile.current().app_fleet_dir()
+    return Path(p) if p else Path(os.path.expanduser("~")) / ".pria" / "fleet"
 
 
 def _strings(*values) -> set:
@@ -79,7 +82,8 @@ def team_ids(data: dict) -> set:
 
 class FleetRoster:
     def __init__(self, fleet_dir=None, clock=time.monotonic) -> None:
-        self.dir = Path(fleet_dir) if fleet_dir else default_fleet_dir()
+        self._given = Path(fleet_dir) if fleet_dir else None
+        self.dir = self._given or default_fleet_dir()
         self.clock = clock
         self._cache: dict = {}      # path -> (stat key, ids)
         self._teams = None          # team.toml paths from the last search
@@ -129,6 +133,10 @@ class FleetRoster:
 
     # ── reading
     def _ids(self, force_walk: bool):
+        if self._given is None:  # follow the profile; a new dir starts with nothing cached
+            current = default_fleet_dir()
+            if current != self.dir:
+                self.dir, self._cache, self._teams, self._walked = current, {}, None, None
         try:
             st = os.stat(self.dir)
         except FileNotFoundError:

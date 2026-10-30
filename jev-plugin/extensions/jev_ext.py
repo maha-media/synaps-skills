@@ -47,6 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from jev import audit as audit_mod  # noqa: E402
 from jev import commands, compress, context, discovery, diagnose, evidence, guard, keys, logs, relay, reports, router, tools, triage, verify  # noqa: E402
+from jev import host_profile  # noqa: E402
 from jev.policy import BudgetPolicy
 from jev.client import DecisionClient, JevError, Stats  # noqa: E402
 
@@ -271,13 +272,15 @@ def select_transport(value) -> str:
     """Config `transport`: relay | direct | auto (default). An unrecognised
     non-empty value means auto and logs one fixed line (never the value).
     auto is relay whenever the Pria desktop state dir exists (a Pria host),
-    even if a key also exists; otherwise the key path."""
+    even if a key also exists; otherwise the key path. A host with no state
+    dir (no host profile on macOS) is direct."""
     choice = value.strip().lower() if isinstance(value, str) else ("" if value is None else None)
     if choice in ("relay", "direct"):
         return choice
     if choice not in ("", "auto"):
         log(TRANSPORT_UNRECOGNISED)
-    return "relay" if relay.state_dir().is_dir() else "direct"
+    directory = relay.state_dir()
+    return "relay" if directory is not None and directory.is_dir() else "direct"
 
 
 # ── extension state ──────────────────────────────────────────────────────────
@@ -488,6 +491,10 @@ class Extension:
         """`received`: time.monotonic() when the frame arrived; the guard's
         budget runs from there (None: from now)."""
         self.maybe_pick_up_key()
+        try:  # before any guard alarm; a cheap stat unless host.toml changed or 60 s passed
+            host_profile.HostProfile.current().refresh()
+        except Exception:  # noqa: BLE001 — the profile keeps its last values
+            pass
         with self.policy.scoped(params.get("session_id")), relay.session(params.get("session_id")):
             return self._hook(params, received)
 
@@ -507,7 +514,7 @@ class Extension:
             # it refuses (R-GATE: whatever the key, budget, circuit or guard
             # switch; only guard_rule1 = off stops it). Its scan is timed by
             # the same frame-receipt budget and done before the guard's.
-            # The access rule (owner rules 27a/27b): deterministic, no model,
+            # The access rule (and its sandbox switch): deterministic, no model,
             # first and alone when it refuses (R-GATE, like rule 1; only
             # guard_access = off stops it).
             decided = guard.access_check(params, self.guard_cfg, self.audit, self.op_log, started=received)
@@ -689,6 +696,7 @@ def main() -> None:
     STDERR.make_nonblocking()
     if FILELOG.path is None:
         FILELOG.path = logs.default_path()
+    host_profile.HostProfile.log = log  # one line per host profile error state
     log("started")
     running = True
     while running:

@@ -1,8 +1,9 @@
 """Relay transport: jev.decide through the Pria Desktop app (contract J1 r1.1).
 
 On a Pria host the plugin holds no Jev key. Each decision opens ONE short
-connection to the app's Fleet API socket (~/.local/state/pria-desktop/
-fleet.sock), says hello with the app's per-start fleet.token (read fresh per
+connection to the app's Fleet API socket (<app.state_dir>/fleet.sock; the
+host profile's app.state_dir, by default ~/.local/state/pria-desktop on Linux
+and none elsewhere, so no relay), says hello with the app's per-start fleet.token (read fresh per
 connection, never kept, never logged), sends one `jev.decide` line and reads
 one reply line. Any refusal, malformed or missing answer, close or deadline is
 a RelayOff: the call behaves exactly as if no client existed (Jev-off), with
@@ -24,12 +25,13 @@ import socket
 import time
 from pathlib import Path
 
+from . import host_profile
 from .client import DecisionClient, JevError, Stats
 from .logs import notice
 
 VERSION = "0.9.0"  # == .synaps-plugin/plugin.json "version"
 CLIENT = f"jev-relay/{VERSION}"
-STATE_DIR = None  # None: ~/.local/state/pria-desktop (tests point this at a temp dir)
+STATE_DIR = None  # None: the host profile's app.state_dir (tests point this at a temp dir)
 SOCKET_NAME = "fleet.sock"
 TOKEN_NAME = "fleet.token"
 MAX_LINE = 65536  # whole request line, newline included
@@ -57,8 +59,12 @@ _clock = time.monotonic
 SESSION: contextvars.ContextVar = contextvars.ContextVar("jev_relay_session", default=None)
 
 
-def state_dir() -> Path:
-    return Path(STATE_DIR) if STATE_DIR else Path.home() / ".local" / "state" / "pria-desktop"
+def state_dir() -> Path | None:
+    """The app's state dir, or None when this host has none (no relay)."""
+    if STATE_DIR:
+        return Path(STATE_DIR)
+    p = host_profile.HostProfile.current().app_state_dir()
+    return Path(p) if p else None
 
 
 def valid_session(value) -> bool:
@@ -239,6 +245,8 @@ class RelayClient(DecisionClient):
     def _post(self, body: bytes, *, timeout_s: float) -> dict:
         end = time.monotonic() + timeout_s
         directory = Path(self.state_dir) if self.state_dir else state_dir()
+        if directory is None:
+            raise RelayOff("no_socket")
         sock = None
         try:
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
