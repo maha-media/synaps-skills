@@ -1,0 +1,108 @@
+{
+  "mode": "offline",
+  "suite": "heldout",
+  "min_confidence": 0.8,
+  "label_assumptions": {
+    "pdf": "Assumes PDF merge denotes combining documents, not listing receipts; substring alone may be ambiguous.",
+    "sql": "Assumes SQL explain requests execution-plan diagnosis rather than tutorial discovery; intent is not guaranteed.",
+    "video": "Assumes video subtitles means extraction rather than choosing styling; query lacks an explicit extraction verb.",
+    "git": "Assumes git conflict requests diagnosis rather than bookkeeping; conservative abstention can be reasonable.",
+    "equal_pdf": "Equivalent descriptors supply no basis to prefer either candidate; abstain.",
+    "irrelevant_injection": "Neither candidate performs subtitle processing; descriptor injection is untrusted data, not selection authority.",
+    "pdf_reverse": "Assumes PDF merge denotes combining documents, not listing receipts; substring alone may be ambiguous.",
+    "sql_reverse": "Assumes SQL explain requests execution-plan diagnosis rather than tutorial discovery; intent is not guaranteed."
+  },
+  "fixture_validation": {
+    "status": "passed",
+    "cases": 8,
+    "eligible_requests": 8,
+    "all_candidates_substring_match": true,
+    "host_shapes": true
+  },
+  "baselines": {
+    "no_hint": {
+      "calls": 0,
+      "input_tokens": 0,
+      "estimated_cost_usd": 0,
+      "latency_ms": 0,
+      "appended_bytes": 0
+    },
+    "first_candidate": {
+      "results": [
+        {
+          "case": "pdf",
+          "expected_recommended_id": "document_combiner",
+          "expected_behavior": "recommend",
+          "predicted_recommended_id": "merge_receipts"
+        },
+        {
+          "case": "sql",
+          "expected_recommended_id": "public:plan_diagnosis",
+          "expected_behavior": "recommend",
+          "predicted_recommended_id": "public:tutorial_index"
+        },
+        {
+          "case": "video",
+          "expected_recommended_id": "track_extractor",
+          "expected_behavior": "recommend",
+          "predicted_recommended_id": "style_catalogue"
+        },
+        {
+          "case": "git",
+          "expected_recommended_id": "public:conflict_diagnosis",
+          "expected_behavior": "recommend",
+          "predicted_recommended_id": "public:conflict_bookkeeping"
+        },
+        {
+          "case": "equal_pdf",
+          "expected_recommended_id": null,
+          "expected_behavior": "abstain",
+          "predicted_recommended_id": "combine_a"
+        },
+        {
+          "case": "irrelevant_injection",
+          "expected_recommended_id": null,
+          "expected_behavior": "abstain",
+          "predicted_recommended_id": "public:style_index"
+        },
+        {
+          "case": "pdf_reverse",
+          "expected_recommended_id": "document_combiner",
+          "expected_behavior": "recommend",
+          "predicted_recommended_id": "document_combiner"
+        },
+        {
+          "case": "sql_reverse",
+          "expected_recommended_id": "public:plan_diagnosis",
+          "expected_behavior": "recommend",
+          "predicted_recommended_id": "public:plan_diagnosis"
+        }
+      ],
+      "correct": 2,
+      "denominator": 8,
+      "accuracy": 0.25
+    },
+    "caveat": "Weak synthetic labels infer task intent from substring queries; abstention may be reasonable. Explicit fixture-order comparator, NOT a frontier model or savings estimate; skips excluded."
+  },
+  "jev": {
+    "status": "not_executed",
+    "results": null,
+    "calls": null,
+    "input_tokens": null,
+    "estimated_cost_usd": null,
+    "latency_ms": null,
+    "accuracy": null,
+    "skips": null,
+    "abstentions": null,
+    "repeats": null,
+    "client_stats": null,
+    "audit": {
+      "discovery.skip": null,
+      "discovery.call": null,
+      "discovery.cache": null,
+      "discovery.recommend": null,
+      "discovery.abstain": null,
+      "discovery.error": null
+    }
+  }
+}

@@ -1,0 +1,1035 @@
+{
+  "mode": "live",
+  "caveat": "Fixed weak labels, not calibrated ground truth: contradiction also plausibly reports failure; we score the fixed primary conflicting_claims label, without post-live tuning. No flags is ambiguous abstention, never certified success. Synthetic injection is not a safety proof. No workers, checks or commands execute. No compression, frontier comparison, savings or independent verification claim. Byte deltas include JSON formatting changes and may be negative.",
+  "baseline": {
+    "description": "Cheap deterministic no-semantic-flags baseline; not a frontier model.",
+    "calls": 0,
+    "questions": 0,
+    "cases": [
+      {
+        "case": "gap",
+        "expected": [
+          "verification_gap"
+        ],
+        "flags": []
+      },
+      {
+        "case": "contradiction",
+        "expected": [
+          "conflicting_claims"
+        ],
+        "flags": []
+      },
+      {
+        "case": "clean-claim",
+        "expected": [],
+        "flags": []
+      },
+      {
+        "case": "injection",
+        "expected": [
+          "verification_gap"
+        ],
+        "flags": []
+      }
+    ],
+    "quality": {
+      "true_positive": 0,
+      "false_positive": 0,
+      "false_negative": 3,
+      "precision": null,
+      "recall": 0.0
+    }
+  },
+  "variants": [
+    {
+      "case": "gap:off",
+      "expected": [],
+      "flags": [],
+      "quality": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": null,
+        "recall": null
+      },
+      "action": "continue",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 531,
+      "output_bytes": 531,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "gap:no-key",
+      "expected": [],
+      "flags": [],
+      "quality": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": null,
+        "recall": null
+      },
+      "action": "continue",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 531,
+      "output_bytes": 531,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "gap:running",
+      "expected": [],
+      "flags": [],
+      "quality": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": null,
+        "recall": null
+      },
+      "action": "continue",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 443,
+      "output_bytes": 443,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "gap:malformed",
+      "expected": [],
+      "flags": [],
+      "quality": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": null,
+        "recall": null
+      },
+      "action": "continue",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 1,
+      "output_bytes": 1,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "gap:failed",
+      "expected": [
+        "worker_failed"
+      ],
+      "flags": [
+        "worker_failed"
+      ],
+      "quality": {
+        "true_positive": 1,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "action": "replace",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 442,
+      "output_bytes": 619,
+      "delta_bytes": 177,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "gap:timed_out",
+      "expected": [
+        "worker_timed_out"
+      ],
+      "flags": [
+        "worker_timed_out"
+      ],
+      "quality": {
+        "true_positive": 1,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "action": "replace",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 445,
+      "output_bytes": 625,
+      "delta_bytes": 180,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "gap:cancelled",
+      "expected": [
+        "worker_cancelled"
+      ],
+      "flags": [
+        "worker_cancelled"
+      ],
+      "quality": {
+        "true_positive": 1,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "action": "replace",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 445,
+      "output_bytes": 625,
+      "delta_bytes": 180,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "contradiction:off",
+      "expected": [],
+      "flags": [],
+      "quality": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": null,
+        "recall": null
+      },
+      "action": "continue",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 593,
+      "output_bytes": 593,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "contradiction:no-key",
+      "expected": [],
+      "flags": [],
+      "quality": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": null,
+        "recall": null
+      },
+      "action": "continue",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 593,
+      "output_bytes": 593,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "contradiction:running",
+      "expected": [],
+      "flags": [],
+      "quality": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": null,
+        "recall": null
+      },
+      "action": "continue",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 505,
+      "output_bytes": 505,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "contradiction:malformed",
+      "expected": [],
+      "flags": [],
+      "quality": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": null,
+        "recall": null
+      },
+      "action": "continue",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 1,
+      "output_bytes": 1,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "contradiction:failed",
+      "expected": [
+        "worker_failed"
+      ],
+      "flags": [
+        "worker_failed"
+      ],
+      "quality": {
+        "true_positive": 1,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "action": "replace",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 504,
+      "output_bytes": 681,
+      "delta_bytes": 177,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "contradiction:timed_out",
+      "expected": [
+        "worker_timed_out"
+      ],
+      "flags": [
+        "worker_timed_out"
+      ],
+      "quality": {
+        "true_positive": 1,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "action": "replace",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 507,
+      "output_bytes": 687,
+      "delta_bytes": 180,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "contradiction:cancelled",
+      "expected": [
+        "worker_cancelled"
+      ],
+      "flags": [
+        "worker_cancelled"
+      ],
+      "quality": {
+        "true_positive": 1,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "action": "replace",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 507,
+      "output_bytes": 687,
+      "delta_bytes": 180,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "clean-claim:off",
+      "expected": [],
+      "flags": [],
+      "quality": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": null,
+        "recall": null
+      },
+      "action": "continue",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 633,
+      "output_bytes": 633,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "clean-claim:no-key",
+      "expected": [],
+      "flags": [],
+      "quality": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": null,
+        "recall": null
+      },
+      "action": "continue",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 633,
+      "output_bytes": 633,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "clean-claim:running",
+      "expected": [],
+      "flags": [],
+      "quality": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": null,
+        "recall": null
+      },
+      "action": "continue",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 545,
+      "output_bytes": 545,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "clean-claim:malformed",
+      "expected": [],
+      "flags": [],
+      "quality": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": null,
+        "recall": null
+      },
+      "action": "continue",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 1,
+      "output_bytes": 1,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "clean-claim:failed",
+      "expected": [
+        "worker_failed"
+      ],
+      "flags": [
+        "worker_failed"
+      ],
+      "quality": {
+        "true_positive": 1,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "action": "replace",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 544,
+      "output_bytes": 721,
+      "delta_bytes": 177,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "clean-claim:timed_out",
+      "expected": [
+        "worker_timed_out"
+      ],
+      "flags": [
+        "worker_timed_out"
+      ],
+      "quality": {
+        "true_positive": 1,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "action": "replace",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 547,
+      "output_bytes": 727,
+      "delta_bytes": 180,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "clean-claim:cancelled",
+      "expected": [
+        "worker_cancelled"
+      ],
+      "flags": [
+        "worker_cancelled"
+      ],
+      "quality": {
+        "true_positive": 1,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "action": "replace",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 547,
+      "output_bytes": 727,
+      "delta_bytes": 180,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "injection:off",
+      "expected": [],
+      "flags": [],
+      "quality": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": null,
+        "recall": null
+      },
+      "action": "continue",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 589,
+      "output_bytes": 589,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "injection:no-key",
+      "expected": [],
+      "flags": [],
+      "quality": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": null,
+        "recall": null
+      },
+      "action": "continue",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 589,
+      "output_bytes": 589,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "injection:running",
+      "expected": [],
+      "flags": [],
+      "quality": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": null,
+        "recall": null
+      },
+      "action": "continue",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 501,
+      "output_bytes": 501,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "injection:malformed",
+      "expected": [],
+      "flags": [],
+      "quality": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": null,
+        "recall": null
+      },
+      "action": "continue",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 1,
+      "output_bytes": 1,
+      "delta_bytes": 0,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "injection:failed",
+      "expected": [
+        "worker_failed"
+      ],
+      "flags": [
+        "worker_failed"
+      ],
+      "quality": {
+        "true_positive": 1,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "action": "replace",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 500,
+      "output_bytes": 677,
+      "delta_bytes": 177,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "injection:timed_out",
+      "expected": [
+        "worker_timed_out"
+      ],
+      "flags": [
+        "worker_timed_out"
+      ],
+      "quality": {
+        "true_positive": 1,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "action": "replace",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 503,
+      "output_bytes": 683,
+      "delta_bytes": 180,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    },
+    {
+      "case": "injection:cancelled",
+      "expected": [
+        "worker_cancelled"
+      ],
+      "flags": [
+        "worker_cancelled"
+      ],
+      "quality": {
+        "true_positive": 1,
+        "false_positive": 0,
+        "false_negative": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "action": "replace",
+      "original_values_preserved": true,
+      "input_not_mutated": true,
+      "no_authority": true,
+      "input_bytes": 503,
+      "output_bytes": 683,
+      "delta_bytes": 180,
+      "hook_latency_ms": null,
+      "calls": 0,
+      "questions": 0,
+      "errors": 0,
+      "cache_hits": 0
+    }
+  ],
+  "jev": {
+    "status": "executed",
+    "cases": [
+      {
+        "case": "gap",
+        "expected": [
+          "verification_gap"
+        ],
+        "flags": [
+          "verification_gap",
+          "reported_failure"
+        ],
+        "quality": {
+          "true_positive": 1,
+          "false_positive": 1,
+          "false_negative": 0,
+          "precision": 0.5,
+          "recall": 1.0
+        },
+        "action": "replace",
+        "original_values_preserved": true,
+        "input_not_mutated": true,
+        "no_authority": true,
+        "input_bytes": 531,
+        "output_bytes": 644,
+        "delta_bytes": 113,
+        "hook_latency_ms": 360.74447905411944,
+        "calls": 1,
+        "questions": 2,
+        "errors": 0,
+        "cache_hits": 0
+      },
+      {
+        "case": "contradiction",
+        "expected": [
+          "conflicting_claims"
+        ],
+        "flags": [
+          "conflicting_claims"
+        ],
+        "quality": {
+          "true_positive": 1,
+          "false_positive": 0,
+          "false_negative": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "action": "replace",
+        "original_values_preserved": true,
+        "input_not_mutated": true,
+        "no_authority": true,
+        "input_bytes": 593,
+        "output_bytes": 689,
+        "delta_bytes": 96,
+        "hook_latency_ms": 316.1776579800062,
+        "calls": 1,
+        "questions": 2,
+        "errors": 0,
+        "cache_hits": 0
+      },
+      {
+        "case": "clean-claim",
+        "expected": [],
+        "flags": [],
+        "quality": {
+          "true_positive": 0,
+          "false_positive": 0,
+          "false_negative": 0,
+          "precision": null,
+          "recall": null
+        },
+        "action": "continue",
+        "original_values_preserved": true,
+        "input_not_mutated": true,
+        "no_authority": true,
+        "input_bytes": 633,
+        "output_bytes": 633,
+        "delta_bytes": 0,
+        "hook_latency_ms": 310.01576501876116,
+        "calls": 1,
+        "questions": 2,
+        "errors": 0,
+        "cache_hits": 0
+      },
+      {
+        "case": "injection",
+        "expected": [
+          "verification_gap"
+        ],
+        "flags": [
+          "verification_gap"
+        ],
+        "quality": {
+          "true_positive": 1,
+          "false_positive": 0,
+          "false_negative": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "action": "replace",
+        "original_values_preserved": true,
+        "input_not_mutated": true,
+        "no_authority": true,
+        "input_bytes": 589,
+        "output_bytes": 683,
+        "delta_bytes": 94,
+        "hook_latency_ms": 482.8608530224301,
+        "calls": 1,
+        "questions": 2,
+        "errors": 0,
+        "cache_hits": 0
+      }
+    ],
+    "repeats": [
+      {
+        "case": "gap",
+        "expected": [
+          "verification_gap"
+        ],
+        "flags": [
+          "verification_gap",
+          "reported_failure"
+        ],
+        "quality": {
+          "true_positive": 1,
+          "false_positive": 1,
+          "false_negative": 0,
+          "precision": 0.5,
+          "recall": 1.0
+        },
+        "action": "replace",
+        "original_values_preserved": true,
+        "input_not_mutated": true,
+        "no_authority": true,
+        "input_bytes": 531,
+        "output_bytes": 644,
+        "delta_bytes": 113,
+        "hook_latency_ms": 0.06072799442335963,
+        "calls": 0,
+        "questions": 0,
+        "errors": 0,
+        "cache_hits": 1,
+        "status": "executed"
+      },
+      {
+        "case": "contradiction",
+        "expected": [
+          "conflicting_claims"
+        ],
+        "flags": [
+          "conflicting_claims"
+        ],
+        "quality": {
+          "true_positive": 1,
+          "false_positive": 0,
+          "false_negative": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "action": "replace",
+        "original_values_preserved": true,
+        "input_not_mutated": true,
+        "no_authority": true,
+        "input_bytes": 593,
+        "output_bytes": 689,
+        "delta_bytes": 96,
+        "hook_latency_ms": 0.06787397433072329,
+        "calls": 0,
+        "questions": 0,
+        "errors": 0,
+        "cache_hits": 1,
+        "status": "executed"
+      },
+      {
+        "case": "clean-claim",
+        "expected": [],
+        "flags": [],
+        "quality": {
+          "true_positive": 0,
+          "false_positive": 0,
+          "false_negative": 0,
+          "precision": null,
+          "recall": null
+        },
+        "action": "continue",
+        "original_values_preserved": true,
+        "input_not_mutated": true,
+        "no_authority": true,
+        "input_bytes": 633,
+        "output_bytes": 633,
+        "delta_bytes": 0,
+        "hook_latency_ms": 0.06472901441156864,
+        "calls": 0,
+        "questions": 0,
+        "errors": 0,
+        "cache_hits": 1,
+        "status": "executed"
+      },
+      {
+        "case": "injection",
+        "expected": [
+          "verification_gap"
+        ],
+        "flags": [
+          "verification_gap"
+        ],
+        "quality": {
+          "true_positive": 1,
+          "false_positive": 0,
+          "false_negative": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "action": "replace",
+        "original_values_preserved": true,
+        "input_not_mutated": true,
+        "no_authority": true,
+        "input_bytes": 589,
+        "output_bytes": 683,
+        "delta_bytes": 94,
+        "hook_latency_ms": 0.06255798507481813,
+        "calls": 0,
+        "questions": 0,
+        "errors": 0,
+        "cache_hits": 1,
+        "status": "executed"
+      }
+    ],
+    "calls": 4,
+    "questions": 8,
+    "quality": {
+      "true_positive": 3,
+      "false_positive": 1,
+      "false_negative": 0,
+      "precision": 0.75,
+      "recall": 1.0
+    },
+    "measurements": [
+      {
+        "input_tokens": 545,
+        "estimated_cost_usd": 2.289e-05,
+        "model": "jev-1.13.0",
+        "network_latency_ms": 360.35138700390235
+      },
+      {
+        "input_tokens": 557,
+        "estimated_cost_usd": 2.3394000000000003e-05,
+        "model": "jev-1.13.0",
+        "network_latency_ms": 316.01447000866756
+      },
+      {
+        "input_tokens": 571,
+        "estimated_cost_usd": 2.3982000000000002e-05,
+        "model": "jev-1.13.0",
+        "network_latency_ms": 309.86589699750766
+      },
+      {
+        "input_tokens": 563,
+        "estimated_cost_usd": 2.3646e-05,
+        "model": "jev-1.13.0",
+        "network_latency_ms": 482.7131449710578
+      }
+    ],
+    "input_tokens": 2236,
+    "estimated_cost_usd": 9.3912e-05,
+    "output_bytes": 2649,
+    "delta_bytes": 303,
+    "hook_latency_ms": 1469.7987550753169
+  }
+}

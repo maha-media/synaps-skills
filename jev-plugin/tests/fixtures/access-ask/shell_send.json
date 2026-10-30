@@ -1,0 +1,28 @@
+{
+  "allow_once_possible": false,
+  "command": "chmod g-w ~/Projects\n",
+  "cwd": "/home/user/Projects/Org/repo",
+  "cwd_note": "the agent session's cwd; the shell's own cwd may differ",
+  "expires_at": "2026-10-22T04:07:50Z",
+  "fingerprint": "3a2156324257c3b0f4bdecfcf6e48e20dbe141442d035195aec3eaa2578b6e17",
+  "hits": [
+    {
+      "descent": false,
+      "kind": "command",
+      "line": 1,
+      "token": "chmod",
+      "where": "input",
+      "why": "changes access outside the session's own worktree or scratch"
+    }
+  ],
+  "hits_total": 1,
+  "id": "cc58e744a64bad8a0da185625e377d29",
+  "kind": "block",
+  "reason": "jev: blocked by the access rule (decided locally, no model call). Owner rule 27a: this changes access. Don't run it or work around it. End your turn and ask for the owner's yes (a worker asks its foreman). This task waits.\ninput line 1: `chmod` changes access outside the session's own worktree or scratch\n27a's only exception is a file you created yourself for this task in your own scratch (/var/tmp/<lane>/...) or worktree. If that is all this is, name those files by literal path (absolute, or after a plain `cd` to a literal directory) in a call of their own; it is checked again. Otherwise stop here. After the owner's yes, the owner runs it in their own terminal (or approves it once); do not retry it another way.\nRequest cc58e744a64bad8a0da185625e377d29: this call can't be allowed once (it is typed into a live shell, whose directory and state can't be bound); after the owner's yes, the owner runs it themselves.",
+  "session": "20261020-000000-aaaa",
+  "shell_session": "shell_7",
+  "tool": "shell_send",
+  "truncated": false,
+  "ts": "2026-10-21T04:07:50Z",
+  "v": 1
+}

@@ -1,0 +1,129 @@
+{
+  "mode": "offline",
+  "suite": "default",
+  "min_confidence": 0.8,
+  "label_assumptions": {
+    "image": "Weak label: assumes operational intent from substring, not a full task.",
+    "python": "Weak label: assumes operational intent from substring, not a full task.",
+    "image_reverse": "Weak label: assumes operational intent from substring, not a full task.",
+    "python_reverse": "Weak label: assumes operational intent from substring, not a full task.",
+    "broad_memory": "Weak label: assumes operational intent from substring, not a full task.",
+    "equal_tools": "Weak label: assumes operational intent from substring, not a full task.",
+    "nonmatching_injection": "Weak label: assumes operational intent from substring, not a full task.",
+    "exact_name": "Weak label: assumes operational intent from substring, not a full task.",
+    "singleton": "Weak label: assumes operational intent from substring, not a full task.",
+    "truncated": "Weak label: assumes operational intent from substring, not a full task.",
+    "disabled": "Weak label: assumes operational intent from substring, not a full task."
+  },
+  "fixture_validation": {
+    "status": "passed",
+    "cases": 11,
+    "eligible_requests": 7,
+    "all_candidates_substring_match": true,
+    "host_shapes": true
+  },
+  "baselines": {
+    "no_hint": {
+      "calls": 0,
+      "input_tokens": 0,
+      "estimated_cost_usd": 0,
+      "latency_ms": 0,
+      "appended_bytes": 0
+    },
+    "first_candidate": {
+      "results": [
+        {
+          "case": "image",
+          "expected_recommended_id": "pixel_resizer",
+          "expected_behavior": "recommend",
+          "predicted_recommended_id": "receipt_archive"
+        },
+        {
+          "case": "python",
+          "expected_recommended_id": "public:diagnosis_workflow",
+          "expected_behavior": "recommend",
+          "predicted_recommended_id": "public:course_catalogue"
+        },
+        {
+          "case": "image_reverse",
+          "expected_recommended_id": "pixel_resizer",
+          "expected_behavior": "recommend",
+          "predicted_recommended_id": "pixel_resizer"
+        },
+        {
+          "case": "python_reverse",
+          "expected_recommended_id": "public:diagnosis_workflow",
+          "expected_behavior": "recommend",
+          "predicted_recommended_id": "public:diagnosis_workflow"
+        },
+        {
+          "case": "broad_memory",
+          "expected_recommended_id": null,
+          "expected_behavior": "abstain",
+          "predicted_recommended_id": "memory_search"
+        },
+        {
+          "case": "equal_tools",
+          "expected_recommended_id": null,
+          "expected_behavior": "abstain",
+          "predicted_recommended_id": "formatter_a"
+        },
+        {
+          "case": "nonmatching_injection",
+          "expected_recommended_id": null,
+          "expected_behavior": "abstain",
+          "predicted_recommended_id": "course_index"
+        },
+        {
+          "case": "exact_name",
+          "expected_recommended_id": null,
+          "expected_behavior": "skip",
+          "predicted_recommended_id": null
+        },
+        {
+          "case": "singleton",
+          "expected_recommended_id": null,
+          "expected_behavior": "skip",
+          "predicted_recommended_id": null
+        },
+        {
+          "case": "truncated",
+          "expected_recommended_id": null,
+          "expected_behavior": "skip",
+          "predicted_recommended_id": null
+        },
+        {
+          "case": "disabled",
+          "expected_recommended_id": null,
+          "expected_behavior": "skip",
+          "predicted_recommended_id": null
+        }
+      ],
+      "correct": 2,
+      "denominator": 7,
+      "accuracy": 0.2857142857142857
+    },
+    "caveat": "Weak synthetic labels infer task intent from substring queries; abstention may be reasonable. Explicit fixture-order comparator, NOT a frontier model or savings estimate; skips excluded."
+  },
+  "jev": {
+    "status": "not_executed",
+    "results": null,
+    "calls": null,
+    "input_tokens": null,
+    "estimated_cost_usd": null,
+    "latency_ms": null,
+    "accuracy": null,
+    "skips": null,
+    "abstentions": null,
+    "repeats": null,
+    "client_stats": null,
+    "audit": {
+      "discovery.skip": null,
+      "discovery.call": null,
+      "discovery.cache": null,
+      "discovery.recommend": null,
+      "discovery.abstain": null,
+      "discovery.error": null
+    }
+  }
+}

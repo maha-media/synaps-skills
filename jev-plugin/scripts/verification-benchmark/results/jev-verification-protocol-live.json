@@ -1,0 +1,25 @@
+{
+  "protocol": "PASS",
+  "tools_registered": 4,
+  "default_off_free": true,
+  "mandatory_preserved": true,
+  "optional_partition": true,
+  "required_only_free": true,
+  "toggle_off_free": true,
+  "session_only_no_config_write": true,
+  "guard_independent": true,
+  "no_execution": true,
+  "recommendations": [
+    "parser-edge"
+  ],
+  "stats": {
+    "calls": 1,
+    "errors": 0,
+    "input_tokens": 690,
+    "cost_usd": 2.9e-05,
+    "mean_ms": 393,
+    "by_op": {
+      "verification": 1
+    }
+  }
+}
