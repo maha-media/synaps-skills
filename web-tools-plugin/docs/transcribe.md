@@ -31,7 +31,13 @@ pip install --user openai-whisper
 ### 4. GPU (optional)
 ```bash
 python3 -c "import torch; print('CUDA:', torch.cuda.is_available())"
+python3 -c "import torch; print('MPS:', torch.backends.mps.is_available())"   # Apple silicon
 ```
+
+Auto-detect order: CUDA, then MPS (Apple silicon, macOS), then CPU. If the host
+profile sets `gpu.kind=none` (`pria-fleet host get gpu.kind`), the CPU is used;
+unset or no pria-fleet means probe. If whisper can't run on MPS with your torch
+build, it falls back to the CPU and says so.
 
 CPU-only works fine, just slower. For CUDA-accelerated PyTorch:
 ```bash
@@ -61,7 +67,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/transcribe/transcribe.py video.mp4 --devic
 | `--name`         | input stem  | Override output filename stem             |
 | `--model`        | auto        | tiny, base, small, medium, large-v3, turbo |
 | `--language`     | auto-detect | en, es, fr, de, …                         |
-| `--device`       | auto-detect | cuda, cpu                                 |
+| `--device`       | auto-detect | cuda, mps (Apple silicon), cpu            |
 | `--stdout`       | off         | Print plain text to stdout, no files      |
 
 ## Auto model selection

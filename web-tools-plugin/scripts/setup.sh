@@ -19,7 +19,7 @@
 #   6. pdftotext (pdf — warn only).
 #   7. pandoc (docs — warn only).
 #   8. velocirag (self-healing memory — warn only, plugin still works without).
-#   9. Memory tree at ~/.synaps-cli/memory/web/{notes,db}.
+#   9. Memory tree at ${SYNAPS_BASE_DIR:-~/.synaps-cli}/memory/web/{notes,db}.
 #  10. Playwright browser binaries (browser capability — warn only).
 #  11. EXA_API_KEY in ~/.config/synaps/web-tools.env (search — warn only).
 #
@@ -78,6 +78,22 @@ case "$(uname -s)" in
     Darwin*) OS="mac" ;;
     MINGW*|MSYS*|CYGWIN*) OS="windows" ;;
 esac
+
+# A fresh private log file for one install step (in $TMPDIR, else /tmp).
+new_log() { mktemp "${TMPDIR:-/tmp}/web-setup-$1.XXXXXX"; }
+
+# Where Playwright keeps its browsers: PLAYWRIGHT_BROWSERS_PATH, else the per-OS default.
+playwright_cache_dir() {
+    if [ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ] && [ "$PLAYWRIGHT_BROWSERS_PATH" != "0" ]; then
+        echo "$PLAYWRIGHT_BROWSERS_PATH"
+        return
+    fi
+    case "$OS" in
+        mac)     echo "$HOME/Library/Caches/ms-playwright" ;;
+        windows) echo "${LOCALAPPDATA:-$HOME/AppData/Local}/ms-playwright" ;;
+        *)       echo "${XDG_CACHE_HOME:-$HOME/.cache}/ms-playwright" ;;
+    esac
+}
 
 # ─── 1. Node ─────────────────────────────────────────────────
 section "Node.js (required)"
@@ -156,11 +172,13 @@ for dir in "${NODE_DIRS[@]}"; do
         issue "$name needs npm install"
     else
         echo "  📦 Installing $name…"
-        if (cd "$dir" && npm install --silent 2>/tmp/web-setup-$name.log); then
+        log="$(new_log "$name")"
+        if (cd "$dir" && npm install --silent 2>"$log"); then
             ok "$name installed"
+            rm -f "$log"
         else
-            issue "$name: npm install failed — see /tmp/web-setup-$name.log"
-            tail -10 "/tmp/web-setup-$name.log" >&2 || true
+            issue "$name: npm install failed — see $log"
+            tail -10 "$log" >&2 || true
         fi
     fi
 done
@@ -296,19 +314,22 @@ if [ "$MINIMAL" = false ]; then
     BROWSER_DIR="$PLUGIN_ROOT/scripts/browser"
     if [ -d "$BROWSER_DIR/node_modules/playwright" ]; then
         # Check if at least chromium is downloaded
-        if [ -d "$HOME/.cache/ms-playwright" ] && \
-           find "$HOME/.cache/ms-playwright" -maxdepth 2 -name 'chromium*' -type d 2>/dev/null | grep -q .; then
+        PW_CACHE="$(playwright_cache_dir)"
+        if [ -d "$PW_CACHE" ] && \
+           find "$PW_CACHE" -maxdepth 2 -name 'chromium*' -type d 2>/dev/null | grep -q .; then
             ok "playwright browser binaries present"
         elif [ "$CHECK_ONLY" = true ]; then
             warn "playwright browser binaries missing — browser capability will fail"
             info "Re-run without --check, or: (cd $BROWSER_DIR && npx playwright install chromium)"
         else
             echo "  📦 Downloading Chromium for Playwright (this can take a minute)…"
-            if (cd "$BROWSER_DIR" && npx playwright install chromium 2>/tmp/web-setup-playwright.log); then
+            log="$(new_log playwright)"
+            if (cd "$BROWSER_DIR" && npx playwright install chromium 2>"$log"); then
                 ok "playwright Chromium installed"
+                rm -f "$log"
             else
-                warn "playwright install failed — see /tmp/web-setup-playwright.log"
-                tail -10 /tmp/web-setup-playwright.log >&2 || true
+                warn "playwright install failed — see $log"
+                tail -10 "$log" >&2 || true
             fi
         fi
     else
@@ -331,17 +352,18 @@ else
     [ -z "$PIP" ] && command -v pip >/dev/null 2>&1 && PIP="pip"
     if [ -n "$PIP" ]; then
         echo "  📦 Installing velocirag…"
-        if "$PIP" install --user --quiet velocirag 2>/tmp/web-setup-vr.log; then
+        log="$(new_log vr)"
+        if "$PIP" install --user --quiet velocirag 2>"$log"; then
             ok "velocirag installed"
-        elif grep -q "externally-managed\|PEP 668" /tmp/web-setup-vr.log 2>/dev/null && \
+        elif grep -q -e "externally-managed" -e "PEP 668" "$log" 2>/dev/null && \
              "$PIP" install --user --quiet --break-system-packages velocirag 2>&1; then
             ok "velocirag installed (--break-system-packages)"
         else
             warn "velocirag install failed — plugin runs without memory"
             info "Manual: $PIP install --user --break-system-packages velocirag"
-            tail -10 /tmp/web-setup-vr.log >&2 || true
+            tail -10 "$log" >&2 || true
         fi
-        rm -f /tmp/web-setup-vr.log
+        rm -f "$log"
     else
         warn "pip not found — can't install velocirag"
         info "Install pip first, then: pip install --user velocirag"
@@ -349,7 +371,7 @@ else
 fi
 
 # Memory tree
-WEB_MEMORY_ROOT="$HOME/.synaps-cli/memory/web"
+WEB_MEMORY_ROOT="${WEB_MEMORY_ROOT:-${SYNAPS_BASE_DIR:-$HOME/.synaps-cli}/memory/web}"
 if [ -d "$WEB_MEMORY_ROOT/notes" ] && [ -d "$WEB_MEMORY_ROOT/db" ]; then
     ok "memory tree exists ($WEB_MEMORY_ROOT)"
 elif [ "$CHECK_ONLY" = true ]; then

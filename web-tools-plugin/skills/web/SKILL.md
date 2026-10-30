@@ -151,7 +151,9 @@ See `docs/status.md` for the full workflow.
 - All capability docs live under `docs/`.
 - All scripts live under `scripts/<capability>/`.
 - Shared helpers (memory wrapper, output formatter) live under `scripts/_lib/`.
-- The web plugin's memory store is at `~/.synaps-cli/memory/web/`.
+- The web plugin's memory store is at `~/.synaps-cli/memory/web/` (or
+  `$SYNAPS_BASE_DIR/memory/web/` when `SYNAPS_BASE_DIR` is set; same for every
+  `~/.synaps-cli/memory/web` path in this skill).
   - `notes/` — markdown source of truth (git-friendly)
   - `db/` — VelociRAG index (derived, rebuildable)
   - `failures.jsonl` — raw operational log

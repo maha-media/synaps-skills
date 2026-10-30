@@ -1,7 +1,7 @@
 # Web Toolkit v2 — Spec
 
 Status: **Phase 0 locked, Phase 1 in progress** — 2026-04-26
-Owner: JR Morton
+Maintainers: the synaps-skills maintainers
 Branch: `web-toolkit-v2`
 
 ## 1. Goal

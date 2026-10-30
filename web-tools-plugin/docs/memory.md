@@ -11,6 +11,8 @@ Direct VelociRAG commands and the `_lib/memory` wrapper for the `web` plugin.
 └── failures.jsonl # raw operational log
 ```
 
+`~/.synaps-cli` is the default Synaps base dir; when `SYNAPS_BASE_DIR` is set the
+root is `$SYNAPS_BASE_DIR/memory/web` (read the paths below with that base).
 Override the root with `WEB_MEMORY_ROOT=/some/path` if needed (rarely).
 
 ## Recall (search)
