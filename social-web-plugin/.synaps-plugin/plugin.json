@@ -1,6 +1,6 @@
 {
   "name": "social-web",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Polite, read-only, logged-out look at public social media pages (YouTube, TikTok, Instagram, X, Spotify, SoundCloud, Bandcamp, Suno): profiles, recent posts, single items, and an honest 'needs login' when a site requires sign-in.",
   "author": {
     "name": "JR Morton",

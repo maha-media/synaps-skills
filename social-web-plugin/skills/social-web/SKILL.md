@@ -1,6 +1,6 @@
 ---
 name: social-web
-description: Use to look at public social media profiles and posts (YouTube, TikTok, Instagram, X, Spotify, SoundCloud, Bandcamp, Suno), read-only and logged out. Gets profile facts, recent posts with public counts, single items via oEmbed/page metadata, and says honestly when something needs login. Also covers the shared-browser mode where the user signs in himself and the agent only reads.
+description: Use to look at public social media profiles and posts (YouTube, TikTok, Instagram, X, Spotify, SoundCloud, Bandcamp, Suno), read-only and logged out. Gets profile facts, recent posts with public counts, single items via oEmbed/page metadata, and says honestly when something needs login. Also covers the shared-browser mode where the user signs in to their own accounts and the agent only reads.
 ---
 
 # social-web: read-only, logged-out social media
@@ -106,10 +106,10 @@ Sites change often; trust `check` over this table and update the Learnings below
    --port=<free port>` (web-tools >= 1.3.2). Never use `~/.cache/browser-tools-shared`
    for this. Ignore `docs/browser.md`'s advice to switch to `--profile` on captchas.
 2. Still blocked, or the data is behind login: **ask the user**. Offer: (a) skip it,
-   (b) the user pastes/reads it himself, (c) shared-browser mode.
+   (b) the user pastes/reads it themselves, (c) shared-browser mode.
 3. Never guess counts. "Not shown logged-out" is a valid answer.
 
-## Shared browser mode (user signs in himself, agent only reads)
+## Shared browser mode (the user signs in themselves, agent only reads)
 
 Use only when the user asks for it or says yes when you offer it after a `needs login`.
 The CLI stays logged-out; this mode uses the **web skill's** browser tools (see
@@ -117,19 +117,22 @@ The CLI stays logged-out; this mode uses the **web skill's** browser tools (see
 for setup and commands; don't copy them here).
 
 **Dedicated profile:** default `~/.cache/browser-tools-shared` (mode 0700). A lane may
-instead use its own 0700 scratch dir passed with `--data-dir` (e.g.
-`/var/tmp/social/chrome-shared`), and a non-default `--port`: one browser runs per
+instead use its own 0700 scratch dir: pass `--lane` to the preflight for
+`<scratch.dir>/social-web/chrome-shared` (the preflight resolves it: `scratch.dir` from
+`pria-fleet host get scratch.dir`, else the OS default; an existing old
+`/var/tmp/social/chrome-shared` is kept while `scratch.dir` is unset), or any dir with
+`--data-dir`, and a non-default `--port`: one browser runs per
 port. Either way it holds the user's own sign-ins for that shared session only.
 Never point other agent work at it, and never use the web skill's default
 `~/.cache/browser-tools` for this mode (any agent that later starts the web browser
-would inherit those sign-ins). Pass the same `--data-dir` and `--port` to the preflight.
+would inherit those sign-ins). Pass the same `--data-dir` (or `--lane`) and `--port` to the preflight.
 
-1. **Preflight**: `${CLAUDE_PLUGIN_ROOT}/scripts/shared-browser-preflight [--data-dir DIR] [--port N]` (exit 0 ready,
+1. **Preflight**: `${CLAUDE_PLUGIN_ROOT}/scripts/shared-browser-preflight [--data-dir DIR | --lane] [--port N]` (exit 0 ready,
    1 ask the user, 2 can't run). It only checks that things exist (stat); it never
    reads profile files or the X authority file. It checks:
    - web-tools' `browser-start.js` supports `--data-dir` (web-tools >= 1.3.2);
    - HOME is not overridden;
-   - display, **native Wayland first**: if `WAYLAND_DISPLAY` is set and
+   - display (**Linux only**; on macOS Chrome opens a normal window), **native Wayland first**: if `WAYLAND_DISPLAY` is set and
      `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY` exists, it's ready as a Wayland window (a
      Wayland client can't read or inject into other windows). Only without Wayland
      does it fall back to X11: `DISPLAY` set and the `$XAUTHORITY` file (else
@@ -139,11 +142,12 @@ would inherit those sign-ins). Pass the same `--data-dir` and `--port` to the pr
      don't attach to it unless the user confirms it is the shared window;
    - the dedicated dir, if present, is a plain directory with mode 0700.
 2. **Start headed, dedicated**: run the command the preflight prints, i.e.
-   `browser-start.js --data-dir ~/.cache/browser-tools-shared --wayland --port=9222`
-   (`--wayland` = `--ozone-platform=wayland`, no DISPLAY/XAUTHORITY for Chrome; it's
-   also the default with `--data-dir` when `WAYLAND_DISPLAY` is set). With a lane dir:
-   `--data-dir /var/tmp/social/chrome-shared --wayland --port=9340`. On the
-   `--data-dir`/`--wayland` path the launcher also sets `DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus`
+   `browser-start.js --data-dir ~/.cache/browser-tools-shared [--wayland] --port=9222`
+   (`--wayland` is **Linux-only**: `--ozone-platform=wayland`, no DISPLAY/XAUTHORITY for Chrome; it's
+   also the default with `--data-dir` when `WAYLAND_DISPLAY` is set; the preflight adds it only
+   when native Wayland is ready, never on macOS). With the lane dir (`--lane`):
+   `--data-dir <scratch.dir>/social-web/chrome-shared [--wayland] --port=9340`. On the
+   Linux `--data-dir`/`--wayland` path the launcher also sets `DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus`
    when it's unset and that socket exists (the user's own bus; this quiets Chrome's dbus errors).
    Never add `--profile` (copies real cookies/logins; the launcher refuses it with
    `--data-dir`) or `--headless` (the user must see and share the window).
@@ -154,8 +158,8 @@ would inherit those sign-ins). Pass the same `--data-dir` and `--port` to the pr
    `$XDG_RUNTIME_DIR/.mutter-Xwaylandauth.*`; unset runtime dir: `/run/user/$(id -u)`) **or borrow another session's X auth.**
    X access to the user's screen allows reading other apps and injecting input,
    and only the user can approve that access change. No Wayland and no own X auth:
-   ask the user to start the shared browser from his desktop session.
-   Optional: cap its memory with `systemd-run --user --scope -p MemoryHigh=2560M
+   ask the user to start the shared browser from their desktop session.
+   Optional (Linux with systemd): cap its memory with `systemd-run --user --scope -p MemoryHigh=2560M
    -p MemoryMax=3G <launch command>` (idle with 4-5 tabs is ~0.6 GB). Keep CDP on
    `127.0.0.1`.
 3. **Work in your own tab.** `browser-nav.js`/`browser-eval.js` act on the *last*
@@ -169,10 +173,10 @@ would inherit those sign-ins). Pass the same `--data-dir` and `--port` to the pr
    and don't read.
    **Open the page**: `browser-nav.js <url>` (only when it's your own tab). If it needs login, tell the user:
    "Please sign in to <site> in the shared Chrome window, then tell me when you're done."
-   The user signs in himself. You never type credentials, 2FA codes or recovery
+   The user signs in themselves. You never type credentials, 2FA codes or recovery
    answers, never click "sign in with…", and never read, export or save cookies,
    tokens or sign-in data.
-4. **After the user says he's signed in**, you may read logged-in pages: `browser-nav.js`,
+4. **After the user says they're signed in**, you may read logged-in pages: `browser-nav.js`,
    `browser-content.js`, `browser-screenshot.js`, and `browser-eval.js` with read-only
    DOM queries (text, links, counts) and `window.scrollBy`/`scrollTo` only (pausing or
    muting autoplaying `video,audio` in your own tab is fine). Navigation clicks
@@ -188,10 +192,10 @@ would inherit those sign-ins). Pass the same `--data-dir` and `--port` to the pr
    (close its window, or ask the user to). Don't leave it running on the port for
    later agents. If it was handed to you already running, close only your own tabs
    and leave the browser and the user's tabs alone. Tell
-   the user what you read, and remind him his sign-ins stay in
+   the user what you read, and remind them their sign-ins stay in
    the shared profile dir (`~/.cache/browser-tools-shared` or the lane's `--data-dir`)
-   until he signs out there. Don't clear the dir
-   yourself without his yes.
+   until they sign out there. Don't clear the dir
+   yourself without their yes.
 
 ### Shared browser: known behaviour
 
@@ -203,7 +207,7 @@ would inherit those sign-ins). Pass the same `--data-dir` and `--port` to the pr
 | TikTok | `a[data-e2e="nav-profile"]` href = `/@<handle>` | `[data-e2e="top-login-button"]`; a bare `/@` href |
 | Instagram | home left-nav link with exact text "Profile", href `/<handle>/` | `input[name="username"]` |
 
-**Google sign-in** is the user's click, always (step 3). FYI when he asks why:
+**Google sign-in** is the user's click, always (step 3). FYI when they ask why:
 TikTok's "Continue with Google" opens a normal popup (account chooser), then lands on
 `/foryou`, which autoplays with sound: close that tab. X's button is an
 `accounts.google.com/gsi/button` iframe over the visible span; automated clicks time

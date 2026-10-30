@@ -81,7 +81,7 @@ CHALLENGE_MARK_RE = re.compile(r"/_fs-ch-|cf-chl-|challenges\.cloudflare\.com|ca
 SHARED_BROWSER_HINT = ("this CLI stays logged-out. If the user wants this, use the social-web skill's "
                        "'Shared browser' mode: run scripts/shared-browser-preflight, open a headed Chrome "
                        "via the web skill with --data-dir ~/.cache/browser-tools-shared, ask the user to sign "
-                       "in himself, then read only.")
+                       "in to their own accounts, then read only.")
 
 
 def is_challenge(text):
