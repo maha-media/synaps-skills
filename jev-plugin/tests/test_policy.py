@@ -204,7 +204,7 @@ class FeatureToggles(unittest.TestCase):
         return "\n".join(e.get("content", "") for e in self.events if e.get("kind") == "text")
 
     def test_guard_off_says_what_the_shell_rule_does_now(self):
-        # BLOCK r2 (foreman 72f2241d, point 3): `/jev guard off` and
+        # A review finding: `/jev guard off` and
         # `/jev off` stop the model features only; the reply says the shell
         # rule stays on and how to stop it, as guard_shell_rule has it
         stays = "The shell rule stays on: it "

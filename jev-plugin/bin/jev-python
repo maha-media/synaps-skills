@@ -1,5 +1,5 @@
 #!/bin/sh
-# jev-python: start Jev under a Python 3.11 or newer (SC 10-29, M5 Mac Studio plan).
+# jev-python: start Jev under a Python 3.11 or newer (macOS ships an older python3).
 #
 # Jev needs Python 3.11+ (tomllib in extensions/jev/roster.py). On a fresh Mac, python3
 # is Apple's 3.9, and it exists only after the Command Line Tools are installed. Running

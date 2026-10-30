@@ -2,7 +2,7 @@
 """guard_confirm: `auto` (the default) or `prompt`.
 
 Under an allow-all approval policy a Jev guard CONFIRM must never reach the
-user (the Master's rule, 10-27): the host turns a hook Confirm into an
+user: the host turns a hook Confirm into an
 interactive prompt, and the app's allow-all does not reach the host. Under
 `auto` every confirm source is sorted into one of three classes:
 

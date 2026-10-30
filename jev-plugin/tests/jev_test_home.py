@@ -3,7 +3,7 @@
 guard.handle() takes the Allow-once store from $HOME (allow_once.root(home)).
 A test that drives an access block through the guard while $HOME is the real
 home wrote a request into ~/.synaps-cli/memory/jev/access/requests: nine such
-records landed there on 10-20/21 (session "sess-log" and one with none).
+records once landed there (session "sess-log" and one with none).
 
 Importing this module points the store for the real home (the passwd home and
 $HOME as it was at import) at a per-run temp dir, removed at exit. A test that

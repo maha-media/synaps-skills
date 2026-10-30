@@ -1,11 +1,11 @@
-"""access — owner rule 27a's scanner (JR, 2026-10-20 ~19:15 CDT: "make sure
-the harness tries its best effort to end turn and ask permission and halt
-production on a task before removing group write permission and similar
-type of commands"; that day a lane ran `chmod g-w ~/Projects ...`).
+"""access — owner rule 27a's scanner (the harness should try its best to end
+the turn, ask permission and halt work on a task before a command that
+removes group write permission or makes a similar access change; an agent
+once ran `chmod g-w ~/Projects ...`).
 
 Owner rule 27a: before any command that changes who can read, write or run
 something, or what the system lets an agent do, the agent does not run it:
-it ends its turn and asks for JR's yes. The guard's model score already
+it ends its turn and asks for the owner's yes. The guard's model score already
 calls chmod "hard to reverse" and asks to confirm, but fleet auto-accept
 passes a confirm, so this rule BLOCKS, decided locally with no model call.
 
@@ -143,7 +143,7 @@ _SYSTEMCTL_VALUE = frozenset({"-H", "--host", "-M", "--machine", "-t", "--type",
 # sandbox. 27c(5) lets an agent cap its own child processes with
 # `systemd-run --user --scope` and the memory properties only; -E/--setenv
 # is part of that form too (an environment variable is no access item in
-# 27a; ruling 10-25). This check only ADDS asks, for every other form; the
+# 27a). This check only ADDS asks, for every other form; the
 # 27c(5) form gets no hit from it (whether a cap tightens stays the agent's
 # duty, 27c(5)). Options are read as systemd-run's getopt reads them: an
 # unambiguous prefix of a long option counts, a short cluster (-qGp X)

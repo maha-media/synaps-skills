@@ -27,7 +27,7 @@ from jev import audit as audit_mod  # noqa: E402
 
 CANARY = "CANARY_ac27a"
 HEAD = "jev: blocked by the access rule (decided locally, no model call). Owner rule 27a: this changes access."
-B27 = "(27b: this can widen a sandbox; JR's yes)"
+B27 = "(27b: this can widen a sandbox; the owner's yes)"
 
 
 class HomeCase(unittest.TestCase):
@@ -69,7 +69,7 @@ class HomeCase(unittest.TestCase):
 
 class Commands(HomeCase):
     def test_the_incident_blocks(self):
-        hits = self.blocking("chmod g-w ~/Projects ~/Projects/Praxis", cwd=self.work)
+        hits = self.blocking("chmod g-w ~/Projects ~/Projects/example", cwd=self.work)
         self.assertEqual([(h.kind, h.token) for h in hits], [("command", "chmod")])
         self.assertIn("outside the session's own worktree or scratch", hits[0].why)
 
@@ -175,7 +175,7 @@ class Commands(HomeCase):
         blocks = [f"chmod 755 run.sh",                                   # cwd is HOME
                   f"cd {lane}/missing; chmod -R g-w Projects",           # cd to nothing known
                   f"(cd {lane} && chmod +x run.sh)",                      # a subshell's cd
-                  f"cd {lane} && (cd ~/Projects && chmod -R g-w Praxis)",
+                  f"cd {lane} && (cd ~/Projects && chmod -R g-w example)",
                   f"cd {lane} && (cd ~/Projects) && chmod -R g-w run.sh",
                   f"cd {lane} && popd && chmod +x run.sh",
                   f"cd $D && chmod +x run.sh", f"cd {lane} && cd - && chmod +x run.sh",
@@ -358,7 +358,7 @@ class SystemdRun(HomeCase):
         self.assertEqual([(h.token, h.line) for h in hits], [("systemd-run", 2), ("chmod", 2)])
 
     def test_setenv_is_part_of_the_memory_cap_form(self):
-        # ruling 10-25 13:07 (Q-A): an environment variable is no access item
+        # an environment variable is no access item
         # in 27a (and `VAR=x cmd` passes), so -E/--setenv joins the form
         for text in ["systemd-run --user --scope -E A=1 make",
                      "systemd-run --user --scope --setenv=A=1 -p MemoryMax=8G make",
@@ -373,7 +373,7 @@ class SystemdRun(HomeCase):
         self.assert_asks("systemd-run --user -E A=1 make", "(no --scope)")
 
     def test_an_option_value_that_can_split_is_unseen(self):
-        # ruling 10-25 13:07: an expansion in a -p or -E value that can split
+        # an expansion in a -p or -E value that can split
         # into more words (unquoted, or a form that splits even in double
         # quotes) can add options: unseen. A double-quoted $NAME or ${NAME}
         # cannot, and keeps today's answer.
@@ -411,7 +411,7 @@ class SystemdRun(HomeCase):
                     self.assertEqual(self.blocking(wrap.format(text)), [])
 
     def test_a_script_its_command_runs_is_read_as_under_a_wrapper(self):
-        # ruling 10-25 13:07: the 27c(5) form wraps a nested script like a
+        # the 27c(5) form wraps a nested script like a
         # rule-1 wrapper does, with the same descents (a shell's -c string,
         # ssh's remote command, eval, su/runuser/script -c, env -S, flock -c,
         # watch); the hits equal those under `timeout`
@@ -653,8 +653,8 @@ class Wiring(HomeCase):
         result = self.check("bash", {"command": f"chmod g-w ~/Projects # {CANARY}"})
         self.assertEqual(result["action"], "block")
         self.assertTrue(result["reason"].startswith(HEAD), result["reason"])
-        self.assertIn("Don't run it or work around it. End your turn and ask for JR's yes (a worker asks its "
-                      "foreman). This task waits.", result["reason"])
+        self.assertIn("Don't run it or work around it. End your turn and ask for the owner's yes (a worker asks "
+                      "its foreman). This task waits.", result["reason"])
         self.assertIn("line 1: `chmod` changes access outside", result["reason"])
         self.assertIn("27a's only exception is a file you created yourself", result["reason"])
         self.assertNotIn(B27, result["reason"])

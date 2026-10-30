@@ -1,10 +1,10 @@
 """shell_rules — the guard's deterministic shell-safety rule (guard item 2(b)).
 
-After the 16:52 incident (a generated script nested one heredoc inside
+After an incident (a generated script nested one heredoc inside
 another, the outer one closed early, and `rm -rf "$FS"/*` ran with FS
 empty), the guard blocks these shapes in shell text, decided locally with
-no model call (signal_all since 10-27 22:38, when a test binary called
-kill(-1, SIGKILL) and ended the whole desktop session):
+no model call (signal_all since a test binary called kill(-1, SIGKILL)
+and ended a whole desktop session):
 
 - unguarded_variable: an operand of `rm -r`, `find ... -delete` (or
   `-exec rm`) or `mv` that expands a variable without the `:?` check
@@ -26,7 +26,7 @@ kill(-1, SIGKILL) and ended the whole desktop session):
   (`pkill -u jr`, `killall -u jr`: no pattern, no process name). A
   variable is not reported (`kill $p`, `kill -TERM -- -$G`): unset, it
   gives a usage error, not -1. A program that calls kill(-1) itself, as
-  the 10-27 test binary did, is no shell text and is not seen here.
+  that test binary did, is no shell text and is not seen here.
 
 The scan covers the WHOLE text (not a preview) and is conservative: any
 word `rm`, `find`, `mv`, `kill`, `pkill`, `killall` or `killall5` (also
@@ -603,9 +603,9 @@ def _mv(words: list, line: int, out: list) -> None:
             _operand(w, MV, False, line, out)
 
 
-# ── signals to every process (10-27) ──────────────────────────────────────
-# kill(-1, sig) signals every process the caller may signal: at 10-27 22:38
-# a test binary did that and ended JR's desktop session. Only literal shapes
+# ── signals to every process ──────────────────────────────────────────────
+# kill(-1, sig) signals every process the caller may signal: a test binary
+# once did that and ended the owner's desktop session. Only literal shapes
 # count; nothing here runs or signals anything.
 
 # a pid operand read as -1 (strtol: blanks around it, leading zeros)
@@ -1139,7 +1139,7 @@ def _heredocs(lines: list[str], out: list) -> None:
     """Nested heredocs: an opener (see _openers) on a line of another
     heredoc's body, whether or not its terminator follows in that body. The
     body is text bash writes out; a script holding a heredoc inside a
-    heredoc is the 16:52 shape, and an inner opener left unterminated (or
+    heredoc is the incident's shape, and an inner opener left unterminated (or
     reusing the outer delimiter, which ends the outer body early) leaves the
     rest to run as commands."""
     n, i = len(lines), 0

@@ -255,7 +255,7 @@ Every `log(` call site, and where its line goes (`[jev] ` prefix omitted):
 | `guard <tool>: confirm→continue (auto) …` | `guard.py` | routine |
 | `guard <tool>: redacted state is all placeholders → continue (no model call)` | `guard.py` | routine |
 | `guard <tool>: unresolvable target → confirm \| continue …` | `guard.py` | routine |
-| `guard <tool>: continue, access rule 27b auto mode …`, `… access rule 27a: JR allowed request <id> once …` | `guard.py` | routine |
+| `guard <tool>: continue, access rule 27b auto mode …`, `… access rule 27a: the owner allowed request <id> once …` | `guard.py` | routine |
 | `compress fold: N -> M bytes` | `compress.py` | routine |
 
 The router, triage, reports, discovery, context and the tools log nothing.
@@ -672,12 +672,12 @@ Limits, known misses:
 
 ### Shell-safety rule (deterministic BLOCK)
 
-After the 16:52 incident (a generated script nested one heredoc inside
+After an incident (a generated script nested one heredoc inside
 another, the outer one closed early, and `rm -rf "$FS"/*` ran with `FS`
 empty), the guard checks the whole shell text of a call itself, before the
-model and without a model call (`extensions/jev/shell_rules.py`). Since
-10-27 22:38, when a test binary called `kill(-1, SIGKILL)` and ended JR's
-whole desktop session, it also finds a signal to every process
+model and without a model call (`extensions/jev/shell_rules.py`). Since a
+test binary called `kill(-1, SIGKILL)` and ended the owner's whole desktop
+session, it also finds a signal to every process
 (`signal_all`, below): the harness review rule (refuse pid <= 1 on any
 kill of a pid that was read, parsed or returned) as far as shell text
 shows it.
@@ -736,8 +736,8 @@ shows it.
       name it is not found: `pkill -u jr worker`, `killall -u jr foo`.
 
     One finding per command. The reason is fixed text (never the input):
-    for kill, "kill with pid -1 signals every process you own (it killed
-    the desktop session on 10-27). Signal a specific pid or a process
+    for kill, "kill with pid -1 signals every process you own (it has
+    killed a whole desktop session). Signal a specific pid or a process
     group > 1 instead."
 - **Where it looks.** Any word `rm`, `find`, `mv`, `kill`, `pkill`,
   `killall` or `killall5` starts a command (also `/bin/rm`, `\rm`,
@@ -896,14 +896,14 @@ Known misses:
   passed through `xargs kill`, long options abbreviated (`pkill --eu jr`)
   or, for killall, written with one dash (`killall -user jr`), and an
   empty pattern (`pkill -u jr ''`) are not found. A program that calls
-  `kill(-1, …)` itself, as the 10-27 test binary did, is no shell text:
+  `kill(-1, …)` itself, as that test binary did, is no shell text:
   that is the harness review rule's part (refuse pid <= 1, and stop on a
   failed start), not this scan's.
 
 ### Rule-1 guard (deterministic BLOCK, fleet sessions)
 
 Fleet safety rule 1: scripts and file content are written with the write or
-edit tools, never generated inside a shell call (the 10-18 16:52 `rm -rf /*`
+edit tools, never generated inside a shell call (an `rm -rf /*` incident
 came from such a script). The rule-1 guard refuses, before it runs, a
 **bash** command, a **shell_start** command or a **shell_send** input that
 holds, at command level (outside quotes, comments, arithmetic and heredoc
@@ -960,7 +960,7 @@ is written (by name or shebang), so the retry is checked too.
   could not be read, so this rule applies to every session"). A missing or
   empty `session_id` is in scope. A host with no `~/.pria/fleet` at all has
   no fleet sessions: scope `fleet` matches none there (CI, other machines).
-  `all`: every session (JR's own sessions only when he sets it).
+  `all`: every session (the owner's own sessions only when they set it).
 - **Modes** (`guard_rule1`). `block` (default); `warn` logs, counts and
   writes the audit row, and lets the call run (a short soak, or one family
   while a real false positive is fixed); `off`. No in-band override, no
@@ -1010,14 +1010,13 @@ read as one of the shapes (`1 << 3`).
 
 ### Access rule (owner rules 27a/27b, deterministic BLOCK)
 
-Owner rule 27a (JR, 2026-10-20): before any command that changes who can
-read, write or run something, or what the system lets an agent do, the
-agent does not run it; it ends its turn and asks for JR's yes (a worker asks
-its foreman). The model guard rates chmod "hard to reverse" and asks to
+Owner rule 27a: before any command that changes who can read, write or run
+something, or what the system lets an agent do, the agent does not run it;
+it ends its turn and asks for the owner's yes (a worker asks its foreman). The model guard rates chmod "hard to reverse" and asks to
 confirm, but fleet auto-accept passes a confirm, so this rule **blocks**,
 decided locally (`extensions/jev/access.py`), with the text "Owner rule
 27a: this changes access. Don't run it or work around it. End your turn and
-ask for JR's yes (a worker asks its foreman). This task waits."
+ask for the owner's yes (a worker asks its foreman). This task waits."
 
 | Kind | Refused |
 |---|---|
@@ -1067,9 +1066,9 @@ tools (the new text is the content, `new_string` or the edit's text).
   where later relative targets resolve (never the own-area bases); any
   other move (`popd`, `cd -`, `cd $X`, a `cd` in a subshell, a nested
   script or a pipeline) makes relative targets unknown, so they block.
-  `chmod g-w ~/Projects ~/Projects/Praxis` blocks from any cwd. The guard
+  `chmod g-w ~/Projects ~/Projects/example` blocks from any cwd. The guard
   cannot prove which scratch dir or worktree is this session's, so any of
-  them counts (Master ruling, 10-20; JR asked for best effort). When every
+  them counts (a best-effort check). When every
   hit is such a mode command, the refusal adds how to name own files by
   literal path in a call of their own (checked again).
 - **No change.** `mkdir -m` with a numeric mode that grants no group or
@@ -1110,11 +1109,11 @@ tools (the new text is the content, `new_string` or the edit's text).
   brace and glob expansion (`{…}`, `*`) where an option or a value can be.
 - **27b sandbox switch.** `~/.synaps-cli/memory/jev/sandbox-mode` holds one
   word; exactly `auto` (whitespace ignored) is auto, anything else, missing
-  or unreadable is **manual**. The file is protected: JR writes it from his
-  own terminal. Manual passes only creating a NEW `sessions/<name>.conf`
+  or unreadable is **manual**. The file is protected: the owner writes it
+  from their own terminal. Manual passes only creating a NEW `sessions/<name>.conf`
   directly in `sessions/` (the write tool, or `cp`/`mv`/`install` onto a
   missing target); everything else under `sandbox/` blocks, adding "(27b:
-  this can widen a sandbox; JR's yes)". Auto passes any create, edit,
+  this can widen a sandbox; the owner's yes)". Auto passes any create, edit,
   replace or delete strictly below `sessions/`, auditing a change to an
   existing file as rule `access_auto`; `sandbox/OFF` and the rest outside
   `sessions/` stay blocked.
@@ -1134,8 +1133,8 @@ tools (the new text is the content, `new_string` or the edit's text).
   (`new`, `deny_only`, `waiting`, `deny`, `unrecorded`, `error`). Counters
   `guard.access.{command,write,code,sandbox,block,warn,auto,stopped,
   stopped_clear,out_of_scope,allowed_once}`.
-- **Allow once** (`extensions/jev/allow_once.py`; format agreed with Pria
-  Desktop, 10-20). Each block writes a request record
+- **Allow once** (`extensions/jev/allow_once.py`; a format shared with Pria
+  Desktop). Each block writes a request record
   `~/.synaps-cli/memory/jev/access/requests/<id>.json` (dirs 0700, created
   without chmod, an existing non-private dir is refused; files 0600, temp +
   rename) holding the call (command, or files + change, at most 4 KiB),
@@ -1147,7 +1146,7 @@ tools (the new text is the content, `new_string` or the edit's text).
   no such key, and its record and fingerprint are byte-equal to the format
   before the field. A `subagent_id` that isn't a plain short word is
   recorded as `unrecognized` and the call is Deny only. The refusal ends with "Request
-  <id>". JR answers in Pria Desktop (Permission change); the app's native
+  <id>". The owner answers in Pria Desktop (Permission change); the app's native
   click alone writes `answers/<id>.json`, exactly `{v, id, fingerprint,
   decision: allow_once|deny, answered_at, by: "owner_ui"}`, at most 4 KiB.
   An allow passes the SAME caller's unchanged retry of that exact call
@@ -1159,7 +1158,7 @@ tools (the new text is the content, `new_string` or the edit's text).
   `rule: "access_allowed_once"`, and only the access rule is skipped (rule
   1, the shell-safety rule and the model still run). A retry before the
   answer reuses the request ("already waiting"); a deny keeps blocking
-  ("JR said no"). A call holding a credential (its text, or its paths and
+  ("The owner said no"). A call holding a credential (its text, or its paths and
   change, are withheld), cut at 4 KiB, or not scanned to the end is Deny
   only, and so is every `shell_send` (it is typed into a live shell whose
   directory and state the fingerprint can't bind). No record is written

@@ -749,7 +749,7 @@ ROUTINE_BODIES = [
     "ghp_ is the GitHub prefix; xoxb- is Slack's; sk- is OpenAI's.",
     "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqh\n-----END PUBLIC KEY-----",
     "use sk-learn-style-pipelines-for-the-whole-thing",
-    "PWD=/home/jr/Projects/Maha-Media/.worktrees/synaps-skills-jev",
+    "PWD=/home/user/Projects/example/.worktrees/example-repo-jev",
     "clone https://github.com/maha-media/synaps-skills.git and ssh://git@github.com/x",
     "the registry is http://localhost:8080/api/@scope/pkg for now",
 ]

@@ -627,19 +627,19 @@ _SHELL_FIX = {
                   "heredoc stay open, and the rest runs as commands): write the script with the write tool, "
                   "then run it",
 }
-# signal_all, by command: fixed text (10-27 22:38: a kill(-1, SIGKILL) ended
-# the whole desktop session)
+# signal_all, by command: fixed text (a kill(-1, SIGKILL) from a test binary
+# once ended a whole desktop session)
 _SIGNAL_FIX = {
-    SHELL_KILL: "with pid -1 signals every process you own (it killed the desktop session on 10-27). "
+    SHELL_KILL: "with pid -1 signals every process you own (it has killed a whole desktop session). "
                 "Signal a specific pid or a process group > 1 instead",
-    SHELL_PKILL: "with a user and no pattern signals every process the user owns (kill -1 killed the desktop "
-                 "session on 10-27). Add a pattern naming the processes, or signal a specific pid instead",
-    SHELL_KILLALL: "with a user and no process name signals every process the user owns (kill -1 killed the "
-                   "desktop session on 10-27). Name the processes, or signal a specific pid instead",
-    SHELL_KILLALL5: "signals every process outside its own session (kill -1 killed the desktop session on 10-27). "
+    SHELL_PKILL: "with a user and no pattern signals every process the user owns (kill -1 has killed a whole "
+                 "desktop session). Add a pattern naming the processes, or signal a specific pid instead",
+    SHELL_KILLALL: "with a user and no process name signals every process the user owns (kill -1 has killed a "
+                   "whole desktop session). Name the processes, or signal a specific pid instead",
+    SHELL_KILLALL5: "signals every process outside its own session (kill -1 has killed a whole desktop session). "
                     "Signal a specific pid or a process group > 1 instead",
 }
-_SIGNAL_FIX_OTHER = ("signals every process you own (kill -1 killed the desktop session on 10-27). "
+_SIGNAL_FIX_OTHER = ("signals every process you own (kill -1 has killed a whole desktop session). "
                      "Signal a specific pid or a process group > 1 instead")
 
 
@@ -1245,8 +1245,8 @@ def handle_send_events(params: dict, client: DecisionClient, cfg: GuardConfig, a
 # ── the rule-1 guard (fleet safety rule 1): deterministic, command texts ───
 #
 # Fleet rule 1: scripts and file content are written with the write/edit
-# tools, never generated inside a shell call (the 10-18 16:52 `rm -rf /*`
-# came from such a script). The rule refuses, before the call runs, a bash
+# tools, never generated inside a shell call (an `rm -rf /*` incident came
+# from such a script). The rule refuses, before the call runs, a bash
 # command, a shell_start command or a shell_send input holding a heredoc
 # (H1), a here-string (H2), an in-place sed/perl edit (E1), a script fed to
 # python or a shell on stdin (S1) or a long or multi-line `python -c` (S2),
@@ -1430,11 +1430,11 @@ def rule1_check(params: dict, cfg: GuardConfig, audit, log, *, started: float | 
 
 
 # ── the access rule (owner rules 27a and 27b) ──────────────────────────────
-# JR, 2026-10-20 ~19:15 CDT: "make sure the harness tries its best effort to
-# end turn and ask permission and halt production on a task before removing
-# group write permission and similar type of commands". The model score
-# rates chmod as hard to reverse and confirms, but fleet auto-accept passes a
-# confirm, so this rule BLOCKS, decided locally with no model call (R-GATE:
+# Before a command that changes access (such as removing group write
+# permission), the agent should end its turn and ask permission, and the task
+# should halt until it gets an answer. The model score rates chmod as hard to
+# reverse and confirms, but fleet auto-accept passes a confirm, so this rule
+# BLOCKS, decided locally with no model call (R-GATE:
 # whatever the key, budget, circuit or guard switch; only guard_access = off
 # stops it). It runs first, before the rule-1 guard. What it refuses is in
 # access.py: access commands, mode/owner/ACL changes outside the session's
@@ -1458,11 +1458,11 @@ ACCESS_MODES = ("block", "warn", "off")
 ACCESS_SCOPES = ("all", "fleet")
 
 _ACCESS_HEAD = ("jev: blocked by the access rule (decided locally, no model call). Owner rule 27a: this changes "
-                "access. Don't run it or work around it. End your turn and ask for JR's yes (a worker asks its "
-                "foreman). This task waits.")
-_ACCESS_27B = " (27b: this can widen a sandbox; JR's yes)"
-_ACCESS_AFTER = ("After JR's yes, JR runs it himself in his own terminal (or approves it once); do not retry it "
-                 "another way.")
+                "access. Don't run it or work around it. End your turn and ask for the owner's yes (a worker "
+                "asks its foreman). This task waits.")
+_ACCESS_27B = " (27b: this can widen a sandbox; the owner's yes)"
+_ACCESS_AFTER = ("After the owner's yes, the owner runs it in their own terminal (or approves it once); do not "
+                 "retry it another way.")
 # only when every hit is a mode command that the own-area exception could
 # cover: the exception is checked again, so naming the files is no way round
 _ACCESS_OWN = ("27a's only exception is a file you created yourself for this task in your own scratch "
@@ -1540,17 +1540,20 @@ def _access_line(tool: str, where: str, hit) -> str:
     return f"{at}{nested}: {hit.token}: {hit.why}"
 
 
-_ASK_OPEN = ("Request {id}: JR can answer it in Pria Desktop (Permission change). If he allows it once, run "
-             "exactly this call again, unchanged, within 30 minutes of his answer; anything else stays blocked.")
-_ASK_CLOSED = "Request {id}: this call can't be allowed once ({why}); after JR's yes, JR runs it himself."
-_ASK_WAITING = "Request {id} is already waiting for JR's answer in Pria Desktop; don't retry it before he answers."
-_ASK_DENIED = "JR said no (request {id}): don't retry it or work around it."
-_ASK_UNRECORDED = "(Request not recorded: {why}. JR can't answer it in the app; ask him directly.)"
+_ASK_OPEN = ("Request {id}: the owner can answer it in Pria Desktop (Permission change). If they allow it once, "
+             "run exactly this call again, unchanged, within 30 minutes of their answer; anything else stays "
+             "blocked.")
+_ASK_CLOSED = ("Request {id}: this call can't be allowed once ({why}); after the owner's yes, the owner runs it "
+               "themselves.")
+_ASK_WAITING = ("Request {id} is already waiting for the owner's answer in Pria Desktop; don't retry it before "
+                "they answer.")
+_ASK_DENIED = "The owner said no (request {id}): don't retry it or work around it."
+_ASK_UNRECORDED = "(Request not recorded: {why}. The owner can't answer it in the app; ask them directly.)"
 
 
 def _access_ask(params: dict, tool: str, tool_input, blocking, stopped, reason: str):
-    """Allow once (allow_once.py): ('allow', None, id, 'allow_once') when JR
-    allowed exactly this call once and the answer was consumed; else
+    """Allow once (allow_once.py): ('allow', None, id, 'allow_once') when the
+    owner allowed exactly this call once and the answer was consumed; else
     ('block', the line to add to the refusal, the request id or None, the
     answer state). Any error leaves the call blocked."""
     session = params.get("session_id")
@@ -1707,7 +1710,7 @@ def access_check(params: dict, cfg: GuardConfig, audit, log, *, started: float |
                                                       for w, h in blocking[:AUDIT_FINDINGS_MAX]],
                                              "hits_total": len(blocking), "ms": ms, "session": session},
                                       deadline)
-            log(f"guard {tool}: continue ({ms} ms), access rule 27a: JR allowed request {rid} once; "
+            log(f"guard {tool}: continue ({ms} ms), access rule 27a: the owner allowed request {rid} once; "
                 f"session {_session_label(session)}")
             return None
     ms = int((time.monotonic() - t0) * 1000)

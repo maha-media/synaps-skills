@@ -1,4 +1,4 @@
-"""bin/jev-python: Jev starts under a Python 3.11+ and fails loudly otherwise (SC 10-29, M5).
+"""bin/jev-python: Jev starts under a Python 3.11+ and fails loudly otherwise.
 
 Run from jev-plugin/:
     python3 -B -m unittest discover -s tests -p 'test_jev_python.py' -v

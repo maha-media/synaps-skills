@@ -1,6 +1,6 @@
 """rule1 — the rule-1 guard's scanner (fleet safety rule 1: scripts and file
 content are written with the write/edit tools, never generated inside a
-shell call; the 10-18 16:52 `rm -rf /*` came from such a script).
+shell call; an `rm -rf /*` incident came from such a script).
 
 scan_rule1(text) lists the shapes rule 1 forbids, at COMMAND level only
 (outside quotes, comments, arithmetic and heredoc bodies):

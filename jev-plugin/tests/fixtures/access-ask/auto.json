@@ -1,9 +1,9 @@
 {
-  "cwd": "/home/jr/Projects/Org/repo",
+  "cwd": "/home/user/Projects/Org/repo",
   "files": [
     {
       "op": "create",
-      "path": "/home/jr/.synaps-cli/sandbox/sessions/old.conf"
+      "path": "/home/user/.synaps-cli/sandbox/sessions/old.conf"
     }
   ],
   "hits": [

@@ -1,10 +1,10 @@
 """Allow once: the hand-off between the access rule (owner rules 27a/27b)
 and Pria Desktop's "Permission change" item.
 
-Every access block writes a request record; JR answers it with a native
+Every access block writes a request record; the owner answers it with a native
 click in the app (Allow once / Deny), which writes an answer record; the
 same session's exact retry of that call then passes the access rule ONCE.
-Format agreed with Pria Desktop's E (2026-10-20, SC 21:58, 790d 21:59):
+The record format is shared with Pria Desktop, which reads requests and writes answers:
 
     ~/.synaps-cli/memory/jev/access/            0700, this user's, no symlink
         requests/<id>.json   the guard (0600, temp + rename, O_NOFOLLOW)
@@ -21,7 +21,7 @@ either command (+ truncated, + shell_session for shell_send) or files
 [{path, op}] (+ change: the call's input, for write/edit/multi_edit).
 allow_once_possible is false when the text held a credential (it is then
 withheld: the command, or the paths and the change), was cut at 4 KiB, or
-the scan didn't reach the end: JR must see the whole call he allows, so
+the scan didn't reach the end: the owner must see the whole call they allow, so
 those get Deny only. shell_send is always Deny only: it runs in a live
 shell whose cwd and state the fingerprint can't bind. No record is
 written with a credential anywhere in it (_withhold).
@@ -214,7 +214,7 @@ def _names(dirpath: str) -> list[str]:
 
 
 def call_text(tool: str, tool_input) -> tuple[dict, bool]:
-    """What JR sees of the call, and whether it can be allowed once."""
+    """What the owner sees of the call, and whether it can be allowed once."""
     if not isinstance(tool_input, dict):
         return {}, False
     if tool in ("bash", "shell_start", "shell_send"):
@@ -356,12 +356,12 @@ _SHOWN = ("command", "change", "files", "shell_session", "working_directory", "c
 
 
 def _shows_this_call(rec: dict, call, reason) -> bool:
-    """Whether the record JR answered shows exactly the retried call: the
+    """Whether the record the owner answered shows exactly the retried call: the
     same session, caller (subagent_id: the same builder, or none for the
     session's own call), tool and cwd, the same preview fields record_block
     derives from its input, and the same refusal text. The fingerprint alone
     doesn't prove that: a same-user rewrite of requests/<id>.json can keep it
-    and show JR a harmless preview, or another caller's name."""
+    and show the owner a harmless preview, or another caller's name."""
     session, tool, cwd, tool_input, *rest = call
     subagent = rest[0] if rest else None
     shown, allowable = call_text(tool, tool_input)
@@ -377,7 +377,7 @@ def _shows_this_call(rec: dict, call, reason) -> bool:
 
 
 def lookup(home, fp: str, hits, now: float, call=None, reason=None) -> tuple[str, str] | None:
-    """JR's answer for this exact call, consumed if it allows it:
+    """The owner's answer for this exact call, consumed if it allows it:
     ('allow', id) after the rename to used/; ('deny', id); ('waiting', id)
     for a request still answerable with no answer yet; None otherwise.
     `call` = (session, tool, cwd, tool_input[, subagent_id]) of the retried

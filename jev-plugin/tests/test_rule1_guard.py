@@ -34,7 +34,7 @@ MASTER = "20261019-000000-aaaa"
 FOREMAN = "20261019-000000-ffff"
 WORKER = "20261019-000000-bbbb"
 NESTED_WORKER = "20261019-000000-cccc"
-JR = "20261019-000000-jjjj"
+OWNER = "20261019-000000-jjjj"
 
 ROSTER = (f'schema = "pria.fleet.roster/2"\n\n[master]\nsession = "{MASTER}"\n\n'
           f'[[team]]\nproject = "p"\nforeman = "{FOREMAN}"\n')
@@ -202,13 +202,13 @@ class Scope(FleetCase):
                 self.assert_blocked(self.check("bash", {"command": HEREDOC}, session=session))
 
     def test_other_sessions_are_not(self):
-        self.assertIsNone(self.check("bash", {"command": HEREDOC}, session=JR))
+        self.assertIsNone(self.check("bash", {"command": HEREDOC}, session=OWNER))
         self.assertIsNone(self.check("bash", {"command": HEREDOC}, session="another-session"))
         self.assertEqual(self.audit.counters.get("guard.rule1.out_of_scope"), 2)
         self.assertEqual(self.rows(), [])
 
     def test_scope_all_covers_every_session(self):
-        self.assert_blocked(self.check("bash", {"command": HEREDOC}, session=JR, guard_rule1_scope="all"))
+        self.assert_blocked(self.check("bash", {"command": HEREDOC}, session=OWNER, guard_rule1_scope="all"))
 
     def test_a_missing_session_id_is_in_scope(self):
         for session in (None, "", "  "):
@@ -221,7 +221,7 @@ class Scope(FleetCase):
         team.write_text("foreman = [unclosed\n")
         bump_mtime(team)
         for _ in range(2):
-            reason = self.assert_blocked(self.check("bash", {"command": HEREDOC}, session=JR))
+            reason = self.assert_blocked(self.check("bash", {"command": HEREDOC}, session=OWNER))
             self.assertTrue(reason.endswith(ROSTER_NOTE), reason)
         warns = [line for line in self.logs if "WARN fleet roster unreadable" in line]
         self.assertEqual(len(warns), 1)
@@ -229,7 +229,7 @@ class Scope(FleetCase):
         self.assertEqual(self.audit.counters.get("guard.rule1.roster_unreadable"), 2)
         team.write_text(TEAM)
         bump_mtime(team)
-        self.assertIsNone(self.check("bash", {"command": HEREDOC}, session=JR))
+        self.assertIsNone(self.check("bash", {"command": HEREDOC}, session=OWNER))
         self.assertEqual(sum("readable again" in line for line in self.logs), 1)
 
     def test_each_kind_of_bad_roster_fails_closed(self):
@@ -242,40 +242,40 @@ class Scope(FleetCase):
                 else:
                     roster_toml.write_text(text)
                 bump_mtime(roster_toml)
-                self.assert_blocked(self.check("bash", {"command": HEREDOC}, session=JR,
+                self.assert_blocked(self.check("bash", {"command": HEREDOC}, session=OWNER,
                                                cfg=guard.GuardConfig({})))
         roster_toml.unlink()
-        self.assert_blocked(self.check("bash", {"command": HEREDOC}, session=JR, cfg=guard.GuardConfig({})))
+        self.assert_blocked(self.check("bash", {"command": HEREDOC}, session=OWNER, cfg=guard.GuardConfig({})))
         roster_toml.write_text(ROSTER)
         (self.fleet / "projects").rename(self.fleet / "projects-away")
-        self.assert_blocked(self.check("bash", {"command": HEREDOC}, session=JR, cfg=guard.GuardConfig({})))
+        self.assert_blocked(self.check("bash", {"command": HEREDOC}, session=OWNER, cfg=guard.GuardConfig({})))
 
     def test_a_changed_team_file_is_read_again(self):
-        self.assertIsNone(self.check("bash", {"command": HEREDOC}, session=JR))
+        self.assertIsNone(self.check("bash", {"command": HEREDOC}, session=OWNER))
         team = self.fleet / "projects" / "a" / "team.toml"
-        team.write_text(TEAM + f'\n[[worker]]\nsession = "{JR}"\n')
+        team.write_text(TEAM + f'\n[[worker]]\nsession = "{OWNER}"\n')
         bump_mtime(team)
-        self.assert_blocked(self.check("bash", {"command": HEREDOC}, session=JR))
+        self.assert_blocked(self.check("bash", {"command": HEREDOC}, session=OWNER))
 
     def test_a_new_team_file_is_found_on_a_miss(self):
         now = [100.0]
         r = roster.FleetRoster(self.fleet, clock=lambda: now[0])
-        self.assertEqual(r.lookup(JR), (False, "unlisted"))
+        self.assertEqual(r.lookup(OWNER), (False, "unlisted"))
         (self.fleet / "projects" / "new").mkdir()
-        (self.fleet / "projects" / "new" / "team.toml").write_text(f'foreman = "{JR}"\n')
+        (self.fleet / "projects" / "new" / "team.toml").write_text(f'foreman = "{OWNER}"\n')
         now[0] += roster.MISS_REWALK_S / 2
-        self.assertEqual(r.lookup(JR), (False, "unlisted"))  # searched again at most every MISS_REWALK_S
+        self.assertEqual(r.lookup(OWNER), (False, "unlisted"))  # searched again at most every MISS_REWALK_S
         now[0] += roster.MISS_REWALK_S
-        self.assertEqual(r.lookup(JR), (True, "listed"))
+        self.assertEqual(r.lookup(OWNER), (True, "listed"))
         # a removed team file drops its sessions on the next search
         (self.fleet / "projects" / "new" / "team.toml").unlink()
-        self.assertEqual(r.lookup(JR), (False, "unlisted"))
+        self.assertEqual(r.lookup(OWNER), (False, "unlisted"))
         self.assertEqual(r.lookup(WORKER), (True, "listed"))
 
     def test_no_fleet_on_the_host_matches_no_session(self):
         cfg = guard.GuardConfig({})
         cfg.roster = roster.FleetRoster(self.base / "no-such-fleet")
-        for session in (JR, WORKER, None):
+        for session in (OWNER, WORKER, None):
             self.assertIsNone(self.check("bash", {"command": HEREDOC}, session=session, cfg=cfg))
         self.assertEqual(sum("no fleet on this host" in line for line in self.logs), 1)
 
@@ -399,7 +399,7 @@ class Gate(unittest.TestCase):
         self.assertEqual(self.hook(ext, "shell_start", {"command": "bash"}), {"action": "continue"})
         self.assertEqual(ext.audit.counters, before, "the guard does not see shell_start/shell_send")
         # out of scope: as before the rule (nothing for the shell-safety rule here)
-        self.assertEqual(self.hook(ext, "bash", {"command": HEREDOC}, session=JR), {"action": "continue"})
+        self.assertEqual(self.hook(ext, "bash", {"command": HEREDOC}, session=OWNER), {"action": "continue"})
         self.ask.assert_not_called()
 
     def test_the_guard_switched_off_or_denied_still_blocks(self):
@@ -431,7 +431,7 @@ class Gate(unittest.TestCase):
         self.assert_rule1(self.hook(ext, "bash", {"command": both}))
         self.assertEqual(ext.client.calls, [])
         # out of scope, the shell-safety rule answers as before
-        result = self.hook(ext, "bash", {"command": both}, session=JR)
+        result = self.hook(ext, "bash", {"command": both}, session=OWNER)
         self.assertEqual(result["action"], "block")
         self.assertIn("shell-safety rule", result["reason"])
         # nothing to refuse: the model is asked as before

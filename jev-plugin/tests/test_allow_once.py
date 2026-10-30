@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Allow once (owner rules 27a/27b): the access rule's request records and
-JR's answers (extensions/jev/allow_once.py, guard.access_check). Offline;
+the owner's answers (extensions/jev/allow_once.py, guard.access_check). Offline;
 every command is TEXT given to the scanner, never executed. The store lives
 in a temporary HOME.
 
@@ -92,7 +92,7 @@ class Records(Case):
         self.assertEqual(result["action"], "block")
         self.assertTrue(result["reason"].startswith(ta.HEAD))
         rid = self.rid(result)
-        self.assertIn("If he allows it once, run exactly this call again, unchanged, within 30 minutes",
+        self.assertIn("If they allow it once, run exactly this call again, unchanged, within 30 minutes",
                       result["reason"])
         for d in (self.store, *(self.store / n for n in allow_once.DIRS)):
             self.assertEqual(stat.S_IMODE(os.lstat(d).st_mode), 0o700, d)
@@ -115,7 +115,7 @@ class Records(Case):
         rid = self.rid(self.bash(CHMOD))
         again = self.bash(CHMOD)
         self.assertEqual(self.rid(again), rid)
-        self.assertIn("is already waiting for JR's answer", again["reason"])
+        self.assertIn("is already waiting for the owner's answer", again["reason"])
         self.assertEqual(len(os.listdir(self.store / "requests")), 1)
         self.assertNotEqual(self.rid(self.bash(CHMOD, session="20261020-000000-bbbb")), rid)
 
@@ -265,7 +265,7 @@ class Answers(Case):
         rid = self.rid(self.bash(CHMOD))
         self.answer(rid, "deny")
         result = self.bash(CHMOD)
-        self.assertIn(f"JR said no (request {rid}): don't retry it or work around it.", result["reason"])
+        self.assertIn(f"The owner said no (request {rid}): don't retry it or work around it.", result["reason"])
         self.assertEqual(len(os.listdir(self.store / "requests")), 1)
         self.assertEqual(self.rows()[-1]["answer"], "deny")
 
@@ -337,8 +337,8 @@ class Answers(Case):
         self.assertNotEqual(self.rid(result), rid)
 
     def test_an_edited_preview_with_the_fingerprint_kept_stays_blocked(self):
-        """790d's B1: a same-user rewrite of the request record can keep its
-        fingerprint and show JR a harmless preview. An Allow once answered
+        """A review finding: a same-user rewrite of the request record can keep its
+        fingerprint and show the owner a harmless preview. An Allow once answered
         on such a record is not consumed, and the retried call stays
         blocked under a NEW, honest request."""
         unit = self.units / "limit.service"
@@ -533,7 +533,7 @@ class Subagents(Case):
         self.assertNotEqual(want, allow_once.fingerprint(SESSION, "bash", str(self.work), {"command": CHMOD}))
         self.assertNotEqual(want, allow_once.fingerprint(SESSION, "bash", str(self.work), {"command": CHMOD},
                                                          subagent_id="sa_8"))
-        self.assertIn("If he allows it once, run exactly this call again", result["reason"])
+        self.assertIn("If they allow it once, run exactly this call again", result["reason"])
 
     def test_a_builders_allow_once_is_spent_only_by_that_builder(self):
         rid = self.rid(self.bash(CHMOD, subagent="sa_7"))
@@ -561,7 +561,7 @@ class Subagents(Case):
         rid = self.rid(self.bash(CHMOD, subagent="sa_7"))
         again = self.bash(CHMOD, subagent="sa_7")
         self.assertEqual(self.rid(again), rid)
-        self.assertIn("is already waiting for JR's answer", again["reason"])
+        self.assertIn("is already waiting for the owner's answer", again["reason"])
         lead = self.bash(CHMOD)
         self.assertNotEqual(self.rid(lead), rid)
         self.assertNotIn("is already waiting", lead["reason"])
@@ -569,7 +569,7 @@ class Subagents(Case):
         self.assertEqual(len(os.listdir(self.store / "requests")), 3)
 
     def test_an_edited_subagent_id_stays_blocked(self):
-        """The card JR answers must name the caller that retries: a record
+        """The card the owner answers must name the caller that retries: a record
         whose subagent_id was changed or dropped (fingerprint kept) is not
         consumed."""
         for forged in ("sa_8", None, ...):
@@ -642,7 +642,7 @@ class Fixtures(Case):
         if os.environ.get("JEV_ACCESS_FIXTURES_WRITE") == "1":
             FIXTURES.mkdir(parents=True, exist_ok=True)
             for name, obj in fresh.items():
-                text = json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False).replace(str(self.home), "/home/jr")
+                text = json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False).replace(str(self.home), "/home/user")
                 (FIXTURES / name).write_text(text + "\n")
         for name, obj in fresh.items():
             with self.subTest(name=name):

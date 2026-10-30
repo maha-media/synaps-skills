@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""The guard's deterministic shell-safety rule (guard item 2(b), after the
-16:52 `rm -rf /*` incident): a BLOCK, with the fix in the reason, for
+"""The guard's deterministic shell-safety rule (guard item 2(b), after an
+`rm -rf /*` incident): a BLOCK, with the fix in the reason, for
 
 - rm -r / find -delete / mv operands that expand a variable without `:?`;
 - recursive-rm and find -delete operands that are `/`, `/*`, `~` or $HOME;
 - a heredoc opened inside another heredoc's body;
-- (10-27 22:38, kill(-1, SIGKILL) ended the desktop session) a literal
+- (a test binary's kill(-1, SIGKILL) once ended a desktop session) a literal
   kill/pkill/killall/killall5 shape that signals every process the user
   may signal. TEXT ONLY: these tests read commands, nothing runs them.
 
@@ -307,7 +307,7 @@ QUIET_ACROSS_LINES = [
 ]
 
 
-# (10-27 22:38: a test binary called kill(-1, SIGKILL) and ended JR's whole
+# (A test binary once called kill(-1, SIGKILL) and ended the owner's whole
 # desktop session.) Literal shapes that signal every process the user may
 # signal: (shell text, command). Text only: nothing here is ever run.
 SIGNAL_ALL_SHAPES = [
@@ -526,7 +526,7 @@ def found_when_reopened_then_deep():
 
 
 def incident_script():
-    """The 16:52 shape: one bash call, ~8,400 characters, 99 lines, several
+    """The incident's shape: one bash call, ~8,400 characters, 99 lines, several
     heredocs; FS is assigned inside a python heredoc (so bash never runs the
     assignment) and a later shell line runs rm -rf "$FS"/* past character 5,000."""
     lines = ["python3 - <<'PY'"]
@@ -910,18 +910,18 @@ class ShellRuleGuard(unittest.TestCase):
         self.assertIn("literal path", reason)
 
     def test_a_signal_to_every_process_is_blocked_without_a_call(self):
-        # 10-27 22:38: kill(-1, SIGKILL) ended JR's desktop session. Text
+        # A test binary's kill(-1, SIGKILL) once ended a desktop session. Text
         # only: the guard reads these commands, nothing runs them.
         for command, says in (
-                ("kill -9 -1", "line 1: kill with pid -1 signals every process you own (it killed the desktop "
-                               "session on 10-27). Signal a specific pid or a process group > 1 instead"),
+                ("kill -9 -1", "line 1: kill with pid -1 signals every process you own (it has killed a whole "
+                               "desktop session). Signal a specific pid or a process group > 1 instead"),
                 ("echo ok\nsudo pkill -u jr", "line 2: pkill -u with a user and no pattern signals every process"),
                 ("killall -u jr", "line 1: killall -u with a user and no process name signals every process"),
                 ("killall5 -9", "line 1: killall5 signals every process outside its own session")):
             with self.subTest(command):
                 reason = self.assert_blocked(*self.run_guard("bash", {"command": command}))
                 self.assertIn(says, reason)
-                self.assertIn("10-27", reason)
+                self.assertIn("has killed a whole desktop session", reason)
         # a shell script written with it
         reason = self.assert_blocked(*self.run_guard(
             "write", {"path": str(self.ws / "stop.sh"), "content": "#!/bin/bash\nkill -TERM -- -1\n"}))
@@ -1427,7 +1427,7 @@ def _scan_units():
         "spelled rm in one word": "'rm'",
         "quote runs": "''''''''\"\"\"\"\"\"\"\"r ",
         "noise between letters": "'r" * 40 + "\n",
-        # kill / pkill / killall (10-27): option words, spelled words that
+        # kill / pkill / killall (signal_all): option words, spelled words that
         # are near misses, options of a pkill with a pattern
         "kill words": "kill -9 " * 30 + "\n",
         "kill operand lines": "kill -9 -12\n",
