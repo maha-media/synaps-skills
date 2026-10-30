@@ -1084,12 +1084,9 @@ tools (the new text is the content, `new_string` or the edit's text).
   below the session cwd when that cwd is a project, and not a protected or
   gated path. `<temp>`: `/var/tmp` and `/tmp` on Linux (as before); on
   macOS `/private/var/tmp`, `/private/tmp` and a per-user `$TMPDIR` under
-  `/private/var/folders`; plus the host profile's `scratch.dir` only when it
-  sets one that resolves strictly below HOME or a temp root (never HOME,
-  `/` or above). A project cwd: with the host profile's `workspace.root`
-  (resolving strictly below HOME), a cwd strictly below it that is not its
-  worktrees dir; without one (or with one that fails that check), exactly
-  the old rule, a cwd at least three levels below HOME. A top-level `cd`/`pushd` to a literal directory that exists moves
+  `/private/var/folders`; a host profile never adds one. A project cwd:
+  exactly the old rule, a cwd at least three levels below HOME (the host
+  profile's `workspace.root` is not consulted). A top-level `cd`/`pushd` to a literal directory that exists moves
   where later relative targets resolve (never the own-area bases); any
   other move (`popd`, `cd -`, `cd $X`, a `cd` in a subshell, a nested
   script or a pipeline) makes relative targets unknown, so they block.
@@ -1219,8 +1216,8 @@ other module checks the OS. **HostProfile** reads the Pria host profile
 only through `pria-fleet host --json` (stdin closed, 1 s timeout, never the
 file), caches it per process and reads it again when `~/.pria/host.toml`
 changes (mtime, size or inode; one stat a second at most) or after 60 s.
-Keys used: `workspace.root`, `workspace.worktrees_dir`, `scratch.dir`,
-`app.state_dir`, `app.fleet_dir`, `host.service_manager`. `tools.*` and
+Keys acted on: `app.state_dir`, `app.fleet_dir`, `host.service_manager`.
+`workspace.root`, `workspace.worktrees_dir`, `scratch.dir`, `tools.*` and
 `runners` are read and validated but nothing acts on them. Anything
 invalid (relative, `..`, control characters, `/`) is unset.
 
@@ -1231,8 +1228,8 @@ line. jev never asks the user for a host fact, asks no setup question and
 never writes `host.toml`. Every key has a safe default, so jev never needs
 a `missing: KEY` line:
 
-- `scratch.dir` and `workspace.root`: no extra scratch root, and the old
-  project rule;
+- `scratch.dir` and `workspace.root`: never used by the guard (the OS temp
+  roots and the old project rule, with or without them);
 - `app.state_dir`: Linux's path, else no relay;
 - `app.fleet_dir`: `~/.pria/fleet`;
 - `host.service_manager`: from the OS.
@@ -1243,8 +1240,8 @@ trusted wrapper or a trusted interpreter. jev runs nothing the profile
 names, the rule-1 wrapper set stays in jev's code, and `bin/jev-python`
 never consults `tools.python`. A missing fact relaxes no policy and never
 falls back to a bare-`PATH` or local run. Otherwise the profile only names
-where things live. The two values that widen an exception (`scratch.dir`,
-`workspace.root`) are validated first.
+where things live. No profile value widens a guard exception: `scratch.dir`
+and `workspace.root` are facts, not owner grants, so the guard ignores them.
 
 **Platform** (`linux`, `macos` or `other`) holds:
 

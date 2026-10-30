@@ -39,12 +39,11 @@ xargs or find -exec), every target is a literal path (no variable, no
 command substitution, no `{}`), and each target's realpath (globs
 expanded) lies strictly below <root>/<dir>/ for a scratch root (the OS
 temp roots from host_profile.Platform: /var/tmp and /tmp on Linux,
-/private/var/tmp, /private/tmp and the per-user $TMPDIR on macOS; plus the
-host profile's scratch.dir when the profile sets one), or strictly below
-the session cwd when that cwd is a project: strictly below the host
-profile's workspace.root (not the root or its worktrees dir itself) when
-that is set, else (no profile: the old rule, unchanged) at least three
-levels below HOME (a project checkout or worktree, never ~ or ~/Projects);
+/private/var/tmp, /private/tmp and the per-user $TMPDIR on macOS; a host
+profile never adds one), or strictly below the session cwd when that cwd
+is a project: at least three levels below HOME (a project checkout or
+worktree, never ~ or ~/Projects; the host profile's workspace.root is not
+consulted, since facts are not authority);
 and it is not a protected or gated path. When in doubt it blocks.
 
 Limits (README): variables and control flow are not evaluated; a script
@@ -505,31 +504,11 @@ class Context:
         self.profile = profile or host_profile.HostProfile.current()
         self.platform = self.profile.platform
         self.service_gates = self.platform.service_gates()
-        roots = list(self.platform.temp_roots())
-        scratch = self._owner_dir(self.profile.scratch_dir(default=False), roots)
-        if scratch and scratch not in roots:
-            roots.append(scratch)
-        self.scratch_roots = tuple(roots)
-        self.workspace_real = self._owner_dir(self.profile.workspace_root(), ())
-        self.worktrees_real = self._owner_dir(self.profile.worktrees_dir(), ()) if self.workspace_real else None
-
-    def _owner_dir(self, path: str | None, roots) -> str | None:
-        """A profile dir that widens an exception, as a realpath, or None
-        when it cannot be trusted to: it must lie strictly below HOME (or a
-        temp root), never be HOME, / or a dir above HOME, and resolve."""
-        if not path or not self.home_real:
-            return None
-        try:
-            real = self.realpath(path)
-        except (OSError, ValueError):
-            return None
-        if not isinstance(real, str) or not real.startswith("/") or real == "/":
-            return None
-        if _under(self.home_real, real):
-            return None
-        if _strictly_under(real, self.home_real) or any(_strictly_under(real, r) for r in roots):
-            return real
-        return None
+        # Facts are not authority: no host-profile value widens an exception.
+        # The own-scratch roots are the OS temp roots only (scratch.dir is
+        # never added), and an own project is the depth rule only
+        # (workspace.root is never consulted).
+        self.scratch_roots = tuple(self.platform.temp_roots())
 
 
 def _perm_bits(path: str) -> int | None:
@@ -860,7 +839,7 @@ OWN_AREA_WHYS = frozenset({"changes access outside the session's own worktree or
 
 def _own_real(real: str, ctx: Context) -> bool:
     # scratch is strictly below <root>/<dir>/ (ctx.scratch_roots: the OS temp
-    # roots, plus the profile's scratch.dir when it sets one)
+    # roots; a host profile never adds one)
     for tmp in ctx.scratch_roots:
         if _strictly_under(real, tmp):
             rest = real[len(tmp) + 1:].split("/")
@@ -877,14 +856,8 @@ def _own_real(real: str, ctx: Context) -> bool:
         for i, p in enumerate(parts):
             if ((p == "tmp" and i >= 2) or (p == ".worktrees" and i >= 1)) and len(parts) - i >= 3:
                 return True
-    ws = ctx.workspace_real
-    if ws:
-        # the profile names the workspace: the cwd is a project when it lies
-        # strictly below workspace.root and is not its worktrees dir
-        return bool(cwd and _strictly_under(cwd, ws) and cwd != ctx.worktrees_real
-                    and _strictly_under(real, cwd))
-    # no workspace.root (the default; unchanged): a cwd at least three levels
-    # below HOME (~/<a>/<b>/<project>) is a project
+    # a cwd at least three levels below HOME (~/<a>/<b>/<project>) is a
+    # project (the host profile's workspace.root is never consulted)
     if cwd and home and _strictly_under(cwd, home):
         depth = len(cwd[len(home.rstrip("/")) + 1:].split("/"))
         if depth >= 3 and _strictly_under(real, cwd):

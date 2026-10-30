@@ -476,11 +476,13 @@ class ScratchRoots(unittest.TestCase):
     def test_without_a_profile_the_linux_set_is_the_old_set(self):
         self.assertEqual(self.roots({}), ("/var/tmp", "/tmp"))
 
-    def test_a_valid_scratch_dir_is_the_old_set_plus_it(self):
+    def test_a_valid_scratch_dir_adds_nothing(self):
+        # facts are not authority: scratch.dir never widens the own-scratch exception
         for rel in (".cache/pria/scratch", "scratch"):
             path = os.path.join(self.home, rel)
-            self.assertEqual(self.roots({"scratch": {"dir": path}}), ("/var/tmp", "/tmp", path))
-        self.assertEqual(self.roots({"scratch": {"dir": "/var/tmp/lanes"}}), ("/var/tmp", "/tmp", "/var/tmp/lanes"))
+            os.makedirs(path, exist_ok=True)
+            self.assertEqual(self.roots({"scratch": {"dir": path}}), ("/var/tmp", "/tmp"))
+        self.assertEqual(self.roots({"scratch": {"dir": "/var/tmp/lanes"}}), ("/var/tmp", "/tmp"))
 
     def test_an_invalid_scratch_dir_adds_nothing(self):
         for bad in ["/", self.home, self.tmp, "/etc/scratch", "/usr", os.path.dirname(self.home), "/var/tmp"]:

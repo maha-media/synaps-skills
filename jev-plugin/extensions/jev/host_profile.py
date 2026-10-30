@@ -22,8 +22,9 @@ alarm still goes through.
 Zero-touch: jev never asks the user for a host fact, asks no setup
 question, and never writes ~/.pria/host.toml. Every key it reads has a safe
 default, so a missing key never needs a `missing: KEY` line:
-- scratch.dir, workspace.root: no extra scratch root, and the old project
-  heuristic;
+- scratch.dir, workspace.root: read and validated only; the guard's
+  own-scratch and own-project exceptions never use them (the OS temp roots
+  and the old depth rule);
 - app.state_dir: Linux's path, else no relay (direct transport);
 - app.fleet_dir: ~/.pria/fleet;
 - host.service_manager: from the OS;
@@ -36,10 +37,10 @@ the rule-1 wrapper set stays in rule1's own tables; bin/jev-python does not
 consult tools.python. A missing fact never relaxes a policy and never falls
 back to a bare-PATH or local run.
 
-The profile otherwise only names where things live. Owner-supplied paths
-that would widen an exception (scratch.dir, workspace.root) are validated in
-access.Context; without a profile the guard behaves exactly as before on
-Linux.
+The profile otherwise only names where things live. No profile value widens
+a guard exception: scratch.dir and workspace.root are facts, not owner
+grants, so access.Context does not use them, and the guard behaves exactly
+as before on Linux with or without a profile.
 
 The snapshot is loaded once per process, cached, and reloaded when
 ~/.pria/host.toml changes (mtime, size or inode; a stat at most once a
@@ -503,8 +504,8 @@ class HostProfile:
         return wt
 
     def scratch_dir(self, *, default: bool = True) -> str | None:
-        """scratch.dir; with default=False only a value the profile sets
-        (the guard's own-scratch exception takes only that)."""
+        """scratch.dir; with default=False only a value the profile sets.
+        A fact only: the guard never takes it as an own-scratch root."""
         p = self._get("scratch.dir")
         if p is None and default:
             p = self.platform.default_scratch_dir(self.home)

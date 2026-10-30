@@ -35,8 +35,8 @@ class HomeCase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="jev-access-", dir=os.environ.get("TMPDIR") or "/var/tmp")
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name) / "home"
-        self.shallow = self.home / "workspace"                        # the profile's workspace.root
-        self.work = self.shallow / "Org" / "repo"                     # a project below it: an own-area cwd
+        self.shallow = self.home / "workspace"                        # a workspace dir (the profile names it; ignored)
+        self.work = self.shallow / "Org" / "repo"                     # depth 3 below HOME: an own-area cwd
         self.scratch = Path(self.tmp.name) / "scratch"                # stands in for /var/tmp/<lane>
         self.sessions = self.home / ".synaps-cli" / "sandbox" / "sessions"
         self.units = self.home / ".config" / "systemd" / "user"
@@ -55,7 +55,7 @@ class HomeCase(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, {"HOME": str(self.home)})
         patcher.start()
         self.addCleanup(patcher.stop)
-        # the host profile names the workspace; the scratch root stands in for the OS temp roots
+        # the host profile names a workspace (a fact the guard ignores); the scratch root stands in for the OS temp roots
         self.profile = host_profile.HostProfile(
             {"workspace": {"root": str(self.shallow)}}, home=str(self.home),
             platform=host_profile.Platform(temp_roots=(str(self.scratch_root),)))
@@ -568,9 +568,10 @@ class MacOSTables(HomeCase):
         self.assertEqual(access.classify("/etc/sudoers", ctx)[0], "sudoers")
 
 
-class OwnProjectWithoutRoot(HomeCase):
-    """No workspace.root (or an invalid one): the old heuristic exactly, a
-    cwd at depth 3 or more below HOME is a project of the session's own."""
+class OwnProjectIgnoresTheProfile(HomeCase):
+    """Facts are not authority: workspace.root (valid, invalid or unset)
+    never changes the own-project rule; a cwd at depth 3 or more below HOME
+    is a project of the session's own, exactly the old rule."""
 
     def use(self, snapshot):
         profile = host_profile.HostProfile(snapshot, home=str(self.home),
@@ -579,27 +580,33 @@ class OwnProjectWithoutRoot(HomeCase):
         use.__enter__()
         self.addCleanup(use.__exit__, None, None, None)
 
-    def test_the_old_heuristic_without_a_root(self):
-        for snapshot in ({}, {"workspace": {"root": str(self.home)}}, {"workspace": {"root": "/"}},
-                         {"workspace": {"root": "/srv/elsewhere"}}):
-            with self.subTest(snapshot=snapshot):
-                self.use(snapshot)
-                self.assertEqual(self.blocking("chmod +x scripts/run.sh", cwd=self.work), [])
-                self.assertTrue(self.blocking("chmod +x repo/scripts/run.sh", cwd=self.shallow / "Org"))
+    SNAPSHOTS = ({}, {"workspace": {"root": "WS"}}, {"workspace": {"root": "WS", "worktrees_dir": "WS/.worktrees"}},
+                 {"workspace": {"root": "HOME"}}, {"workspace": {"root": "/"}}, {"workspace": {"root": "/srv/elsewhere"}})
 
-    def test_with_a_root_only_cwds_below_it_count(self):
+    def snapshots(self):
+        for snap in self.SNAPSHOTS:
+            ws = snap.get("workspace", {})
+            yield {"workspace": {k: v.replace("WS", str(self.shallow)).replace("HOME", str(self.home))
+                                 for k, v in ws.items()}} if ws else {}
+
+    def test_the_old_heuristic_with_any_profile(self):
         other = self.home / "other" / "Org" / "repo"
         (other / "scripts").mkdir(parents=True)
         (other / "scripts" / "run.sh").write_text("x")
-        self.assertTrue(self.blocking("chmod +x scripts/run.sh", cwd=other))     # depth 3, outside the root
-        self.assertEqual(self.blocking("chmod +x scripts/run.sh", cwd=self.work), [])
         wt = self.shallow / ".worktrees"
         (wt / "x" / "scripts").mkdir(parents=True)
         (wt / "f.sh").write_text("x")
-        # cwd = the worktrees dir: no project (below .worktrees/<name>/ the old worktree rule applies)
-        self.assertTrue(self.blocking("chmod +x f.sh", cwd=wt))
-        self.assertEqual(self.blocking("chmod +x x/scripts", cwd=wt), [])
-        self.assertTrue(self.blocking("chmod +x Org/repo/scripts/run.sh", cwd=self.shallow))
+        for snapshot in self.snapshots():
+            with self.subTest(snapshot=snapshot):
+                self.use(snapshot)
+                self.assertEqual(self.blocking("chmod +x scripts/run.sh", cwd=self.work), [])
+                self.assertEqual(self.blocking("chmod +x scripts/run.sh", cwd=other), [])   # depth 3, outside any root
+                # depth 2, even directly below a valid workspace.root: no project
+                self.assertTrue(self.blocking("chmod +x repo/scripts/run.sh", cwd=self.shallow / "Org"))
+                self.assertTrue(self.blocking("chmod +x Org/repo/scripts/run.sh", cwd=self.shallow))
+                # the worktrees dir itself: no project; below .worktrees/<name>/ the worktree rule applies
+                self.assertTrue(self.blocking("chmod +x f.sh", cwd=wt))
+                self.assertEqual(self.blocking("chmod +x x/scripts", cwd=wt), [])
 
 class SandboxSwitch(HomeCase):
     def test_manual_passes_only_a_new_session_file(self):
