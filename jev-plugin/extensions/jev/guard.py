@@ -30,7 +30,7 @@ import signal
 import threading
 import time
 
-from . import access, allow_once, relay_redact, roster, rule1
+from . import access, allow_once, host_profile, relay_redact, roster, rule1
 from .logs import decision, notice, routine
 from .client import DecisionClient, InvalidResponse, JevError, top_level
 from .policy import PolicyDenied
@@ -169,7 +169,7 @@ class GuardConfig:
         # the rule-1 guard (fleet safety rule 1): its own switch and scope
         self.rule1 = rule1_mode(cfg.get("guard_rule1"))
         self.rule1_scope = rule1_scope_mode(cfg.get("guard_rule1_scope"))
-        # the access rule (owner rules 27a/27b): its own switch and scope
+        # the access rule (and its sandbox switch): its own switch and scope
         self.access = access_mode(cfg.get("guard_access"))
         self.access_scope = access_scope_mode(cfg.get("guard_access_scope"))
         self.roster = roster.FleetRoster()
@@ -1429,7 +1429,7 @@ def rule1_check(params: dict, cfg: GuardConfig, audit, log, *, started: float | 
     return {"action": "block", "reason": f"{_RULE1_HEAD} Fix these and retry:\n{listed}" + roster_note}
 
 
-# ── the access rule (owner rules 27a and 27b) ──────────────────────────────
+# ── the access rule (with its sandbox switch) ──────────────────────────────
 # Before a command that changes access (such as removing group write
 # permission), the agent should end its turn and ask permission, and the task
 # should halt until it gets an answer. The model score rates chmod as hard to
@@ -1440,7 +1440,7 @@ def rule1_check(params: dict, cfg: GuardConfig, audit, log, *, started: float | 
 # access.py: access commands, mode/owner/ACL changes outside the session's
 # own worktree or scratch, writes to protected paths, writes to systemd
 # units that set a limit or access key, umask lines in shell or service
-# config, inline code naming an access change, and (27b) sandbox files: in
+# config, inline code naming an access change, and sandbox files: in
 # manual mode only a NEW sessions/<name>.conf passes; in auto mode any change
 # below sessions/ passes and a change to an existing file is audited as rule
 # access_auto. The mode is the switch file access.switch_path (missing or
@@ -1451,22 +1451,22 @@ def rule1_check(params: dict, cfg: GuardConfig, audit, log, *, started: float | 
 # paths hold an access word (access.RAW_WORDS), and passes otherwise. Audit
 # rows (rule "access" or "access_auto") and log lines carry fixed tokens,
 # line numbers and the session id, never text. Scope (guard_access_scope):
-# all (default: owner rule 27a binds every agent) or fleet (the roster).
+# all (default: the access rule binds every agent) or fleet (the roster).
 
 ACCESS_TOOLS = frozenset({"bash", "shell_start", "shell_send", "write", "edit", "multi_edit"})
 ACCESS_MODES = ("block", "warn", "off")
 ACCESS_SCOPES = ("all", "fleet")
 
-_ACCESS_HEAD = ("jev: blocked by the access rule (decided locally, no model call). Owner rule 27a: this changes "
+_ACCESS_HEAD = ("jev: blocked by the access rule (decided locally, no model call). This changes "
                 "access. Don't run it or work around it. End your turn and ask for the owner's yes (a worker "
                 "asks its foreman). This task waits.")
-_ACCESS_27B = " (27b: this can widen a sandbox; the owner's yes)"
+_ACCESS_SANDBOX = " (sandbox: this can widen a sandbox; the owner's yes)"
 _ACCESS_AFTER = ("After the owner's yes, the owner runs it in their own terminal (or approves it once); do not "
                  "retry it another way.")
 # only when every hit is a mode command that the own-area exception could
 # cover: the exception is checked again, so naming the files is no way round
-_ACCESS_OWN = ("27a's only exception is a file you created yourself for this task in your own scratch "
-               "(/var/tmp/<lane>/...) or worktree. If that is all this is, name those files by literal path "
+_ACCESS_OWN = ("The rule's only exception is a file you created yourself for this task in your own scratch "
+               "(a dir of your own under the temp dir, such as /var/tmp/<lane>/...) or worktree. If that is all this is, name those files by literal path "
                "(absolute, or after a plain `cd` to a literal directory) in a call of their own; it is checked again. "
                "Otherwise stop here.")
 
@@ -1599,7 +1599,7 @@ def _access_ask(params: dict, tool: str, tool_input, blocking, stopped, reason: 
 
 
 def _access_auto_record(params: dict, tool: str, tool_input, autos, log) -> str | None:
-    """An FYI request record for a 27b auto pass; a failure only logs."""
+    """An FYI request record for a sandbox auto pass; a failure only logs."""
     try:
         files = [{"path": p, "op": op} for _, p, _, op in access_targets(tool, tool_input)]
         return allow_once.record_auto(os.environ.get("HOME"), session=params.get("session_id"), tool=tool,
@@ -1613,7 +1613,7 @@ def _access_auto_record(params: dict, tool: str, tool_input, autos, log) -> str 
 
 def access_check(params: dict, cfg: GuardConfig, audit, log, *, started: float | None = None) -> dict | None:
     """The access rule's answer for one call: a block, or None to carry on
-    (nothing found, a 27b auto pass, out of scope, warn, off)."""
+    (nothing found, a sandbox auto pass, out of scope, warn, off)."""
     if cfg.access == "off":
         return None
     tool = params.get("tool_runtime_name") or params.get("tool_name") or ""
@@ -1636,9 +1636,13 @@ def access_check(params: dict, cfg: GuardConfig, audit, log, *, started: float |
         if size > SHELL_SCAN_MAX_BYTES:
             stopped = f"too large: {size} bytes, over {SHELL_SCAN_MAX_BYTES}"
         else:
+            # The host profile reloads (a CLI call, at most every 60 s) outside the alarm.
+            profile = host_profile.HostProfile.current()
+            profile.refresh()
             with BudgetAlarm(deadline - REPLY_MARGIN_S):  # realpath, glob and small reads
                 home = os.environ.get("HOME")
-                ctx = access.Context(session_cwd(params), home, sandbox_mode=access.read_sandbox_mode(home))
+                ctx = access.Context(session_cwd(params), home, sandbox_mode=access.read_sandbox_mode(home),
+                                     profile=profile)
                 for where, text in texts:
                     partial = []
                     try:
@@ -1685,7 +1689,7 @@ def access_check(params: dict, cfg: GuardConfig, audit, log, *, started: float |
             return None
 
     action = "warn" if cfg.access == "warn" else "block"
-    head = _ACCESS_HEAD + (_ACCESS_27B if any(h.kind == "sandbox" for _, h in blocking) else "")
+    head = _ACCESS_HEAD + (_ACCESS_SANDBOX if any(h.kind == "sandbox" for _, h in blocking) else "")
     if not blocking:
         reason = (f"{head}\nThis {tool} call names an access change and could not "
                   f"be checked to the end ({stopped}). {_ACCESS_AFTER}")

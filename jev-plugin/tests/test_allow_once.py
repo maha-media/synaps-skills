@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Allow once (owner rules 27a/27b): the access rule's request records and
+"""Allow once: the access rule's request records and
 the owner's answers (extensions/jev/allow_once.py, guard.access_check). Offline;
 every command is TEXT given to the scanner, never executed. The store lives
 in a temporary HOME.

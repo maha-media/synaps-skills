@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The access rule (owner rules 27a and 27b): access.scan_access /
+"""The access rule (and its sandbox switch): access.scan_access /
 path_access / sandbox_decision and its wiring (guard.access_check and the
 extension's before_tool_call order). Offline; every command is TEXT given
 to the scanner, never executed. Paths live in a temporary HOME.
@@ -22,12 +22,12 @@ sys.path.insert(0, os.path.join(ROOT, "extensions"))
 import jev_test_home  # noqa: F401,E402  (keeps the suite out of the real Allow-once store)
 sys.path.insert(0, HERE)
 
-from jev import access, guard, rule1  # noqa: E402
+from jev import access, guard, host_profile, rule1  # noqa: E402
 from jev import audit as audit_mod  # noqa: E402
 
 CANARY = "CANARY_ac27a"
-HEAD = "jev: blocked by the access rule (decided locally, no model call). Owner rule 27a: this changes access."
-B27 = "(27b: this can widen a sandbox; the owner's yes)"
+HEAD = "jev: blocked by the access rule (decided locally, no model call). This changes access."
+SANDBOX_NOTE = "(sandbox: this can widen a sandbox; the owner's yes)"
 
 
 class HomeCase(unittest.TestCase):
@@ -35,8 +35,8 @@ class HomeCase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="jev-access-", dir=os.environ.get("TMPDIR") or "/var/tmp")
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name) / "home"
-        self.work = self.home / "Projects" / "Org" / "repo"          # depth 3: an own-area cwd
-        self.shallow = self.home / "Projects"                         # depth 1: never an own area
+        self.shallow = self.home / "workspace"                        # the profile's workspace.root
+        self.work = self.shallow / "Org" / "repo"                     # a project below it: an own-area cwd
         self.scratch = Path(self.tmp.name) / "scratch"                # stands in for /var/tmp/<lane>
         self.sessions = self.home / ".synaps-cli" / "sandbox" / "sessions"
         self.units = self.home / ".config" / "systemd" / "user"
@@ -52,10 +52,16 @@ class HomeCase(unittest.TestCase):
         self.scratch_root = Path(self.tmp.name) / "scratch-root"
         (self.scratch_root / "lane").mkdir(parents=True)
         (self.scratch_root / "lane" / "run.sh").write_text("x")
-        for patcher in (mock.patch.dict(os.environ, {"HOME": str(self.home)}),
-                        mock.patch.object(access, "SCRATCH_ROOTS", (str(self.scratch_root),))):
-            patcher.start()
-            self.addCleanup(patcher.stop)
+        patcher = mock.patch.dict(os.environ, {"HOME": str(self.home)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # the host profile names the workspace; the scratch root stands in for the OS temp roots
+        self.profile = host_profile.HostProfile(
+            {"workspace": {"root": str(self.shallow)}}, home=str(self.home),
+            platform=host_profile.Platform(temp_roots=(str(self.scratch_root),)))
+        use = host_profile.HostProfile.use(self.profile)
+        use.__enter__()
+        self.addCleanup(use.__exit__, None, None, None)
 
     def ctx(self, cwd=None, mode="manual"):
         return access.Context(str(cwd or self.work), str(self.home), sandbox_mode=mode)
@@ -69,13 +75,13 @@ class HomeCase(unittest.TestCase):
 
 class Commands(HomeCase):
     def test_the_incident_blocks(self):
-        hits = self.blocking("chmod g-w ~/Projects ~/Projects/example", cwd=self.work)
+        hits = self.blocking("chmod g-w ~/workspace ~/workspace/example", cwd=self.work)
         self.assertEqual([(h.kind, h.token) for h in hits], [("command", "chmod")])
         self.assertIn("outside the session's own worktree or scratch", hits[0].why)
 
     def test_always_commands(self):
-        for text, token in [("sudo systemctl restart x", "sudo"), ("usermod -aG docker jr", "usermod"),
-                            ("gpasswd -a jr g", "gpasswd"), ("ufw allow 22", "ufw"),
+        for text, token in [("sudo systemctl restart x", "sudo"), ("usermod -aG docker user", "usermod"),
+                            ("gpasswd -a user g", "gpasswd"), ("ufw allow 22", "ufw"),
                             ("iptables -A INPUT -j DROP", "iptables"), ("iptables -L -F", "iptables"),
                             ("nft add rule inet f c drop", "nft"), ("nft -f rules.nft", "nft"),
                             ("firewall-cmd --add-port=1/tcp", "firewall-cmd"),
@@ -110,17 +116,17 @@ class Commands(HomeCase):
             with self.subTest(text=text):
                 self.assertEqual(self.blocking(text), [], text)
         for text in ["mkdir -m 777 ~/shared", "mkdir -m 2775 ~/g", "mkdir -m g+w ~/z", "mkdir -m $M ~/z",
-                     f"install -m 700 tool {b}/tool", f"install -m 775 tool {b}/new", f"install -o jr tool {b}/new",
-                     f"install -m 755 -g jr tool {b}/new", f"install -m 644 a b {b}/missing-dir",
+                     f"install -m 700 tool {b}/tool", f"install -m 775 tool {b}/new", f"install -o user tool {b}/new",
+                     f"install -m 755 -g user tool {b}/new", f"install -m 644 a b {b}/missing-dir",
                      f"install -m 644 tool {b}/*", f"install -d -m 700 {b}"]:
             with self.subTest(text=text):
                 self.assertTrue(self.blocking(text), text)
 
     def test_mode_commands_outside_the_own_area(self):
-        for text in ["chown jr ~/Projects", "chgrp jr /srv/x", "setfacl -m u:x:rw ~/Projects/a",
+        for text in ["chown user ~/workspace", "chgrp user /srv/x", "setfacl -m u:x:rw ~/workspace/a",
                      "chattr +i ~/x", "chmod -R 755 /home", "install -o root a /etc/x",
-                     "mkdir -m 777 ~/newdir", "mkdir -pm 1777 ~/newdir", "rsync -a --chmod=g-w a/ ~/Projects/",
-                     "chmod +x $F", "chmod +x \"$(pwd)/f\"", "chacl u::rwx ~/x", "chmod -w ~/Projects/x"]:
+                     "mkdir -m 777 ~/newdir", "mkdir -pm 1777 ~/newdir", "rsync -a --chmod=g-w a/ ~/workspace/",
+                     "chmod +x $F", "chmod +x \"$(pwd)/f\"", "chacl u::rwx ~/x", "chmod -w ~/workspace/x"]:
             with self.subTest(text=text):
                 self.assertTrue(self.blocking(text), text)
 
@@ -139,22 +145,23 @@ class Commands(HomeCase):
         self.assertTrue(self.blocking(f"chmod g-w {root}/../x/y"))
         (root / "loose.sh").write_text("x")
         self.assertEqual(self.blocking(f"chmod +x {root}/loose.sh"), [])  # a file right in the root
-        # owner rule 16a's project scratch and a worktree, strictly below their <dir>
-        proj = self.home / "Projects" / "Org" / "app"
-        for d in (proj / "tmp" / "run1", self.home / "Projects" / ".worktrees" / "lane-x" / "src"):
+        # a project's home scratch and a worktree, strictly below their <dir>
+        proj = self.home / "workspace" / "Org" / "app"
+        for d in (proj / "tmp" / "run1", self.home / "workspace" / ".worktrees" / "lane-x" / "src"):
             d.mkdir(parents=True)
-        for text in [f"chmod 600 {proj}/tmp/run1/key.env", f"chmod +x ~/Projects/.worktrees/lane-x/src/a.sh",
-                     f"chmod -R g-w ~/Projects/.worktrees/lane-x/src"]:
+        for text in [f"chmod 600 {proj}/tmp/run1/key.env", f"chmod +x ~/workspace/.worktrees/lane-x/src/a.sh",
+                     f"chmod -R g-w ~/workspace/.worktrees/lane-x/src"]:
             with self.subTest(text=text):
                 self.assertEqual(self.blocking(text, cwd=self.home), [], text)
         for text in [f"chmod g-w {proj}/tmp", f"chmod g-w {proj}/tmp/run1", "chmod g-w ~/tmp/x/y",
-                     "chmod -R g-w ~/Projects/.worktrees", "chmod -R g-w ~/Projects/.worktrees/lane-x",
+                     "chmod -R g-w ~/workspace/.worktrees", "chmod -R g-w ~/workspace/.worktrees/lane-x",
                      f"chmod +x {proj}/run.sh"]:
             with self.subTest(text=text):
                 self.assertTrue(self.blocking(text, cwd=self.home), text)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "the Linux temp roots")
     def test_the_real_scratch_roots(self):
-        with mock.patch.object(access, "SCRATCH_ROOTS", ("/var/tmp", "/tmp")):
+        with host_profile.HostProfile.use(host_profile.HostProfile({}, os_name="linux")):
             ctx = access.Context(str(self.work), "/home/nobody-jev")
             self.assertEqual(access.scan_access("chmod +x /var/tmp/some-lane-jev/run.sh", ctx), [])
             self.assertEqual(access.scan_access("chmod +x /tmp/some-lane-jev/run.sh", ctx), [])
@@ -173,14 +180,14 @@ class Commands(HomeCase):
             with self.subTest(text=text):
                 self.assertEqual(self.blocking(text, cwd=home), [], text)
         blocks = [f"chmod 755 run.sh",                                   # cwd is HOME
-                  f"cd {lane}/missing; chmod -R g-w Projects",           # cd to nothing known
+                  f"cd {lane}/missing; chmod -R g-w workspace",           # cd to nothing known
                   f"(cd {lane} && chmod +x run.sh)",                      # a subshell's cd
-                  f"cd {lane} && (cd ~/Projects && chmod -R g-w example)",
-                  f"cd {lane} && (cd ~/Projects) && chmod -R g-w run.sh",
+                  f"cd {lane} && (cd ~/workspace && chmod -R g-w example)",
+                  f"cd {lane} && (cd ~/workspace) && chmod -R g-w run.sh",
                   f"cd {lane} && popd && chmod +x run.sh",
                   f"cd $D && chmod +x run.sh", f"cd {lane} && cd - && chmod +x run.sh",
                   f"bash -c 'cd {lane} && chmod +x run.sh'",
-                  f"cd {lane} && chmod -R g-w ../..", f"cd {home}/Projects && chmod -R g-w Org"]
+                  f"cd {lane} && chmod -R g-w ../..", f"cd {home}/workspace && chmod -R g-w Org"]
         for text in blocks:
             with self.subTest(text=text):
                 self.assertTrue(self.blocking(text, cwd=home), text)
@@ -202,7 +209,7 @@ class Commands(HomeCase):
         cases = [("bash -c 'chmod +x scripts/run.sh'", "inside a nested script"),
                  ("ssh buildhost 'chmod 600 x'", "remote host"),
                  ("ls | xargs chmod +x", "xargs or find"),
-                 ("find ~/Projects -type d -exec chmod g-w {} +", "xargs or find")]
+                 ("find ~/workspace -type d -exec chmod g-w {} +", "xargs or find")]
         for text, why in cases:
             with self.subTest(text=text):
                 hits = self.blocking(text)
@@ -233,9 +240,9 @@ class Commands(HomeCase):
 
 
 class SystemdRun(HomeCase):
-    """systemd-run (owner rules 27a and 27c(5)): without --scope the user
+    """systemd-run (the access rule): without --scope the user
     manager runs the job as a service, outside the session's sandbox; the
-    27c(5) form (`systemd-run --user --scope` with memory caps only) keeps
+    memory-cap scope form (`systemd-run --user --scope` with memory caps only) keeps
     today's answer. The check only ADDS hits: nothing here lets through a
     call that asked before."""
 
@@ -292,14 +299,14 @@ class SystemdRun(HomeCase):
             ("systemd-run --user --scope -ubuild make", "names its unit"),
             ("systemd-run --user --scope --description=build make", "names its unit"),
             ("systemd-run --user --scope --desc build make", "names its unit"),
-            ("systemd-run --user --scope --nice=5 make", "outside the 27c(5) memory-cap form"),
-            ("systemd-run --user --scope --working-directory=/ make", "outside the 27c(5) memory-cap form"),
-            ("systemd-run --user --scope -R make", "outside the 27c(5) memory-cap form"),
-            ("systemd-run --user --scope -v make", "outside the 27c(5) memory-cap form"),
-            ("systemd-run --user --scope --no-ask-password make", "outside the 27c(5) memory-cap form"),
-            ("systemd-run --user --scope --sl=x.slice make", "outside the 27c(5) memory-cap form"),
-            ("systemd-run --user --scope --frobnicate make", "outside the 27c(5) memory-cap form"),
-            ("systemd-run --user --scope -qX make", "outside the 27c(5) memory-cap form"),
+            ("systemd-run --user --scope --nice=5 make", "outside the memory-cap scope form"),
+            ("systemd-run --user --scope --working-directory=/ make", "outside the memory-cap scope form"),
+            ("systemd-run --user --scope -R make", "outside the memory-cap scope form"),
+            ("systemd-run --user --scope -v make", "outside the memory-cap scope form"),
+            ("systemd-run --user --scope --no-ask-password make", "outside the memory-cap scope form"),
+            ("systemd-run --user --scope --sl=x.slice make", "outside the memory-cap scope form"),
+            ("systemd-run --user --scope --frobnicate make", "outside the memory-cap scope form"),
+            ("systemd-run --user --scope -qX make", "outside the memory-cap scope form"),
             ("systemd-run --user --scope $OPTS make", "options the scan cannot see"),
             ('systemd-run --user --scope -p "$PROP" make', "options the scan cannot see"),
             ("systemd-run --user --scope --property=$(cat p) make", "options the scan cannot see"),
@@ -340,10 +347,10 @@ class SystemdRun(HomeCase):
                 self.assertEqual(self.blocking(text), [], text)
 
     def test_the_inner_command_is_scanned(self):
-        cases = [("systemd-run --user --scope -p MemoryMax=1G -- chmod 777 ~/Projects", [("command", "chmod")]),
+        cases = [("systemd-run --user --scope -p MemoryMax=1G -- chmod 777 ~/workspace", [("command", "chmod")]),
                  ("systemd-run --user --scope -q sudo ls", [("command", "sudo")]),
                  ("systemd-run --user --scope -p MemoryHigh=1G tee -a ~/.ssh/authorized_keys", [("write", "~/.ssh")]),
-                 ("systemd-run --user --scope -u x -- usermod -aG docker jr",
+                 ("systemd-run --user --scope -u x -- usermod -aG docker user",
                   [("command", "systemd-run"), ("command", "usermod")]),
                  ("systemd-run --user cp k ~/.ssh/authorized_keys", [("command", "systemd-run"), ("write", "~/.ssh")]),
                  ("env A=1 systemd-run --user --scope -p MemoryMax=1G env B=2 timeout 9 systemctl --user "
@@ -354,12 +361,12 @@ class SystemdRun(HomeCase):
             with self.subTest(text=text):
                 self.assertEqual(sorted((h.kind, h.token) for h in self.blocking(text)), sorted(want))
         # the outer form's hits come first, at the outer command's line
-        hits = self.blocking("ls\nsystemd-run --user -- chmod 777 ~/Projects")
+        hits = self.blocking("ls\nsystemd-run --user -- chmod 777 ~/workspace")
         self.assertEqual([(h.token, h.line) for h in hits], [("systemd-run", 2), ("chmod", 2)])
 
     def test_setenv_is_part_of_the_memory_cap_form(self):
         # an environment variable is no access item
-        # in 27a (and `VAR=x cmd` passes), so -E/--setenv joins the form
+        # in the access rule (and `VAR=x cmd` passes), so -E/--setenv joins the form
         for text in ["systemd-run --user --scope -E A=1 make",
                      "systemd-run --user --scope --setenv=A=1 -p MemoryMax=8G make",
                      "systemd-run --user --scope -qE A=1 --setenv B=2 -p MemoryMax=8G -- cargo test",
@@ -411,32 +418,32 @@ class SystemdRun(HomeCase):
                     self.assertEqual(self.blocking(wrap.format(text)), [])
 
     def test_a_script_its_command_runs_is_read_as_under_a_wrapper(self):
-        # the 27c(5) form wraps a nested script like a
+        # the memory-cap form wraps a nested script like a
         # rule-1 wrapper does, with the same descents (a shell's -c string,
         # ssh's remote command, eval, su/runuser/script -c, env -S, flock -c,
         # watch); the hits equal those under `timeout`
         form = "systemd-run --user --scope -p MemoryMax=8G -- {}"
-        for script in ["bash -c 'chmod -R g-w ~/Projects'", "sh -c 'chmod -R g-w ~/Projects'",
-                       "timeout 5 bash -c 'chmod -R g-w ~/Projects'", "nohup sh -c 'sudo ls'",
-                       "env -S 'chmod -R g-w ~/Projects'", "eval chmod -R g-w ~/Projects",
-                       "ssh buildhost chmod -R g-w ~/Projects", "script -q -c 'chmod -R g-w ~/Projects' /dev/null",
-                       "flock /tmp/l -c 'chmod -R g-w ~/Projects'", "watch -n 5 chmod -R g-w ~/Projects",
-                       "find . -name x -exec bash -c 'chmod 777 ~/Projects' \\;",
-                       "bash -c \"cd /tmp && bash -c 'usermod -aG docker jr'\"",
-                       "env -C /tmp bash -c 'echo hi; chmod g-w ~/Projects'"]:
+        for script in ["bash -c 'chmod -R g-w ~/workspace'", "sh -c 'chmod -R g-w ~/workspace'",
+                       "timeout 5 bash -c 'chmod -R g-w ~/workspace'", "nohup sh -c 'sudo ls'",
+                       "env -S 'chmod -R g-w ~/workspace'", "eval chmod -R g-w ~/workspace",
+                       "ssh buildhost chmod -R g-w ~/workspace", "script -q -c 'chmod -R g-w ~/workspace' /dev/null",
+                       "flock /tmp/l -c 'chmod -R g-w ~/workspace'", "watch -n 5 chmod -R g-w ~/workspace",
+                       "find . -name x -exec bash -c 'chmod 777 ~/workspace' \\;",
+                       "bash -c \"cd /tmp && bash -c 'usermod -aG docker user'\"",
+                       "env -C /tmp bash -c 'echo hi; chmod g-w ~/workspace'"]:
             with self.subTest(script=script):
                 wrapped = sorted(self.blocking("timeout 600 " + script))
                 self.assertTrue(wrapped, "a rule-1 wrapper's descent finds it")
                 self.assertEqual(sorted(self.blocking(form.format(script))), wrapped)
                 self.assertEqual(sorted(self.blocking("timeout 9 " + form.format(script))), wrapped)
                 self.assertEqual(sorted(self.blocking("systemd-run --user --scope -q " + script)), wrapped)
-        hits = self.blocking("systemd-run --user --scope -p MemoryMax=8G -- bash -c 'chmod -R g-w ~/Projects'")
+        hits = self.blocking("systemd-run --user --scope -p MemoryMax=8G -- bash -c 'chmod -R g-w ~/workspace'")
         self.assertEqual([(h.kind, h.token, h.descent) for h in hits], [("command", "chmod", True)])
         self.assertIn("inside a nested script", hits[0].why)
-        hits = self.blocking("systemd-run --user --scope -- timeout 5 bash -c 'chmod -R g-w ~/Projects'")
+        hits = self.blocking("systemd-run --user --scope -- timeout 5 bash -c 'chmod -R g-w ~/workspace'")
         self.assertEqual([(h.token, h.descent) for h in hits], [("chmod", True)])
         # outside the form: its own hit first, then the nested one
-        hits = self.blocking("systemd-run --user -- bash -c 'chmod -R g-w ~/Projects'")
+        hits = self.blocking("systemd-run --user -- bash -c 'chmod -R g-w ~/workspace'")
         self.assertEqual([(h.token, h.descent) for h in hits], [("systemd-run", False), ("chmod", True)])
         # a script with no access change
         for text in ["systemd-run --user --scope -p MemoryMax=8G -- bash -c 'cargo build && echo ok'",
@@ -501,7 +508,100 @@ class Writes(HomeCase):
         self.assertIsNone(access.path_access("scripts/new.sh", "chmod g-w x", ctx))
 
 
-class Sandbox27b(HomeCase):
+class Launchctl(HomeCase):
+    """launchctl is gated on every OS (it does not exist on Linux: no change there)."""
+
+    def test_gated_subcommands_block(self):
+        for text, token in [("launchctl load ~/Library/LaunchAgents/x.plist", "launchctl load"),
+                            ("launchctl bootout gui/501/com.x", "launchctl bootout"),
+                            ("launchctl kickstart -k system/com.x", "launchctl kickstart"),
+                            ("launchctl setenv PATH /x", "launchctl setenv"),
+                            ("launchctl limit maxfiles 1 2", "launchctl limit"),
+                            ("/bin/launchctl BOOTSTRAP gui/501 x.plist", "launchctl bootstrap"),
+                            ("sudo launchctl enable system/com.x", "launchctl enable"),
+                            ("launchctl", "launchctl"), ("launchctl $SUB x", "launchctl"),
+                            ("launchctl < cmds.txt", "launchctl")]:
+            with self.subTest(text=text):
+                self.assertIn(token, [h.token for h in self.blocking(text)])
+
+    def test_reads_pass(self):
+        for text in ["launchctl list", "launchctl print gui/501", "launchctl getenv PATH", "launchctl version"]:
+            with self.subTest(text=text):
+                self.assertEqual(self.blocking(text), [])
+
+
+class MacOSTables(HomeCase):
+    """The macOS protected tables, on any OS through an injected profile; a
+    realpath that maps /etc into /private, as macOS does."""
+
+    def mac_ctx(self, os_name="macos"):
+        def real(p):
+            r = os.path.realpath(p)
+            return "/private" + r if r == "/etc" or r.startswith("/etc/") else r
+        profile = host_profile.HostProfile({}, os_name=os_name, home=str(self.home),
+                                           platform=host_profile.Platform(os_name, temp_roots=(str(self.scratch_root),)))
+        return access.Context(str(self.work), str(self.home), realpath=real, profile=profile)
+
+    CASES = [("cp x.plist ~/Library/LaunchAgents/", "launchd job"),
+             ("echo x > ~/Library/LaunchAgents/com.x.plist", "launchd job"),
+             ("cp x.plist /Library/LaunchDaemons/", "launchd job"),
+             ("echo 'pass all' >> /etc/pf.conf", "firewall config"),
+             ("echo x | tee /etc/sudoers.d/x", "sudoers"), ("echo x | tee /private/etc/sudoers.d/x", "sudoers"),
+             ("echo x >> /private/etc/pam.d/sudo", "pam and limits"),
+             ("echo 'umask 002' >> /etc/zshrc", "shell or service config")]
+
+    def test_macos_protected_writes(self):
+        ctx = self.mac_ctx()
+        for text, cls in self.CASES:
+            with self.subTest(text=text):
+                self.assertTrue([h for h in access.scan_access(text, ctx) if h.kind != "auto"], text)
+                self.assertEqual(access.classify("/private" + "/etc/sudoers", ctx)[0], "sudoers")
+        self.assertEqual(access.classify(str(self.home / "Library" / "LaunchAgents" / "a.plist"), ctx)[0],
+                         "launchd job")
+
+    def test_linux_keeps_the_old_tables(self):
+        ctx = self.mac_ctx("linux")
+        for path in [self.home / "Library" / "LaunchAgents" / "a.plist", "/Library/LaunchDaemons/a.plist",
+                     "/etc/pf.conf", "/etc/zshrc"]:
+            with self.subTest(path=path):
+                self.assertIsNone(access.classify(str(path), ctx))
+        self.assertEqual(access.classify("/etc/sudoers", ctx)[0], "sudoers")
+
+
+class OwnProjectWithoutRoot(HomeCase):
+    """No workspace.root (or an invalid one): the old heuristic exactly, a
+    cwd at depth 3 or more below HOME is a project of the session's own."""
+
+    def use(self, snapshot):
+        profile = host_profile.HostProfile(snapshot, home=str(self.home),
+                                           platform=host_profile.Platform(temp_roots=(str(self.scratch_root),)))
+        use = host_profile.HostProfile.use(profile)
+        use.__enter__()
+        self.addCleanup(use.__exit__, None, None, None)
+
+    def test_the_old_heuristic_without_a_root(self):
+        for snapshot in ({}, {"workspace": {"root": str(self.home)}}, {"workspace": {"root": "/"}},
+                         {"workspace": {"root": "/srv/elsewhere"}}):
+            with self.subTest(snapshot=snapshot):
+                self.use(snapshot)
+                self.assertEqual(self.blocking("chmod +x scripts/run.sh", cwd=self.work), [])
+                self.assertTrue(self.blocking("chmod +x repo/scripts/run.sh", cwd=self.shallow / "Org"))
+
+    def test_with_a_root_only_cwds_below_it_count(self):
+        other = self.home / "other" / "Org" / "repo"
+        (other / "scripts").mkdir(parents=True)
+        (other / "scripts" / "run.sh").write_text("x")
+        self.assertTrue(self.blocking("chmod +x scripts/run.sh", cwd=other))     # depth 3, outside the root
+        self.assertEqual(self.blocking("chmod +x scripts/run.sh", cwd=self.work), [])
+        wt = self.shallow / ".worktrees"
+        (wt / "x" / "scripts").mkdir(parents=True)
+        (wt / "f.sh").write_text("x")
+        # cwd = the worktrees dir: no project (below .worktrees/<name>/ the old worktree rule applies)
+        self.assertTrue(self.blocking("chmod +x f.sh", cwd=wt))
+        self.assertEqual(self.blocking("chmod +x x/scripts", cwd=wt), [])
+        self.assertTrue(self.blocking("chmod +x Org/repo/scripts/run.sh", cwd=self.shallow))
+
+class SandboxSwitch(HomeCase):
     def test_manual_passes_only_a_new_session_file(self):
         ctx = self.ctx()
         self.assertIsNone(access.path_access(f"{self.sessions}/new.conf", "x", ctx, "create"))
@@ -569,7 +669,7 @@ class ReviewBypasses(HomeCase):
 
     def test_b_links_and_dotdot(self):
         for text in (f"echo k >> {self.work}/lk/../authorized_keys", "echo k >> lk/../authorized_keys",
-                     "echo k >> ~/Projects/../.ssh/authorized_keys", f"cp k {self.work}/lk/"):
+                     "echo k >> ~/workspace/../.ssh/authorized_keys", f"cp k {self.work}/lk/"):
             with self.subTest(text=text):
                 self.assertIn("~/.ssh", [h.token for h in self.blocking(text)])
         self.assertIsNotNone(access.path_access("lk/../authorized_keys", "k", self.ctx()))
@@ -650,14 +750,14 @@ class Wiring(HomeCase):
         return [json.loads(x) for x in self.audit_path.read_text().splitlines() if x.strip()]
 
     def test_block_text_and_audit_row(self):
-        result = self.check("bash", {"command": f"chmod g-w ~/Projects # {CANARY}"})
+        result = self.check("bash", {"command": f"chmod g-w ~/workspace # {CANARY}"})
         self.assertEqual(result["action"], "block")
         self.assertTrue(result["reason"].startswith(HEAD), result["reason"])
         self.assertIn("Don't run it or work around it. End your turn and ask for the owner's yes (a worker asks "
                       "its foreman). This task waits.", result["reason"])
         self.assertIn("line 1: `chmod` changes access outside", result["reason"])
-        self.assertIn("27a's only exception is a file you created yourself", result["reason"])
-        self.assertNotIn(B27, result["reason"])
+        self.assertIn("The rule's only exception is a file you created yourself", result["reason"])
+        self.assertNotIn(SANDBOX_NOTE, result["reason"])
         rows = self.rows()
         self.assertEqual([(r["rule"], r["action"]) for r in rows], [("access", "block")])
         self.assertNotIn(CANARY, json.dumps(rows))
@@ -668,8 +768,8 @@ class Wiring(HomeCase):
         for text in ("sudo chmod +x f", "chmod +x f; echo k >> ~/.ssh/authorized_keys", "ls | xargs chmod +x"):
             with self.subTest(text=text):
                 reason = self.check("bash", {"command": text})["reason"]
-                self.assertNotIn("27a's only exception", reason)
-        self.assertIn("27a's only exception", self.check("bash", {"command": "chmod +x $F"})["reason"])
+                self.assertNotIn("only exception", reason)
+        self.assertIn("only exception", self.check("bash", {"command": "chmod +x $F"})["reason"])
 
     def test_value_only_unit_edits_through_the_tools(self):
         unit = self.units / "limit.service"
@@ -683,9 +783,9 @@ class Wiring(HomeCase):
         self.assertIsNone(self.check("multi_edit", {"edits": [
             {"path": str(unit), "op": "replace", "anchor": "Description=x", "text": "Description=y"}]}))
 
-    def test_27b_text_and_auto_row(self):
+    def test_sandbox_text_and_auto_row(self):
         result = self.check("write", {"path": "~/.synaps-cli/sandbox/OFF", "content": "x"})
-        self.assertIn(B27, result["reason"])
+        self.assertIn(SANDBOX_NOTE, result["reason"])
         self.assertIsNone(self.check("write", {"path": f"{self.sessions}/fresh.conf", "content": "x"}))
         Path(access.switch_path(str(self.home))).write_text("auto\n")
         self.assertIsNone(self.check("edit", {"path": f"{self.sessions}/old.conf", "old_string": "a",
@@ -697,10 +797,10 @@ class Wiring(HomeCase):
         self.assertEqual(self.check("multi_edit", {"edits": [{"path": "~/.ssh/config", "op": "append",
                                                                "text": "Host x"}]})["action"], "block")
         self.assertEqual(self.check("shell_send", {"input": "sudo -i\r"})["action"], "block")
-        self.assertIsNone(self.check("bash", {"command": "chmod g-w ~/Projects"}, guard_access="off"))
-        self.assertIsNone(self.check("bash", {"command": "chmod g-w ~/Projects"}, guard_access="warn"))
+        self.assertIsNone(self.check("bash", {"command": "chmod g-w ~/workspace"}, guard_access="off"))
+        self.assertIsNone(self.check("bash", {"command": "chmod g-w ~/workspace"}, guard_access="warn"))
         self.assertEqual(self.rows()[-1]["action"], "warn")
-        self.assertEqual(self.check("bash", {"command": "chmod g-w ~/Projects"}, guard_access="bogus")["action"],
+        self.assertEqual(self.check("bash", {"command": "chmod g-w ~/workspace"}, guard_access="bogus")["action"],
                          "block")
         self.assertIsNone(self.check("bash", {"command": "ls"}))
 
@@ -709,7 +809,7 @@ class Wiring(HomeCase):
         self.assertEqual(result["action"], "block")
         self.assertIn("line 1: `systemd-run` runs the job as a systemd service, outside the "
                       "session's sandbox (no --scope)", result["reason"])
-        self.assertNotIn("27a's only exception", result["reason"])
+        self.assertNotIn("only exception", result["reason"])
         self.assertIsNone(self.check("bash", {"command": "systemd-run --user --scope -p MemoryMax=8G make"}))
         big = "echo " + "x" * (guard.SHELL_SCAN_MAX_BYTES + 10)
         result = self.check("bash", {"command": big + "\nsystemd-run --user --scope -p MemoryMax=8G make"})
@@ -719,7 +819,7 @@ class Wiring(HomeCase):
     def test_a_stopped_scan_blocks_only_when_it_names_access(self):
         big = "echo " + "x" * (guard.SHELL_SCAN_MAX_BYTES + 10)
         self.assertIsNone(self.check("bash", {"command": big}))
-        result = self.check("bash", {"command": big + "\nchmod g-w ~/Projects"})
+        result = self.check("bash", {"command": big + "\nchmod g-w ~/workspace"})
         self.assertEqual(result["action"], "block")
         self.assertIn("could not be checked to the end", result["reason"])
         with mock.patch.object(access, "scan_access", side_effect=RuntimeError("boom " + CANARY)):
@@ -745,14 +845,14 @@ class Wiring(HomeCase):
         for cfg in ({}, {"guard": False}, {"guard_rule1": "off"}, {"guard_tools": "read"}):
             with self.subTest(cfg=cfg):
                 ext = self.extension(**cfg)
-                out = self.hook(ext, "chmod g-w ~/Projects")
+                out = self.hook(ext, "chmod g-w ~/workspace")
                 self.assertEqual(out["action"], "block", out)
                 self.assertTrue(out["reason"].startswith(HEAD), out["reason"])
         # both rules would refuse: the access rule answers, alone
-        out = self.hook(self.extension(guard_rule1_scope="all"), "cat > f <<'EOF'\nx\nEOF\nchmod g-w ~/Projects")
+        out = self.hook(self.extension(guard_rule1_scope="all"), "cat > f <<'EOF'\nx\nEOF\nchmod g-w ~/workspace")
         self.assertTrue(out["reason"].startswith(HEAD), out["reason"])
         self.assertEqual(self.hook(self.extension(guard_access="off", guard_rule1="off", guard=False),
-                                   "chmod g-w ~/Projects"), {"action": "continue"})
+                                   "chmod g-w ~/workspace"), {"action": "continue"})
 
     def test_the_manifest_declares_its_keys(self):
         manifest = json.loads((Path(ROOT) / ".synaps-plugin" / "plugin.json").read_text())["extension"]

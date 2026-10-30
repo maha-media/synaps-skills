@@ -23,10 +23,14 @@ and ended a whole desktop session):
   `kill -- -1`, `kill -s KILL -1`; options read as bash's builtin and
   util-linux read them, so `kill -1 123` is SIGHUP to pid 123), `killall5`
   with any arguments, and `pkill` / `killall` selecting by user alone
-  (`pkill -u jr`, `killall -u jr`: no pattern, no process name). A
+  (`pkill -u user`, `killall -u user`: no pattern, no process name). A
   variable is not reported (`kill $p`, `kill -TERM -- -$G`): unset, it
   gives a usage error, not -1. A program that calls kill(-1) itself, as
-  that test binary did, is no shell text and is not seen here.
+  that test binary did, is no shell text and is not seen here. pkill and
+  killall are read as procps/psmisc read them; on macOS and other non-Linux
+  hosts (host_profile.Platform.kill_readings) also as BSD pkill/killall read
+  them (`killall -m REGEX`, `pkill -v`, BSD option letters), a finding
+  under either reading counting. Linux keeps the procps reading alone.
 
 The scan covers the WHOLE text (not a preview) and is conservative: any
 word `rm`, `find`, `mv`, `kill`, `pkill`, `killall` or `killall5` (also
@@ -47,8 +51,11 @@ opaque (the commands inside it are scanned), and other deleting tools
 from __future__ import annotations
 
 import re
+import warnings
 from collections import Counter
 from typing import NamedTuple
+
+from . import host_profile
 
 UNGUARDED = "unguarded_variable"
 ROOT = "root_operand"
@@ -687,13 +694,128 @@ def _user_only(words: list, values: str, long_values: frozenset, sig_word: re.Pa
     return user
 
 
+# BSD pkill and killall (macOS). host_profile.Platform.kill_readings() says
+# which readings apply: Linux procps/psmisc only (unchanged); macOS (and any
+# other OS) the BSD reading too, a finding when either reading finds one.
+# BSD pkill: one leading -SIG (a strtol number or a signal name, any case,
+# SIG optional) only as the first word; then getopt WITHOUT permutation
+# (options end at the first operand or `--`); value letters below; -u/-U
+# select by user. BSD killall: each `-word` is dispatched on its first
+# letter only (-u/-t/-c/-j take the rest of the word or the next one, any
+# other letter is a flag or a signal name), options end at the first word
+# without a dash; -c NAME names the process. On macOS a pattern that matches
+# every process name (pkill's pattern, killall -m's regex; one that cannot
+# be compiled counts) or pkill -v (all but the named ones) selects by user
+# as well, and so it does with no -u at all (BSD killall then takes the
+# caller's processes; pkill all it may signal) unless another selector
+# (pkill -F/-G/-P/-c/-g/-j/-s/-t, killall -t/-j) narrows it. A dry run
+# (killall -s) is still reported.
+_BSD_SIGNALS = frozenset({"HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "IOT", "EMT", "FPE", "KILL", "BUS",
+                          "SEGV", "SYS", "PIPE", "ALRM", "TERM", "URG", "STOP", "TSTP", "CONT", "CHLD",
+                          "TTIN", "TTOU", "IO", "XCPU", "XFSZ", "VTALRM", "PROF", "WINCH", "INFO", "USR1",
+                          "USR2"})
+_BSD_PKILL_VALUES = "FGMNPUcdgjstu"
+_BSD_KILLALL_VALUES = "utcj"
+_BSD_PKILL_NARROW = "FGPcgjst"  # selectors other than the user (-d/-M/-N are not)
+_STRTOL = re.compile(r"[ \t\n\v\f\r]*[-+]?[0-9]+")
+# process names a match-all pattern matches (search; -x: whole name)
+_PROBE_NAMES = ("a", "Z", "0", "_", "-", ".", "/", "x y", "zsh", "Finder", "launchd", "WindowServer")
+_PATTERN_MAX = 256
+
+
+def _bsd_signal(v: str) -> bool:
+    """A word after its dash that BSD pkill reads as the signal."""
+    if v == "" or _STRTOL.fullmatch(v):
+        return True
+    name = v[3:] if v[:3].upper() == "SIG" else v
+    return name.upper() in _BSD_SIGNALS
+
+
+def _matches_all(pattern: str, exact: bool = False, icase: bool = False) -> bool:
+    if OPAQUE in pattern:
+        return False  # literal shapes only, as everywhere in this rule
+    if pattern == "" or len(pattern) > _PATTERN_MAX:
+        return True
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            rx = re.compile(pattern, re.I if icase else 0)
+        match = rx.fullmatch if exact else rx.search
+        return all(match(name) for name in _PROBE_NAMES)
+    except (re.error, RecursionError, OverflowError, ValueError):
+        return True
+
+
+def _bsd_pkill_user_only(words: list) -> bool:
+    vals = [w.value for w in words]
+    i, n = 0, len(vals)
+    if n and vals[0].startswith("-") and _bsd_signal(vals[0][1:]):
+        i = 1
+    user = invert = exact = icase = narrowed = False
+    while i < n:
+        v = vals[i]
+        if v == "--":
+            i += 1
+            break
+        if not v.startswith("-") or v == "-":
+            break
+        step = 1
+        for at, letter in enumerate(v[1:], 2):
+            if letter in _BSD_PKILL_VALUES:
+                user = user or letter in _USER_LETTERS
+                narrowed = narrowed or letter in _BSD_PKILL_NARROW
+                step = 2 if at == len(v) else 1
+                break
+            invert = invert or letter == "v"
+            exact = exact or letter == "x"
+            icase = icase or letter == "i"
+        i += step
+    ops = vals[i:]
+    if not ops:
+        return user
+    if not user and narrowed:
+        return False
+    return invert or any(_matches_all(o, exact, icase) for o in ops)
+
+
+def _bsd_killall_user_only(words: list) -> bool:
+    vals = [w.value for w in words]
+    i, n = 0, len(vals)
+    user = named = regex = narrowed = False
+    while i < n and vals[i].startswith("-"):
+        v = vals[i][1:]
+        if v in ("l", "help"):
+            return False  # lists the signals / prints the usage, kills nothing
+        letter = v[:1]
+        if letter in _BSD_KILLALL_VALUES:
+            if len(v) == 1:
+                i += 1
+            user = user or letter == "u"
+            named = named or letter == "c"
+            narrowed = narrowed or letter in "tj"
+        regex = regex or letter == "m"
+        i += 1
+    ops = vals[i:]
+    if named:
+        return False
+    if regex and (user or not narrowed) and any(_matches_all(o) for o in ops):
+        return True
+    return user and not ops
+
+
+def _readings() -> tuple:
+    return host_profile.HostProfile.current().platform.kill_readings()
+
+
 def _pkill(words: list, line: int, out: list) -> None:
-    if _user_only(words, _PKILL_VALUES, _PKILL_LONG_VALUES, _PKILL_SIG):
+    if _user_only(words, _PKILL_VALUES, _PKILL_LONG_VALUES, _PKILL_SIG) or (
+            "bsd" in _readings() and _bsd_pkill_user_only(words)):
         out.append(Finding(SIGNAL_ALL, PKILL, line, (), "selects by user alone"))
 
 
 def _killall(words: list, line: int, out: list) -> None:
-    if _user_only(words, _KILLALL_VALUES, _KILLALL_LONG_VALUES, _KILLALL_SIG):
+    if _user_only(words, _KILLALL_VALUES, _KILLALL_LONG_VALUES, _KILLALL_SIG) or (
+            "bsd" in _readings() and _bsd_killall_user_only(words)):
         out.append(Finding(SIGNAL_ALL, KILLALL, line, (), "selects by user alone"))
 
 
