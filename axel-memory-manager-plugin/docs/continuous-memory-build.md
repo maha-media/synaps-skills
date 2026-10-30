@@ -25,8 +25,9 @@ Use the approved local Axel worktree as a temporary Cargo source override. Run
 exactly:
 
 ```bash
-cd /home/jr/Projects/Maha-Media/.worktrees/synaps-skills-continuous-memory/axel-memory-manager-plugin/extensions/memory-manager
-AX=/home/jr/Projects/Maha-Media/.worktrees/axel-continuous-memory
+# WORKTREES: your worktrees dir, e.g. $(pria-fleet host get workspace.worktrees_dir)
+cd "$WORKTREES/synaps-skills-continuous-memory/axel-memory-manager-plugin/extensions/memory-manager"
+AX="$WORKTREES/axel-continuous-memory"
 CARGO_BUILD_JOBS=8 cargo build --release --jobs 8 \
   --config "patch.\"https://github.com/maha-media/axel\".axel.path=\"$AX/crates/axel\"" \
   --config "patch.\"https://github.com/maha-media/axel\".axel-memkoshi.path=\"$AX/crates/memkoshi\"" \

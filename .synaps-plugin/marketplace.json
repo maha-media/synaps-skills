@@ -77,7 +77,7 @@
     {
       "name": "axel-memory-manager",
       "description": "Axel — portable agent intelligence: project-scoped memory tools (memory_search/fetch/store/forget), offline lexical FTS, sensitivity + retention classes, one .r8 file as the agent's entire brain.",
-      "version": "0.2.0",
+      "version": "0.3.1",
       "author": {
         "name": "JR Morton",
         "url": "https://github.com/maha-media"

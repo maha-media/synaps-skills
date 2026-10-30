@@ -1,6 +1,6 @@
 {
   "name": "axel-memory-manager",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Axel — portable agent intelligence with OFF-by-default continuous memory: lease-gated context-provider recall and capture, history import, project-scoped memory tools, and one local .r8 brain.",
   "author": {
     "name": "J.R. Morton",

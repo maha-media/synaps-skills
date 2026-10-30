@@ -64,7 +64,7 @@ local Axel worktree using Cargo patches:
 
 ```bash
 cd extensions/memory-manager
-AX=/home/jr/Projects/Maha-Media/.worktrees/axel-continuous-memory
+AX=/path/to/your/axel-checkout   # local clone or worktree of maha-media/axel
 CARGO_BUILD_JOBS=8 cargo build --release --jobs 8 \
   --config "patch.\"https://github.com/maha-media/axel\".axel.path=\"$AX/crates/axel\"" \
   --config "patch.\"https://github.com/maha-media/axel\".axel-memkoshi.path=\"$AX/crates/memkoshi\"" \

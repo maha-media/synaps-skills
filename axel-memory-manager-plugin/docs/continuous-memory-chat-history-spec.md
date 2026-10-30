@@ -876,10 +876,13 @@ state—not only result count.
 
 ## 17. Commands and developer workflow
 
+`$WORKTREES` below is the maintainer's worktrees directory
+(`pria-fleet host get workspace.worktrees_dir`); substitute your own.
+
 ### 17.1 SynapsCLI host
 
 ```bash
-cd /home/jr/Projects/Maha-Media/.worktrees/SynapsCLI-request-lifecycle-hardening
+cd "$WORKTREES/SynapsCLI-request-lifecycle-hardening"
 CARGO_BUILD_JOBS=8 cargo check --workspace --all-targets --jobs 8
 CARGO_BUILD_JOBS=8 cargo test --workspace --jobs 8 -- --test-threads=8
 CARGO_BUILD_JOBS=8 cargo test -p synaps-engine --test deferred_host_context \
@@ -890,7 +893,7 @@ CARGO_BUILD_JOBS=8 cargo build --release --jobs 8
 ### 17.2 Axel upstream
 
 ```bash
-cd /home/jr/Projects/Maha-Media/.worktrees/axel-project-memory-t32-t36
+cd "$WORKTREES/axel-project-memory-t32-t36"
 CARGO_BUILD_JOBS=8 cargo test --workspace --jobs 8 -- --test-threads=8
 CARGO_BUILD_JOBS=8 cargo test -p axel --test scoped_search_bench --release \
   --jobs 8 -- --ignored --nocapture --test-threads=1
@@ -901,8 +904,8 @@ CARGO_BUILD_JOBS=8 cargo test -p axel --test scoped_search_bench --release \
 Until the pinned Axel revision is available remotely:
 
 ```bash
-cd /home/jr/Projects/Maha-Media/.worktrees/synaps-skills-axel-memory-t32-t36/axel-memory-manager-plugin/extensions/memory-manager
-AX=/home/jr/Projects/Maha-Media/.worktrees/axel-project-memory-t32-t36
+cd "$WORKTREES/synaps-skills-axel-memory-t32-t36/axel-memory-manager-plugin/extensions/memory-manager"
+AX="$WORKTREES/axel-project-memory-t32-t36"
 
 CARGO_BUILD_JOBS=8 cargo test --jobs 8 \
   --config "patch.\"https://github.com/maha-media/axel\".axel.path=\"$AX/crates/axel\"" \

@@ -44,7 +44,7 @@ while [[ $# -gt 0 ]]; do
       VERSION="$2"
       shift ;;
     -h|--help)
-      sed -n '2,15p' "$0" | sed 's/^# \?//'
+      sed -n '2,15p' "$0" | sed 's/^# //;s/^#//'
       exit 0 ;;
     *)
       echo "setup.sh: unknown arg: $arg" >&2
