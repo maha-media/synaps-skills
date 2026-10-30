@@ -1,6 +1,6 @@
 {
   "name": "local-voice",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Opt-in local voice dictation provider for Synaps CLI. Builds a sidecar binary that streams microphone speech-to-text through the Synaps voice protocol.",
   "author": {
     "name": "JR Morton",
