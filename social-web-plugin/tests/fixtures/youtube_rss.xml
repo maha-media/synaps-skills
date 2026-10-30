@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+ <link rel="self" href="http://www.youtube.com/feeds/videos.xml?channel_id=UCBR8-60-B28hp2BmDPdntcQ"/>
+ <id>yt:channel:BR8-60-B28hp2BmDPdntcQ</id>
+ <yt:channelId>BR8-60-B28hp2BmDPdntcQ</yt:channelId>
+ <title>YouTube</title>
+ <link rel="alternate" href="https://www.youtube.com/channel/UCBR8-60-B28hp2BmDPdntcQ"/>
+ <author>
+  <name>YouTube</name>
+  <uri>https://www.youtube.com/channel/UCBR8-60-B28hp2BmDPdntcQ</uri>
+ </author>
+ <entry>
+  <id>yt:video:QRn8XR3PMAI</id>
+  <yt:videoId>QRn8XR3PMAI</yt:videoId>
+  <yt:channelId>UCBR8-60-B28hp2BmDPdntcQ</yt:channelId>
+  <title>they’ve got a game plan, but do they have what it takes to escape the demon camera?</title>
+  <link rel="alternate" href="https://www.youtube.com/shorts/QRn8XR3PMAI"/>
+  <author>
+   <name>YouTube</name>
+   <uri>https://www.youtube.com/channel/UCBR8-60-B28hp2BmDPdntcQ</uri>
+  </author>
+  <published>2026-10-25T18:00:38+00:00</published>
+  <updated>2026-10-25T18:02:20+00:00</updated>
+  <media:group>
+   <media:title>they’ve got a game plan, but do they have what it takes to escape the demon camera?</media:title>
+   <media:content url="https://www.youtube.com/v/QRn8XR3PMAI?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/QRn8XR3PMAI/hqdefault.jpg" width="480" height="360"/>
+   <media:description>trimmed</media:description>
+   <media:community>
+    <media:starRating count="563" average="5.00" min="1" max="5"/>
+    <media:statistics views="4078"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:moaDf-3AAyY</id>
+  <yt:videoId>moaDf-3AAyY</yt:videoId>
+  <yt:channelId>UCBR8-60-B28hp2BmDPdntcQ</yt:channelId>
+  <title>ahhhhhh! @JazzyGuns</title>
+  <link rel="alternate" href="https://www.youtube.com/shorts/moaDf-3AAyY"/>
+  <author>
+   <name>YouTube</name>
+   <uri>https://www.youtube.com/channel/UCBR8-60-B28hp2BmDPdntcQ</uri>
+  </author>
+  <published>2026-10-25T14:00:38+00:00</published>
+  <updated>2026-10-25T14:06:07+00:00</updated>
+  <media:group>
+   <media:title>ahhhhhh! @JazzyGuns</media:title>
+   <media:content url="https://www.youtube.com/v/moaDf-3AAyY?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/moaDf-3AAyY/hqdefault.jpg" width="480" height="360"/>
+   <media:description>trimmed</media:description>
+   <media:community>
+    <media:starRating count="109" average="5.00" min="1" max="5"/>
+    <media:statistics views="4009"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:B5T4ZCfxp1Y</id>
+  <yt:videoId>B5T4ZCfxp1Y</yt:videoId>
+  <yt:channelId>UCBR8-60-B28hp2BmDPdntcQ</yt:channelId>
+  <title>american high? almost friday? who’s next? find out tomorrow 👻 | #DontLookBehindTheCamera Pt. 2</title>
+  <link rel="alternate" href="https://www.youtube.com/shorts/B5T4ZCfxp1Y"/>
+  <author>
+   <name>YouTube</name>
+   <uri>https://www.youtube.com/channel/UCBR8-60-B28hp2BmDPdntcQ</uri>
+  </author>
+  <published>2026-10-24T19:00:15+00:00</published>
+  <updated>2026-10-24T19:00:56+00:00</updated>
+  <media:group>
+   <media:title>american high? almost friday? who’s next? find out tomorrow 👻 | #DontLookBehindTheCamera Pt. 2</media:title>
+   <media:content url="https://www.youtube.com/v/B5T4ZCfxp1Y?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i3.ytimg.com/vi/B5T4ZCfxp1Y/hqdefault.jpg" width="480" height="360"/>
+   <media:description>trimmed</media:description>
+   <media:community>
+    <media:starRating count="1287" average="5.00" min="1" max="5"/>
+    <media:statistics views="29308"/>
+   </media:community>
+  </media:group>
+ </entry>
+</feed>

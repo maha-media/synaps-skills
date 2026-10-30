@@ -1,0 +1,1511 @@
+#!/usr/bin/env python3
+"""socialweb: a polite, read-only, logged-out look at public social media pages.
+
+Platforms: youtube, tiktok, instagram, x, spotify, soundcloud, bandcamp, suno.
+
+    socialweb profile <platform> <handle|url>     public profile facts
+    socialweb posts   <platform> <handle|url> [--limit N]   recent public items
+    socialweb post    <url>                       one item (oEmbed / page metadata)
+    socialweb check   <url>                       what is reachable logged-out
+    socialweb platforms                           what works per platform (no network)
+
+Add --json for machine output. Python 3 stdlib only; yt-dlp is used for YouTube
+details if it is installed (never downloads media, never uses cookies).
+
+Exit codes:
+    0  ok (possibly partial; see "needs login:" notes in the output)
+    1  error (network failure after retries, HTTP 5xx, page could not be parsed)
+    2  usage error (bad arguments, unsupported platform or URL)
+    3  needs login: the site requires sign-in, or blocks logged-out access (incl. bot
+       checks). stderr then has a "next:" line pointing to the skill's shared-browser mode.
+    4  not found (HTTP 404/410, deleted or unknown account/item)
+    5  rate limited by the site (HTTP 429): stop and try much later
+
+Politeness: honest User-Agent, >= 2 s between requests to the same host (also
+across runs), response cache with a TTL (default 1 h), 15 s timeouts, at most 3
+retries with backoff and only on network errors. No cookies, no login, no proxy
+rotation, no captcha solving.
+"""
+
+import argparse
+import base64
+import email.utils
+import gzip
+import hashlib
+import html
+import http.client
+import json
+import os
+import re
+import shlex
+import shutil
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+import zlib
+from datetime import datetime, timezone
+from html.parser import HTMLParser
+
+VERSION = "0.1.2"
+USER_AGENT = (f"socialweb/{VERSION} (read-only, logged-out metadata reader; "
+              "+https://github.com/maha-media/synaps-skills)")
+MIN_INTERVAL = 2.0
+DEFAULT_TTL = 3600
+TIMEOUT = 15
+RETRIES = 3
+MAX_BYTES = 8_000_000
+
+EXIT_OK, EXIT_ERROR, EXIT_USAGE, EXIT_NEEDS_LOGIN, EXIT_NOT_FOUND, EXIT_RATE_LIMITED = 0, 1, 2, 3, 4, 5
+
+PLATFORMS = ["youtube", "tiktok", "instagram", "x", "spotify", "soundcloud", "bandcamp", "suno"]
+ALIASES = {"yt": "youtube", "twitter": "x", "ig": "instagram", "insta": "instagram",
+           "tt": "tiktok", "sc": "soundcloud", "bc": "bandcamp"}
+
+# Final URLs that mean "you were sent to a login / consent wall".
+LOGIN_URL_RE = re.compile(
+    r"(/accounts/login|/login\b|/i/flow/login|/signin|/sign-in|/auth/|consent\.youtube\.com|"
+    r"accounts\.google\.com|/challenge/)", re.I)
+
+# Bot checks / JS challenges. We never solve or bypass these; we report them as "needs login".
+CHALLENGE_TITLE_RE = re.compile(
+    r"<title>\s*(Client Challenge|Just a moment\.\.\.|Attention Required!?|Access Denied|Security Check|"
+    r"Are you a robot\??|Verify you are human)", re.I)
+CHALLENGE_MARK_RE = re.compile(r"/_fs-ch-|cf-chl-|challenges\.cloudflare\.com|captcha-delivery\.com|px-captcha", re.I)
+
+# What to do after "needs login". This CLI itself never signs in.
+SHARED_BROWSER_HINT = ("this CLI stays logged-out. If the user wants this, use the social-web skill's "
+                       "'Shared browser' mode: run scripts/shared-browser-preflight, open a headed Chrome "
+                       "via the web skill with --data-dir ~/.cache/browser-tools-shared, ask the user to sign "
+                       "in himself, then read only.")
+
+
+def is_challenge(text):
+    head = (text or "")[:20000]
+    return bool(CHALLENGE_TITLE_RE.search(head) or (len(text or "") < 60000 and CHALLENGE_MARK_RE.search(head)))
+
+
+# --------------------------------------------------------------------------- errors
+
+class SocialWebError(Exception):
+    exit_code = EXIT_ERROR
+    kind = "error"
+
+
+class UsageError(SocialWebError):
+    exit_code = EXIT_USAGE
+    kind = "usage"
+
+
+class NotFound(SocialWebError):
+    exit_code = EXIT_NOT_FOUND
+    kind = "not_found"
+
+
+class RateLimited(SocialWebError):
+    exit_code = EXIT_RATE_LIMITED
+    kind = "rate_limited"
+
+
+class NeedsLogin(SocialWebError):
+    exit_code = EXIT_NEEDS_LOGIN
+    kind = "needs_login"
+
+    def __init__(self, platform, what, detail=""):
+        self.platform, self.what, self.detail = platform, what, detail
+        msg = f"needs login: {platform} {what}"
+        if detail:
+            msg += f" ({detail})"
+        super().__init__(msg)
+
+
+# --------------------------------------------------------------------------- cache / rate limit
+
+def default_cache_dir():
+    return os.environ.get("SOCIALWEB_CACHE_DIR") or os.path.join(
+        os.path.expanduser("~"), ".cache", "socialweb")
+
+
+def _ensure_dir(path):
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+
+
+class Cache:
+    """Tiny file cache: one JSON file per key, fresh for `ttl` seconds."""
+
+    def __init__(self, root, ttl=DEFAULT_TTL, clock=time.time, enabled=True):
+        self.root, self.ttl, self.clock, self.enabled = root, ttl, clock, enabled
+
+    def _path(self, key):
+        return os.path.join(self.root, "http", hashlib.sha256(key.encode()).hexdigest() + ".json")
+
+    def get(self, key):
+        if not self.enabled or self.ttl <= 0:
+            return None
+        try:
+            with open(self._path(key), encoding="utf-8") as f:
+                entry = json.load(f)
+        except (OSError, ValueError):
+            return None
+        if self.clock() - entry.get("stored_at", 0) > self.ttl:
+            return None
+        return entry.get("value")
+
+    def put(self, key, value):
+        if not self.enabled:
+            return
+        path = self._path(key)
+        _ensure_dir(self.root)
+        _ensure_dir(os.path.dirname(path))
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"key": key, "stored_at": self.clock(), "value": value}, f)
+        os.replace(tmp, path)
+
+
+class Limiter:
+    """At least `interval` seconds between requests to the same host.
+
+    State is kept in memory and (if state_path is set) in a small JSON file, so
+    back-to-back CLI runs are spaced too.
+    """
+
+    def __init__(self, interval=MIN_INTERVAL, clock=time.time, sleep=time.sleep, state_path=None):
+        self.interval, self.clock, self.sleep, self.state_path = interval, clock, sleep, state_path
+        self.last = {}
+
+    def _load(self):
+        if not self.state_path:
+            return {}
+        try:
+            with open(self.state_path, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self, state):
+        if not self.state_path:
+            return
+        try:
+            _ensure_dir(os.path.dirname(self.state_path))
+            tmp = self.state_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(state, f)
+            os.replace(tmp, self.state_path)
+        except OSError:
+            pass
+
+    def wait(self, host):
+        state = self._load()
+        last = max(self.last.get(host, 0.0), float(state.get(host, 0.0)))
+        gap = self.clock() - last
+        if last and gap < self.interval:
+            self.sleep(self.interval - gap)
+        self.last[host] = self.clock()
+        state[host] = self.last[host]
+        self._save(state)
+
+
+# --------------------------------------------------------------------------- http
+
+class Response:
+    def __init__(self, status, url, text, from_cache=False):
+        self.status, self.url, self.text, self.from_cache = status, url, text, from_cache
+
+
+def _decode(body, headers):
+    enc = (headers.get("Content-Encoding") or "").lower()
+    if enc == "gzip":
+        body = gzip.decompress(body)
+    elif enc == "deflate":
+        body = zlib.decompress(body)
+    ctype = headers.get("Content-Type") or ""
+    m = re.search(r"charset=([\w-]+)", ctype)
+    return body.decode(m.group(1) if m else "utf-8", errors="replace")
+
+
+class Http:
+    NETWORK_ERRORS = (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError,
+                      http.client.HTTPException)
+
+    def __init__(self, cache, limiter, opener=None, sleep=time.sleep, timeout=TIMEOUT, retries=RETRIES):
+        self.cache, self.limiter, self.sleep = cache, limiter, sleep
+        self.timeout, self.retries = timeout, retries
+        # Default opener: no cookie handler, so nothing is ever stored or sent back.
+        self.opener = opener or urllib.request.build_opener().open
+        self.requests = 0
+
+    def get(self, url, platform="web", what="page", accept="text/html,application/xhtml+xml,*/*;q=0.8"):
+        key = "GET " + url
+        hit = self.cache.get(key)
+        if hit is not None:
+            return Response(hit["status"], hit["url"], hit["text"], from_cache=True)
+        host = urllib.parse.urlsplit(url).hostname or ""
+        headers = {"User-Agent": USER_AGENT, "Accept": accept,
+                   "Accept-Language": "en-US,en;q=0.8", "Accept-Encoding": "gzip"}
+        attempt = 0
+        while True:
+            self.limiter.wait(host)
+            self.requests += 1
+            req = urllib.request.Request(url, headers=headers)
+            try:
+                resp = self.opener(req, timeout=self.timeout)
+                status, final = resp.status, resp.geturl()
+                body = resp.read(MAX_BYTES + 1)
+                text = _decode(body, resp.headers)
+                break
+            except urllib.error.HTTPError as e:   # an answer from the server: never retried
+                status, final, text = e.code, e.geturl() or url, ""
+                e.close()
+                break
+            except self.NETWORK_ERRORS as e:
+                if attempt >= self.retries:
+                    reason = getattr(e, "reason", e)
+                    raise SocialWebError(f"network error after {self.retries} retries: {host}: {reason}")
+                self.sleep(2 ** attempt)   # 1 s, 2 s, 4 s (on top of the per-host spacing)
+                attempt += 1
+        if status in (401, 403):
+            raise NeedsLogin(platform, what, f"HTTP {status} from {host}")
+        if status in (404, 410):
+            raise NotFound(f"not found: {platform} {what} (HTTP {status} {url})")
+        if status == 429:
+            raise RateLimited(f"rate limited: {platform} {host} answered HTTP 429; stop and retry much later")
+        if 300 <= status < 400:
+            raise SocialWebError(f"redirect loop at {host} (HTTP {status}); try the final/custom-domain URL directly")
+        if status >= 400:
+            raise SocialWebError(f"HTTP {status} from {host} for {what}")
+        if final != url and LOGIN_URL_RE.search(final) and not LOGIN_URL_RE.search(url):
+            raise NeedsLogin(platform, what, f"redirected to {final}")
+        if is_challenge(text):   # not cached, not retried, not solved
+            raise NeedsLogin(platform, what, f"{host} served a bot check / JS challenge; not bypassed, try much later "
+                                             "or view the public page in a logged-out browser")
+        self.cache.put(key, {"status": status, "url": final, "text": text})
+        return Response(status, final, text)
+
+    def json(self, url, platform="web", what="oEmbed"):
+        r = self.get(url, platform, what, accept="application/json")
+        try:
+            return json.loads(r.text)
+        except ValueError:
+            raise SocialWebError(f"{platform}: {what} did not return JSON ({url})")
+
+
+# --------------------------------------------------------------------------- yt-dlp
+
+def _safe_ytdlp_config_args():
+    """Keep only JS-runtime settings from the user's yt-dlp config (never cookies)."""
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    out = []
+    for path in (os.path.join(base, "yt-dlp", "config"), os.path.join(base, "yt-dlp.conf")):
+        try:
+            with open(path, encoding="utf-8") as f:
+                toks = shlex.split(f.read(), comments=True)
+        except (OSError, ValueError):
+            continue
+        for i, t in enumerate(toks):
+            if t in ("--js-runtimes", "--remote-components") and i + 1 < len(toks):
+                out += [t, toks[i + 1]]
+    return out
+
+
+class YtDlp:
+    def __init__(self, http, path=None, runner=subprocess.run):
+        self.http, self.runner = http, runner
+        if os.environ.get("SOCIALWEB_NO_YTDLP"):
+            self.path = None
+        else:
+            self.path = path or os.environ.get("SOCIALWEB_YTDLP") or shutil.which("yt-dlp") or \
+                (os.path.expanduser("~/.local/bin/yt-dlp") if os.path.exists(os.path.expanduser("~/.local/bin/yt-dlp")) else None)
+
+    def available(self):
+        return bool(self.path)
+
+    def json(self, url, extra, platform, what):
+        key = "YTDLP " + " ".join(extra) + " " + url
+        hit = self.http.cache.get(key)
+        if hit is not None:
+            return hit
+        cmd = [self.path, "--ignore-config", *_safe_ytdlp_config_args(), "--no-warnings", "--skip-download",
+               "-J", "--sleep-requests", "2", "--socket-timeout", str(TIMEOUT), "--retries", "3",
+               "--user-agent", USER_AGENT, *extra, url]
+        self.http.limiter.wait(urllib.parse.urlsplit(url).hostname or "")
+        try:
+            p = self.runner(cmd, capture_output=True, text=True, timeout=180)
+        except subprocess.TimeoutExpired:
+            raise SocialWebError(f"yt-dlp timed out for {url}")
+        if p.returncode != 0:
+            err = (p.stderr or "").strip().splitlines()
+            line = next((l for l in err if "ERROR" in l), err[-1] if err else "yt-dlp failed")
+            if re.search(r"sign in|log in|login|not a bot|cookies|age-restricted|members only|private", line, re.I):
+                raise NeedsLogin(platform, what, line[:200])
+            if re.search(r"404|does not exist|not found|unavailable|removed", line, re.I):
+                raise NotFound(f"not found: {platform} {what} ({line[:200]})")
+            raise SocialWebError(f"yt-dlp: {line[:300]}")
+        try:
+            data = json.loads(p.stdout)
+        except ValueError:
+            raise SocialWebError("yt-dlp returned no JSON")
+        self.http.cache.put(key, data)
+        return data
+
+
+# --------------------------------------------------------------------------- parsing helpers
+
+class _MetaParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.meta, self.title, self.ldjson, self.rss = {}, "", [], []
+        self._in_title = False
+        self._ld = None
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "meta":
+            k = a.get("property") or a.get("name") or a.get("itemprop")
+            if k and a.get("content") is not None and k not in self.meta:
+                self.meta[k] = a["content"]
+        elif tag == "title":
+            self._in_title = True
+        elif tag == "script" and (a.get("type") or "").lower() == "application/ld+json":
+            self._ld = []
+        elif tag == "link" and (a.get("type") or "") == "application/rss+xml" and a.get("href"):
+            self.rss.append(a["href"])
+
+    def handle_endtag(self, tag):
+        if tag == "title":
+            self._in_title = False
+        elif tag == "script" and self._ld is not None:
+            try:
+                self.ldjson.append(json.loads("".join(self._ld)))
+            except ValueError:
+                pass
+            self._ld = None
+
+    def handle_data(self, data):
+        if self._in_title:
+            self.title += data
+        if self._ld is not None:
+            self._ld.append(data)
+
+
+def parse_meta(text):
+    p = _MetaParser()
+    try:
+        p.feed(text)
+        p.close()
+    except Exception:   # malformed HTML: keep whatever was collected
+        pass
+    return {"meta": p.meta, "title": p.title.strip(), "ldjson": p.ldjson, "rss": p.rss}
+
+
+def strip_tags(s):
+    if not s:
+        return ""
+    s = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
+    s = re.sub(r"<[^>]+>", "", s)
+    s = html.unescape(s)
+    return re.sub(r" *\n *", "\n", re.sub(r"[ \t\r\f\v\u00a0]+", " ", re.sub(r"\n\s*\n+", "\n", s))).strip()
+
+
+def clip(s, n):
+    s = (s or "").replace("\n", " ").strip()
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def iso_date(v):
+    """Best-effort date -> 'YYYY-MM-DD' (or the input unchanged)."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, (int, float)) or (isinstance(v, str) and re.fullmatch(r"\d{9,11}", v)):
+        return datetime.fromtimestamp(int(v), tz=timezone.utc).strftime("%Y-%m-%d")
+    s = str(v).strip()
+    if re.fullmatch(r"\d{8}", s):
+        return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    m = re.match(r"(\d{4}-\d{2}-\d{2})", s)
+    if m:
+        return m.group(1)
+    try:
+        return email.utils.parsedate_to_datetime(s).strftime("%Y-%m-%d")
+    except (TypeError, ValueError, IndexError):
+        pass
+    for fmt in ("%d %b %Y %H:%M:%S %Z", "%B %d, %Y", "%b %d, %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    return s
+
+
+def compact(d):
+    return {k: v for k, v in d.items() if v not in (None, "", [], {})}
+
+
+def walk(o):
+    if isinstance(o, dict):
+        yield o
+        for v in o.values():
+            yield from walk(v)
+    elif isinstance(o, list):
+        for v in o:
+            yield from walk(v)
+
+
+def result(platform, url, **kw):
+    out = {"platform": platform, "url": url}
+    out.update(kw)
+    out.setdefault("needs_login", [])
+    out.setdefault("source", [])
+    return out
+
+
+# --------------------------------------------------------------------------- platforms & urls
+
+def norm_platform(p):
+    p = (p or "").lower().strip()
+    p = ALIASES.get(p, p)
+    if p not in PLATFORMS:
+        raise UsageError(f"unsupported platform '{p}'; use one of: {', '.join(PLATFORMS)}")
+    return p
+
+
+def platform_of_url(url):
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    host = host[4:] if host.startswith("www.") else host
+    table = [("youtube", ("youtube.com", "youtu.be", "youtube-nocookie.com")),
+             ("tiktok", ("tiktok.com",)), ("instagram", ("instagram.com",)),
+             ("x", ("x.com", "twitter.com")), ("spotify", ("spotify.com",)),
+             ("soundcloud", ("soundcloud.com",)), ("bandcamp", ("bandcamp.com",)),
+             ("suno", ("suno.com", "suno.ai"))]
+    for name, domains in table:
+        if any(host == d or host.endswith("." + d) for d in domains):
+            return name
+    return None
+
+
+def is_url(s):
+    return bool(re.match(r"https?://", s or "", re.I))
+
+
+def profile_url(platform, target):
+    t = (target or "").strip()
+    if not t:
+        raise UsageError("missing handle or url")
+    if is_url(t):
+        return t
+    h = t.lstrip("@")
+    if not re.fullmatch(r"[\w.\-:]+", h):
+        raise UsageError(f"that does not look like a handle: {t!r}")
+    if platform == "youtube":
+        return f"https://www.youtube.com/channel/{h}" if re.fullmatch(r"UC[\w-]{22}", h) \
+            else f"https://www.youtube.com/@{h}"
+    if platform == "tiktok":
+        return f"https://www.tiktok.com/@{h}"
+    if platform == "instagram":
+        return f"https://www.instagram.com/{h}/"
+    if platform == "x":
+        return f"https://x.com/{h}"
+    if platform == "spotify":
+        m = re.fullmatch(r"(?:spotify:artist:)?([A-Za-z0-9]{22})", h)
+        if not m:
+            raise UsageError("spotify: give an artist URL or 22-character artist id (Spotify has no public handles)")
+        return f"https://open.spotify.com/artist/{m.group(1)}"
+    if platform == "soundcloud":
+        return f"https://soundcloud.com/{h}"
+    if platform == "bandcamp":
+        return f"https://{h}.bandcamp.com/"
+    if platform == "suno":
+        return f"https://suno.com/@{h}"
+    raise UsageError(f"unsupported platform {platform}")
+
+
+def url_kind(platform, url):
+    """'post' for a single item URL, else 'profile'."""
+    u = urllib.parse.urlsplit(url)
+    path = u.path.rstrip("/")
+    segs = [s for s in path.split("/") if s]
+    host = (u.hostname or "").lower()
+    if platform == "youtube":
+        return "post" if (host.endswith("youtu.be") or re.match(r"/(watch|shorts/|live/|embed/)", u.path)) else "profile"
+    if platform == "tiktok":
+        return "post" if ("/video/" in path or "/photo/" in path or host.startswith(("vm.", "vt."))) else "profile"
+    if platform == "instagram":
+        return "post" if segs and segs[0] in ("p", "reel", "reels", "tv") else "profile"
+    if platform == "x":
+        return "post" if "/status/" in path else "profile"
+    if platform == "spotify":
+        if segs and segs[0].startswith("intl-"):
+            segs = segs[1:]
+        return "profile" if segs and segs[0] in ("artist", "user") else "post"
+    if platform == "soundcloud":
+        if len(segs) <= 1:
+            return "profile"
+        if len(segs) == 2 and segs[1] in ("tracks", "albums", "sets", "popular-tracks", "reposts", "likes",
+                                          "followers", "following", "spotlight"):
+            return "profile"
+        return "post"
+    if platform == "bandcamp":
+        return "post" if segs and segs[0] in ("album", "track") else "profile"
+    if platform == "suno":
+        return "post" if segs and segs[0] in ("song", "s") else "profile"
+    return "post"
+
+
+def handle_from_url(url):
+    segs = [s for s in urllib.parse.urlsplit(url).path.split("/") if s]
+    for s in segs:
+        if s.startswith("@"):
+            return s[1:]
+    host = urllib.parse.urlsplit(url).hostname or ""
+    if host.endswith(".bandcamp.com") and not host.startswith("www."):
+        return host.split(".")[0]
+    return segs[0] if segs else None
+
+
+class Ctx:
+    def __init__(self, http, ytdlp):
+        self.http, self.ytdlp = http, ytdlp
+
+
+# --------------------------------------------------------------------------- youtube
+
+def parse_youtube_channel(text, url):
+    m = parse_meta(text)
+    meta = m["meta"]
+    name = meta.get("og:title")
+    if not name:
+        raise SocialWebError("youtube: channel page had no metadata")
+    canon = meta.get("og:url") or url
+    cid = None
+    mm = re.search(r'"externalId":"(UC[\w-]{22})"', text) or re.search(r"/channel/(UC[\w-]{22})", canon)
+    if mm:
+        cid = mm.group(1)
+    subs = re.search(r'"content":"([\d.,]+[KMB]?) subscribers?"', text)
+    vids = re.search(r'"content":"([\d.,]+[KMB]?) videos?"', text)
+    handle = re.search(r'"canonicalBaseUrl":"/@([^"]+)"', text)
+    return result("youtube", canon, name=name, handle=(handle.group(1) if handle else handle_from_url(url)),
+                  bio=meta.get("og:description") or meta.get("description"), channel_id=cid,
+                  counts=compact({"subscribers": subs.group(1) if subs else None,
+                                  "videos": vids.group(1) if vids else None}),
+                  links=[f"https://www.youtube.com/feeds/videos.xml?channel_id={cid}"] if cid else [],
+                  source=["channel page meta"])
+
+
+def yt_profile(ctx, url):
+    r = ctx.http.get(url, "youtube", "channel page")
+    return parse_youtube_channel(r.text, r.url)
+
+
+YT_NS = {"a": "http://www.w3.org/2005/Atom", "media": "http://search.yahoo.com/mrss/",
+         "yt": "http://www.youtube.com/xml/schemas/2015"}
+
+
+def parse_youtube_rss(xml_text):
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        raise SocialWebError("youtube: RSS feed was not valid XML")
+    items = []
+    for e in root.findall("a:entry", YT_NS):
+        link = e.find("a:link", YT_NS)
+        stats = e.find("media:group/media:community/media:statistics", YT_NS)
+        rating = e.find("media:group/media:community/media:starRating", YT_NS)
+        counts = {}
+        if stats is not None and stats.get("views") is not None:
+            counts["views"] = int(stats.get("views"))
+        if rating is not None and rating.get("count") is not None:
+            counts["likes"] = int(rating.get("count"))
+        items.append({"date": iso_date(e.findtext("a:published", None, YT_NS)),
+                      "title": e.findtext("a:title", "", YT_NS),
+                      "url": link.get("href") if link is not None else None,
+                      "counts": counts})
+    return items
+
+
+def yt_posts(ctx, url, limit):
+    m = re.search(r"/channel/(UC[\w-]{22})", url)
+    cid = m.group(1) if m else yt_profile(ctx, url).get("channel_id")
+    out = result("youtube", url, items=[])
+    rss_err = None
+    if cid and limit <= 15:
+        try:
+            r = ctx.http.get(f"https://www.youtube.com/feeds/videos.xml?channel_id={cid}", "youtube",
+                             "channel RSS feed", accept="application/atom+xml,application/xml")
+            out["items"] = parse_youtube_rss(r.text)[:limit]
+            out["source"].append("channel RSS feed (max 15)")
+            return out
+        except (SocialWebError,) as e:   # the feed is known to 404/500 now and then
+            rss_err = e
+    if ctx.ytdlp.available():
+        base = f"https://www.youtube.com/channel/{cid}" if cid else url.rstrip("/")
+        data = ctx.ytdlp.json(base + "/videos", ["--flat-playlist", "--playlist-end", str(limit)],
+                              "youtube", "channel video list")
+        for e in (data.get("entries") or [])[:limit]:
+            out["items"].append({"date": iso_date(e.get("upload_date") or e.get("timestamp")),
+                                 "title": e.get("title"),
+                                 "url": e.get("url") or f"https://www.youtube.com/watch?v={e.get('id')}",
+                                 "counts": compact({"views": e.get("view_count")})})
+        out["source"].append("yt-dlp --flat-playlist (dates not shown in flat mode)")
+        return out
+    if rss_err:
+        raise rss_err
+    raise SocialWebError("youtube: more than 15 items needs yt-dlp (not installed); use --limit 15")
+
+
+def yt_video_id(url):
+    u = urllib.parse.urlsplit(url)
+    if (u.hostname or "").endswith("youtu.be"):
+        return u.path.strip("/").split("/")[0]
+    q = urllib.parse.parse_qs(u.query).get("v")
+    if q:
+        return q[0]
+    m = re.search(r"/(?:shorts|live|embed)/([\w-]{11})", u.path)
+    return m.group(1) if m else None
+
+
+def parse_ytdlp_video(data):
+    return compact({"title": data.get("title"), "author": data.get("uploader") or data.get("channel"),
+                    "author_url": data.get("uploader_url") or data.get("channel_url"),
+                    "date": iso_date(data.get("upload_date")),
+                    "duration_s": data.get("duration"),
+                    "description": clip(data.get("description"), 500),
+                    "counts": compact({"views": data.get("view_count"), "likes": data.get("like_count"),
+                                       "comments": data.get("comment_count"),
+                                       "channel_followers": data.get("channel_follower_count")})})
+
+
+def yt_post(ctx, url):
+    vid = yt_video_id(url)
+    if not vid:
+        raise UsageError("youtube: could not find a video id in that url")
+    watch = f"https://www.youtube.com/watch?v={vid}"
+    out = result("youtube", watch)
+    first_err = None
+    try:
+        o = ctx.http.json("https://www.youtube.com/oembed?format=json&url=" + urllib.parse.quote(watch, safe=""),
+                          "youtube", "video oEmbed")
+        out.update(compact({"title": o.get("title"), "author": o.get("author_name"),
+                            "author_url": o.get("author_url"), "thumbnail": o.get("thumbnail_url")}))
+        out["source"].append("oEmbed")
+    except SocialWebError as e:
+        first_err = e
+    try:
+        if ctx.ytdlp.available():
+            info = parse_ytdlp_video(ctx.ytdlp.json(watch, ["--no-playlist"], "youtube", "video details"))
+            out["source"].append("yt-dlp -J")
+        else:
+            r = ctx.http.get(watch, "youtube", "watch page")
+            meta = parse_meta(r.text)["meta"]
+            views = re.search(r'"viewCount":"(\d+)"', r.text)
+            info = compact({"title": meta.get("og:title") or meta.get("name"),
+                            "date": iso_date(meta.get("datePublished") or meta.get("uploadDate")),
+                            "description": clip(meta.get("og:description"), 500),
+                            "counts": compact({"views": int(views.group(1)) if views else None})})
+            out["source"].append("watch page meta")
+        for k, v in info.items():
+            out.setdefault(k, v)
+        if "counts" in info:
+            out["counts"] = info["counts"]
+    except NeedsLogin as e:
+        if first_err or "title" not in out:
+            raise
+        out["needs_login"].append(f"video details/counts ({e.detail or 'blocked logged-out'})")
+    except SocialWebError as e:
+        if first_err:
+            raise first_err
+        out["source"].append(f"details unavailable: {clip(str(e), 120)}")
+    return out
+
+
+# --------------------------------------------------------------------------- tiktok
+
+def tiktok_scope(text):
+    m = re.search(r'<script[^>]+id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>', text, re.S)
+    if not m:
+        return {}
+    try:
+        return json.loads(m.group(1)).get("__DEFAULT_SCOPE__", {})
+    except ValueError:
+        return {}
+
+
+def parse_tiktok_profile(text, url):
+    d = tiktok_scope(text).get("webapp.user-detail")
+    if not d:
+        raise NeedsLogin("tiktok", "profile", "page served no public data (bot check or login wall)")
+    code = d.get("statusCode", 0)
+    if code in (10202, 10221):
+        raise NotFound(f"not found: tiktok profile ({url}, statusCode {code})")
+    info = d.get("userInfo") or {}
+    u, s = info.get("user") or {}, info.get("stats") or {}
+    if not u:
+        raise NeedsLogin("tiktok", "profile", f"no user data (statusCode {code})")
+    link = (u.get("bioLink") or {}).get("link")
+    out = result("tiktok", f"https://www.tiktok.com/@{u.get('uniqueId')}", handle=u.get("uniqueId"),
+                 name=u.get("nickname"), bio=u.get("signature"), links=[link] if link else [],
+                 verified=u.get("verified"),
+                 counts=compact({"followers": s.get("followerCount"), "following": s.get("followingCount"),
+                                 "likes": s.get("heartCount") or s.get("heart"), "videos": s.get("videoCount")}),
+                 source=["profile page rehydration JSON"])
+    out["needs_login"].append("video list (loaded by a signed in-page API; not fetched)")
+    if u.get("privateAccount"):
+        out["needs_login"].append("private account: videos visible to approved followers only")
+    return out
+
+
+def tt_profile(ctx, url):
+    r = ctx.http.get(url, "tiktok", "profile page")
+    return parse_tiktok_profile(r.text, r.url)
+
+
+def tt_posts(ctx, url, limit):
+    raise NeedsLogin("tiktok", "video list",
+                     "TikTok loads the grid with a signed in-page API; use `post <video url>` per video, "
+                     "or look at the public page in a logged-out browser")
+
+
+def parse_tiktok_video(text):
+    d = tiktok_scope(text).get("webapp.video-detail") or {}
+    item = (d.get("itemInfo") or {}).get("itemStruct") or {}
+    if not item:
+        return {}
+    s = item.get("stats") or {}
+    a = item.get("author") or {}
+    return compact({"title": clip(item.get("desc"), 300), "author": a.get("uniqueId"),
+                    "author_url": f"https://www.tiktok.com/@{a.get('uniqueId')}" if a.get("uniqueId") else None,
+                    "date": iso_date(item.get("createTime")),
+                    "counts": compact({"views": s.get("playCount"), "likes": s.get("diggCount"),
+                                       "comments": s.get("commentCount"), "shares": s.get("shareCount"),
+                                       "saves": s.get("collectCount")})})
+
+
+def tt_post(ctx, url):
+    out = result("tiktok", url)
+    o = ctx.http.json("https://www.tiktok.com/oembed?url=" + urllib.parse.quote(url, safe=""),
+                      "tiktok", "video oEmbed")
+    out.update(compact({"title": o.get("title"), "author": o.get("author_unique_id") or o.get("author_name"),
+                        "author_url": o.get("author_url"), "thumbnail": o.get("thumbnail_url")}))
+    out["source"].append("oEmbed")
+    try:
+        r = ctx.http.get(url, "tiktok", "video page")
+        info = parse_tiktok_video(r.text)
+        if info:
+            out["source"].append("video page rehydration JSON")
+            for k, v in info.items():
+                if k == "counts" or not out.get(k):
+                    out[k] = v
+        else:
+            out["needs_login"].append("video counts/date (page served no public data)")
+    except NeedsLogin as e:
+        out["needs_login"].append(f"video counts/date ({e.detail})")
+    if not out.get("title") and not out.get("author") and not out.get("counts"):
+        out["needs_login"].append("oEmbed returned only a stub (video may be private, removed or region-locked)")
+    return out
+
+
+# --------------------------------------------------------------------------- instagram
+
+IG_COUNTS_RE = re.compile(r"([\d.,]+[KMB]?) Followers, ([\d.,]+[KMB]?) Following, ([\d.,]+[KMB]?) Posts", re.I)
+
+
+def parse_instagram_profile(text, url):
+    meta = parse_meta(text)["meta"]
+    desc = meta.get("og:description") or ""
+    m = IG_COUNTS_RE.search(desc)
+    if not m:
+        raise NeedsLogin("instagram", "profile", "logged-out page carried no public profile data (login wall)")
+    title = meta.get("og:title") or ""
+    tm = re.match(r"(.*?) \(@([\w.]+)\)", title)
+    bio = None
+    bm = re.search(r'on Instagram: "(.*)"\s*$', meta.get("description") or "", re.S)
+    if bm:
+        bio = bm.group(1)
+    out = result("instagram", meta.get("og:url") or url, name=tm.group(1) if tm else None,
+                 handle=tm.group(2) if tm else handle_from_url(url), bio=bio,
+                 counts={"followers": m.group(1), "following": m.group(2), "posts": m.group(3)},
+                 source=["profile page OpenGraph (counts are rounded as shown)"])
+    out["needs_login"].append("post grid, full bio links (Instagram loads them for signed-in users)")
+    return out
+
+
+def ig_profile(ctx, url):
+    r = ctx.http.get(url, "instagram", "profile page")
+    return parse_instagram_profile(r.text, r.url)
+
+
+def ig_posts(ctx, url, limit):
+    raise NeedsLogin("instagram", "post grid",
+                     "Instagram shows a profile's posts only to signed-in users; use `post <post url>` for a known post")
+
+
+IG_POST_RE = re.compile(r'^([\d.,]+[KMB]?) likes?, ([\d.,]+[KMB]?) comments? - ([\w.]+) on ([A-Z][a-z]+ \d{1,2}, \d{4})'
+                        r'(?:: "(.*)")?', re.S)
+
+
+def parse_instagram_post(text, url):
+    meta = parse_meta(text)["meta"]
+    desc = meta.get("og:description") or ""
+    m = IG_POST_RE.match(desc)
+    if m:
+        return result("instagram", meta.get("og:url") or url, author=m.group(3), date=iso_date(m.group(4)),
+                      title=clip(m.group(5) or meta.get("og:title"), 300),
+                      counts={"likes": m.group(1), "comments": m.group(2)}, source=["post page OpenGraph"])
+    if meta.get("og:title"):
+        return result("instagram", meta.get("og:url") or url, title=clip(meta.get("og:title"), 300),
+                      needs_login=["likes/comments/date (not in logged-out metadata)"], source=["post page OpenGraph"])
+    raise NeedsLogin("instagram", "post", "logged-out page carried no public metadata (login wall)")
+
+
+def ig_post(ctx, url):
+    r = ctx.http.get(url, "instagram", "post page")
+    return parse_instagram_post(r.text, r.url)
+
+
+# --------------------------------------------------------------------------- x / twitter
+
+def parse_x_profile(text, url):
+    meta = parse_meta(text)["meta"]
+    m = re.match(r"(.*) \(@(\w+)\)", meta.get("og:title") or "")
+    if not m:
+        raise NeedsLogin("x", "profile", "logged-out page carried no profile metadata")
+    out = result("x", f"https://x.com/{m.group(2)}", name=m.group(1), handle=m.group(2),
+                 bio=meta.get("og:description"), source=["profile page OpenGraph"])
+    out["needs_login"] += ["follower/following counts", "posts timeline"]
+    return out
+
+
+def x_profile(ctx, url):
+    r = ctx.http.get(url, "x", "profile page")
+    return parse_x_profile(r.text, r.url)
+
+
+def x_posts(ctx, url, limit):
+    raise NeedsLogin("x", "posts timeline",
+                     "X shows timelines only to signed-in users; use `post <status url>` for a known post")
+
+
+def parse_x_oembed(o, url):
+    h = o.get("html") or ""
+    pm = re.search(r"<p[^>]*>(.*?)</p>", h, re.S)
+    dates = re.findall(r'<a href="[^"]*/status/\d+[^"]*">([^<]+)</a>', h)
+    out = result("x", o.get("url") or url, title=clip(strip_tags(pm.group(1)) if pm else None, 300),
+                 author=o.get("author_name"), author_url=o.get("author_url"),
+                 date=iso_date(dates[-1]) if dates else None, source=["publish oEmbed"])
+    out["needs_login"].append("like/repost/reply/view counts")
+    return compact(out) | {"needs_login": out["needs_login"], "source": out["source"]}
+
+
+def x_post(ctx, url):
+    o = ctx.http.json("https://publish.twitter.com/oembed?omit_script=1&dnt=1&url=" + urllib.parse.quote(url, safe=""),
+                      "x", "post oEmbed")
+    return parse_x_oembed(o, url)
+
+
+# --------------------------------------------------------------------------- spotify
+
+def spotify_state(text):
+    m = re.search(r'<script id="initialState" type="text/plain">([^<]+)</script>', text)
+    if not m:
+        return {}
+    try:
+        return json.loads(base64.b64decode(m.group(1)))
+    except (ValueError, TypeError):
+        return {}
+
+
+def _spotify_entity(text, url):
+    m = re.search(r"/(artist|album|track|playlist|show|episode|user)/([A-Za-z0-9]+)", url)
+    if not m:
+        return None, None
+    uri = f"spotify:{m.group(1)}:{m.group(2)}"
+    return uri, (spotify_state(text).get("entities", {}).get("items", {}) or {}).get(uri)
+
+
+def parse_spotify_artist(text, url):
+    meta = parse_meta(text)["meta"]
+    uri, ent = _spotify_entity(text, url)
+    if ent and ent.get("profile"):
+        p, s = ent["profile"], ent.get("stats") or {}
+        links = [i.get("url") for i in ((p.get("externalLinks") or {}).get("items") or []) if i.get("url")]
+        return result("spotify", url, name=p.get("name"), bio=clip(strip_tags((p.get("biography") or {}).get("text")), 600),
+                      links=links, counts=compact({"followers": s.get("followers"),
+                                                   "monthly_listeners": s.get("monthlyListeners"),
+                                                   "world_rank": s.get("worldRank") or None}),
+                      source=["artist page initialState JSON"])
+    if not meta.get("og:title"):
+        raise SocialWebError("spotify: page had no metadata")
+    ml = re.search(r"([\d.,]+[KMB]?) monthly listeners", meta.get("og:description") or "")
+    return result("spotify", url, name=meta.get("og:title"), bio=meta.get("og:description"),
+                  counts=compact({"monthly_listeners": ml.group(1) if ml else None}), source=["page OpenGraph"])
+
+
+def sp_profile(ctx, url):
+    r = ctx.http.get(url, "spotify", "artist page")
+    return parse_spotify_artist(r.text, url)
+
+
+def _sp_date(d):
+    d = d or {}
+    if d.get("isoString"):
+        return iso_date(d["isoString"])
+    y, mo, da = d.get("year"), d.get("month"), d.get("day")
+    if y and mo and da:
+        return f"{y:04d}-{mo:02d}-{da:02d}"
+    return str(y) if y else None
+
+
+def parse_spotify_discography(text, url):
+    _, ent = _spotify_entity(text, url)
+    if not ent:
+        raise SocialWebError("spotify: no discography data on the artist page")
+    disc = ent.get("discography") or {}
+    seen, items = set(), []
+    def add(r):
+        uri = r.get("uri") or ""
+        if not uri or uri in seen:
+            return
+        seen.add(uri)
+        _, kind, rid = uri.split(":", 2)
+        items.append({"date": _sp_date(r.get("date")), "title": r.get("name"),
+                      "url": f"https://open.spotify.com/{kind}/{rid}",
+                      "counts": compact({"type": (r.get("type") or "").lower(),
+                                         "tracks": (r.get("tracks") or {}).get("totalCount")})})
+    for sec in ("latest",):
+        if isinstance(disc.get(sec), dict):
+            add(disc[sec])
+    for sec in ("albums", "singles", "compilations"):
+        for grp in (disc.get(sec) or {}).get("items") or []:
+            for r in (grp.get("releases") or {}).get("items") or []:
+                add(r)
+    for r in (disc.get("popularReleasesAlbums") or {}).get("items") or []:
+        add(r)
+    items.sort(key=lambda i: i["date"] or "", reverse=True)
+    return result("spotify", url, items=items, source=["artist page initialState JSON (releases)"])
+
+
+def sp_posts(ctx, url, limit):
+    if "/artist/" not in url:
+        raise UsageError("spotify posts: give an artist url or id")
+    r = ctx.http.get(url, "spotify", "artist page")
+    out = parse_spotify_discography(r.text, url)
+    out["items"] = out["items"][:limit]
+    return out
+
+
+def sp_post(ctx, url):
+    out = result("spotify", url)
+    o = ctx.http.json("https://open.spotify.com/oembed?url=" + urllib.parse.quote(url, safe=""), "spotify", "oEmbed")
+    out.update(compact({"title": o.get("title"), "thumbnail": o.get("thumbnail_url")}))
+    out["source"].append("oEmbed")
+    r = ctx.http.get(url, "spotify", "item page")
+    meta = parse_meta(r.text)["meta"]
+    out.update(compact({"description": meta.get("og:description"),
+                        "date": iso_date(meta.get("music:release_date"))}))
+    out["source"].append("page OpenGraph")
+    out["needs_login"].append("play counts per track are shown only inside the app")
+    return out
+
+
+# --------------------------------------------------------------------------- soundcloud
+
+def sc_hydration(text):
+    m = re.search(r"window\.__sc_hydration\s*=\s*(\[.*?\]);\s*</script>", text, re.S)
+    if not m:
+        return {}
+    try:
+        return {h.get("hydratable"): h.get("data") for h in json.loads(m.group(1))}
+    except ValueError:
+        return {}
+
+
+def parse_soundcloud_profile(text, url):
+    u = sc_hydration(text).get("user")
+    if not u:
+        raise SocialWebError("soundcloud: no public user data on the page")
+    loc = ", ".join(x for x in (u.get("city"), u.get("country_code")) if x)
+    return result("soundcloud", u.get("permalink_url") or url, handle=u.get("permalink"),
+                  name=u.get("full_name") or u.get("username"), bio=u.get("description"), location=loc or None,
+                  verified=u.get("verified"),
+                  counts=compact({"followers": u.get("followers_count"), "following": u.get("followings_count"),
+                                  "tracks": u.get("track_count"), "playlists": u.get("playlist_count"),
+                                  "likes": u.get("likes_count")}),
+                  source=["profile page hydration JSON"])
+
+
+def sc_profile(ctx, url):
+    r = ctx.http.get(url, "soundcloud", "profile page")
+    return parse_soundcloud_profile(r.text, r.url)
+
+
+def parse_soundcloud_tracks(text, base):
+    items = []
+    for art in re.findall(r'<article class="audible"[\s\S]*?</article>', text):
+        a = re.search(r'<a itemprop="url" href="([^"]+)">([^<]*)</a>', art)
+        if not a:
+            continue
+        t = re.search(r"<time pubdate>([^<]+)</time>", art)
+        g = re.search(r'itemprop="genre" content="([^"]*)"', art)
+        items.append({"date": iso_date(t.group(1)) if t else None, "title": html.unescape(a.group(2)),
+                      "url": urllib.parse.urljoin(base, a.group(1)),
+                      "counts": compact({"genre": g.group(1) if g else None})})
+    return items
+
+
+def sc_posts(ctx, url, limit):
+    segs = [s for s in urllib.parse.urlsplit(url).path.split("/") if s]
+    if not segs:
+        raise UsageError("soundcloud: need a user url or handle")
+    page = f"https://soundcloud.com/{segs[0]}/tracks"
+    r = ctx.http.get(page, "soundcloud", "tracks page")
+    items = parse_soundcloud_tracks(r.text, "https://soundcloud.com/")
+    out = result("soundcloud", page, items=items[:limit], source=["tracks page (server-rendered list)"])
+    out["needs_login"] = []
+    if items:
+        out["source"].append("per-track play/like counts: use `post <track url>`")
+    return out
+
+
+def parse_soundcloud_sound(text, url):
+    s = sc_hydration(text).get("sound") or sc_hydration(text).get("playlist")
+    if not s:
+        return None
+    return result("soundcloud", s.get("permalink_url") or url, title=s.get("title"),
+                  author=(s.get("user") or {}).get("username"),
+                  author_url=(s.get("user") or {}).get("permalink_url"),
+                  date=iso_date(s.get("display_date") or s.get("created_at")),
+                  description=clip(s.get("description"), 500), genre=s.get("genre"),
+                  duration_s=round(s["duration"] / 1000) if s.get("duration") else None,
+                  counts=compact({"plays": s.get("playback_count"), "likes": s.get("likes_count"),
+                                  "comments": s.get("comment_count"), "reposts": s.get("reposts_count"),
+                                  "tracks": s.get("track_count")}),
+                  source=["track page hydration JSON"])
+
+
+def sc_post(ctx, url):
+    r = ctx.http.get(url, "soundcloud", "track page")
+    out = parse_soundcloud_sound(r.text, r.url)
+    if out:
+        return {k: v for k, v in out.items() if v is not None}
+    o = ctx.http.json("https://soundcloud.com/oembed?format=json&url=" + urllib.parse.quote(url, safe=""),
+                      "soundcloud", "oEmbed")
+    return result("soundcloud", url, title=o.get("title"), author=o.get("author_name"),
+                  author_url=o.get("author_url"), description=o.get("description"), source=["oEmbed"])
+
+
+# --------------------------------------------------------------------------- bandcamp
+
+def parse_bandcamp_profile(text, url):
+    meta = parse_meta(text)["meta"]
+    nm = re.search(r'<p id="band-name-location">\s*<span class="title">([^<]*)</span>\s*'
+                   r'<span class="location secondaryText">([^<]*)</span>', text)
+    name = html.unescape(nm.group(1)).strip() if nm else (meta.get("og:site_name") or meta.get("og:title"))
+    if not name:
+        raise SocialWebError("bandcamp: page had no artist metadata")
+    bio = re.search(r'<p id="bio-text"[^>]*>([\s\S]*?)</p>', text)
+    links_block = re.search(r'<ol id="band-links">([\s\S]*?)</ol>', text)
+    links = re.findall(r'href="([^"]+)"', links_block.group(1)) if links_block else []
+    n = len(parse_bandcamp_releases(text, url))
+    bio_text = strip_tags(bio.group(1)) if bio else None
+    if bio_text:
+        bio_text = re.sub(r"\s*\.\.\.\s*more\s*$", "", bio_text)
+    return result("bandcamp", meta.get("og:url") or url, name=name, handle=handle_from_url(url),
+                  location=(html.unescape(nm.group(2)).strip() or None) if nm else None,
+                  bio=clip(bio_text, 600), links=links, counts=compact({"releases_on_page": n or None}),
+                  source=["artist page HTML"])
+
+
+def bc_profile(ctx, url):
+    r = ctx.http.get(url, "bandcamp", "artist page")
+    return parse_bandcamp_profile(r.text, r.url)
+
+
+def parse_bandcamp_releases(text, base):
+    items, seen = [], set()
+    for kind, href, title in re.findall(
+            r'<li data-item-id="(album|track)-\d+"[\s\S]*?<a href="([^"]+)"[\s\S]*?<p class="title">([\s\S]*?)</p>', text):
+        u = urllib.parse.urljoin(base, href)
+        if u in seen:
+            continue
+        seen.add(u)
+        items.append({"date": None, "title": strip_tags(title), "url": u, "counts": {"type": kind}})
+    m = re.search(r'data-client-items="([^"]+)"', text)
+    if m:
+        try:
+            for it in json.loads(html.unescape(m.group(1))):
+                u = urllib.parse.urljoin(base, it.get("page_url") or "")
+                if u in seen or not it.get("page_url"):
+                    continue
+                seen.add(u)
+                items.append({"date": None, "title": it.get("title"), "url": u,
+                              "counts": compact({"type": it.get("type"), "artist": it.get("artist")})})
+        except ValueError:
+            pass
+    return items
+
+
+def bc_posts(ctx, url, limit):
+    base = url if url.endswith("/") else url + "/"
+    r = ctx.http.get(base, "bandcamp", "artist page")
+    items = parse_bandcamp_releases(r.text, r.url)
+    if not items and not urllib.parse.urlsplit(base).path.strip("/"):
+        r = ctx.http.get(urllib.parse.urljoin(base, "music"), "bandcamp", "music page")
+        items = parse_bandcamp_releases(r.text, r.url)
+    return result("bandcamp", r.url, items=items[:limit],
+                  source=["artist page music grid (page order; dates: use `post <release url>`)"])
+
+
+def parse_bandcamp_release(text, url):
+    m = parse_meta(text)
+    ld = next((o for o in m["ldjson"] if isinstance(o, dict) and o.get("@type") in ("MusicAlbum", "MusicRecording")), None)
+    if ld:
+        tracks = (ld.get("track") or {}).get("numberOfItems") if isinstance(ld.get("track"), dict) else ld.get("numTracks")
+        return result("bandcamp", ld.get("@id") or url, title=ld.get("name"),
+                      author=(ld.get("byArtist") or {}).get("name"), author_url=(ld.get("byArtist") or {}).get("@id"),
+                      date=iso_date(ld.get("datePublished")), description=clip(ld.get("description"), 500),
+                      tags=ld.get("keywords") if isinstance(ld.get("keywords"), list) else None,
+                      counts=compact({"tracks": tracks or ld.get("numTracks")}), source=["release page JSON-LD"])
+    meta = m["meta"]
+    if not meta.get("og:title"):
+        raise SocialWebError("bandcamp: release page had no metadata")
+    return result("bandcamp", url, title=meta.get("og:title"), description=meta.get("og:description"),
+                  source=["release page OpenGraph"])
+
+
+def bc_post(ctx, url):
+    r = ctx.http.get(url, "bandcamp", "release page")
+    return {k: v for k, v in parse_bandcamp_release(r.text, r.url).items() if v is not None}
+
+
+# --------------------------------------------------------------------------- suno
+
+def suno_rows(text):
+    """Decode the Next.js flight rows embedded in a Suno page into JSON values."""
+    flight = ""
+    for chunk in re.findall(r"self\.__next_f\.push\((\[.*?\])\)</script>", text, re.S):
+        try:
+            arr = json.loads(chunk)
+        except ValueError:
+            continue
+        if len(arr) > 1 and isinstance(arr[1], str):
+            flight += arr[1]
+    dec = json.JSONDecoder()
+    rows = []
+    for m in re.finditer(r"[0-9a-f]{1,6}:(?=[\[{])", flight):
+        try:
+            rows.append(dec.raw_decode(flight, m.end())[0])
+        except ValueError:
+            pass
+    return rows
+
+
+def suno_songs(rows):
+    songs = {}
+    for o in walk(rows):
+        if o.get("entity_type") == "song_schema" and o.get("id") and o.get("title") is not None:
+            songs.setdefault(o["id"], o)
+    return list(songs.values())
+
+
+def _suno_item(s):
+    return {"date": iso_date(s.get("created_at")), "title": s.get("title"),
+            "url": f"https://suno.com/song/{s['id']}",
+            "counts": compact({"plays": s.get("play_count"), "likes": s.get("upvote_count"),
+                               "comments": s.get("comment_count")})}
+
+
+def parse_suno_profile(text, url):
+    rows = suno_rows(text)
+    v2 = next((o["v2Data"] for o in walk(rows) if isinstance(o.get("v2Data"), dict)), None)
+    meta = parse_meta(text)["meta"]
+    if not v2:
+        title = meta.get("og:title") or ""
+        if not title:
+            raise SocialWebError("suno: profile page had no data")
+        return result("suno", url, name=title.split(" | ")[0], handle=handle_from_url(url),
+                      source=["profile page OpenGraph"])
+    md, bio, st = v2.get("metadata") or {}, v2.get("bio") or {}, v2.get("stats") or {}
+    links = v2.get("social_links") or {}
+    links = list(links.values()) if isinstance(links, dict) else [l.get("url") if isinstance(l, dict) else l for l in links]
+    return result("suno", f"https://suno.com/@{md.get('handle') or handle_from_url(url)}",
+                  name=md.get("display_name"), handle=md.get("handle"), bio=bio.get("profile_description"),
+                  genres=bio.get("user_inputted_genres"), links=[l for l in links if l],
+                  verified=md.get("is_verified"),
+                  counts=compact({"followers": st.get("followers_count"), "following": st.get("following_count"),
+                                  "songs": st.get("clips_count"), "plays": st.get("play_count"),
+                                  "likes": st.get("upvote_count")}),
+                  source=["profile page Next.js data"])
+
+
+def parse_suno_posts(text, url):
+    handle = handle_from_url(url)
+    songs = [s for s in suno_songs(suno_rows(text)) if not handle or s.get("handle") in (None, handle)]
+    songs.sort(key=lambda s: s.get("created_at") or "", reverse=True)
+    return result("suno", url, items=[_suno_item(s) for s in songs],
+                  source=["profile page Next.js data (first page of songs only, about 20)"])
+
+
+def suno_profile(ctx, url):
+    r = ctx.http.get(url, "suno", "profile page")
+    return parse_suno_profile(r.text, r.url)
+
+
+def suno_posts(ctx, url, limit):
+    r = ctx.http.get(url, "suno", "profile page")
+    out = parse_suno_posts(r.text, url)
+    out["items"] = out["items"][:limit]
+    return out
+
+
+def parse_suno_song(text, url):
+    m = re.search(r"/(?:song|s)/([\w-]+)", url)
+    sid = m.group(1) if m else None
+    songs = suno_songs(suno_rows(text))
+    s = next((x for x in songs if x["id"] == sid), songs[0] if songs else None)
+    meta = parse_meta(text)["meta"]
+    if s:
+        it = _suno_item(s)
+        md = s.get("metadata") or {}
+        return result("suno", it["url"], title=s.get("title"), author=s.get("display_name"),
+                      author_url=f"https://suno.com/@{s['handle']}" if s.get("handle") else None,
+                      date=it["date"], description=clip(md.get("tags") or s.get("display_tags"), 300),
+                      duration_s=round(md["duration"]) if isinstance(md.get("duration"), (int, float)) else None,
+                      counts=it["counts"], source=["song page Next.js data"])
+    if not meta.get("og:title"):
+        raise SocialWebError("suno: song page had no data")
+    return result("suno", url, title=meta.get("og:title"), description=meta.get("og:description"),
+                  source=["song page OpenGraph"])
+
+
+def suno_post(ctx, url):
+    r = ctx.http.get(url, "suno", "song page")
+    return {k: v for k, v in parse_suno_song(r.text, r.url).items() if v is not None}
+
+
+# --------------------------------------------------------------------------- generic
+
+def web_post(ctx, url):
+    r = ctx.http.get(url, "web", "page")
+    meta = parse_meta(r.text)
+    mt = meta["meta"]
+    return result("web", r.url, title=mt.get("og:title") or meta["title"], description=mt.get("og:description"),
+                  author=mt.get("author"), source=["page OpenGraph"])
+
+
+PROFILE = {"youtube": yt_profile, "tiktok": tt_profile, "instagram": ig_profile, "x": x_profile,
+           "spotify": sp_profile, "soundcloud": sc_profile, "bandcamp": bc_profile, "suno": suno_profile}
+POSTS = {"youtube": yt_posts, "tiktok": tt_posts, "instagram": ig_posts, "x": x_posts,
+         "spotify": sp_posts, "soundcloud": sc_posts, "bandcamp": bc_posts, "suno": suno_posts}
+POST = {"youtube": yt_post, "tiktok": tt_post, "instagram": ig_post, "x": x_post,
+        "spotify": sp_post, "soundcloud": sc_post, "bandcamp": bc_post, "suno": suno_post}
+
+CAPABILITIES = [
+    # platform, profile, posts, post
+    ("youtube", "yes: name, bio, subscribers, video count", "yes: RSS feed (15) or yt-dlp", "yes: oEmbed + yt-dlp counts"),
+    ("tiktok", "yes: name, bio, link, followers, likes, videos", "NEEDS LOGIN (signed API)", "yes: oEmbed (+ page counts if served)"),
+    ("instagram", "partial: name, rounded counts (if served)", "NEEDS LOGIN", "partial: page OpenGraph if served"),
+    ("x", "partial: name, bio; counts need login", "NEEDS LOGIN", "yes: oEmbed text/date; counts need login"),
+    ("spotify", "yes: artist name, bio, followers, monthly listeners", "yes: releases (albums/singles)", "yes: oEmbed + OpenGraph"),
+    ("soundcloud", "yes: name, bio, followers, tracks", "yes: tracks page list", "yes: plays/likes/comments"),
+    ("bandcamp", "yes: name, location, bio, links", "yes: releases (no dates)", "yes: JSON-LD (date, tracks)"),
+    ("suno", "yes: name, genres, followers, plays", "yes: first ~20 songs with plays/likes", "yes: song data"),
+]
+
+
+# --------------------------------------------------------------------------- commands
+
+def cmd_profile(ctx, platform, target):
+    platform = norm_platform(platform)
+    url = profile_url(platform, target)
+    if url_kind(platform, url) == "post":
+        raise UsageError("that is a single-item url; use `socialweb post <url>`")
+    return PROFILE[platform](ctx, url)
+
+
+def cmd_posts(ctx, platform, target, limit):
+    platform = norm_platform(platform)
+    url = profile_url(platform, target)
+    return POSTS[platform](ctx, url, max(1, min(limit, 50)))
+
+
+def cmd_post(ctx, url):
+    if not is_url(url):
+        raise UsageError("post needs a full https:// url")
+    platform = platform_of_url(url)
+    if not platform:
+        return web_post(ctx, url)
+    return POST[platform](ctx, url)
+
+
+def cmd_check(ctx, url):
+    if not is_url(url):
+        raise UsageError("check needs a full https:// url")
+    platform = platform_of_url(url)
+    if not platform:
+        raise UsageError("unknown platform for that url; supported: " + ", ".join(PLATFORMS))
+    kind = url_kind(platform, url)
+    jobs = [("profile facts", lambda: PROFILE[platform](ctx, url)),
+            ("recent posts", lambda: POSTS[platform](ctx, url, 3))] if kind == "profile" else \
+        [("single item", lambda: POST[platform](ctx, url))]
+    rows = []
+    for label, fn in jobs:
+        try:
+            r = fn()
+        except SocialWebError as e:
+            detail = f"{e.what} ({e.detail})" if isinstance(e, NeedsLogin) else str(e)
+            rows.append({"what": label, "status": e.kind.replace("_", " "), "detail": detail})
+            continue
+        if "items" in r:
+            detail = f"{len(r['items'])} items"
+        else:
+            got = [k for k in ("name", "title", "bio", "date", "author") if r.get(k)]
+            got += sorted((r.get("counts") or {}).keys())
+            detail = "got " + ", ".join(got) if got else "reachable, little metadata"
+        rows.append({"what": label, "status": "ok", "detail": detail + (f" [{'; '.join(r['source'])}]" if r.get("source") else "")})
+        for n in r.get("needs_login") or []:
+            rows.append({"what": label, "status": "needs login", "detail": n})
+    return {"platform": platform, "url": url, "kind": kind, "checks": rows}
+
+
+def check_exit(res):
+    st = [r["status"] for r in res["checks"]]
+    if "ok" in st:
+        return EXIT_OK
+    if all(s == "needs login" for s in st):
+        return EXIT_NEEDS_LOGIN
+    order = {"rate limited": EXIT_RATE_LIMITED, "not found": EXIT_NOT_FOUND, "needs login": EXIT_NEEDS_LOGIN}
+    return next((order[s] for s in st if s in order), EXIT_ERROR)
+
+
+# --------------------------------------------------------------------------- output
+
+def fmt_counts(c):
+    return ", ".join(f"{k}={v:,}" if isinstance(v, int) and not isinstance(v, bool) else f"{k}={v}"
+                     for k, v in (c or {}).items())
+
+
+def table(rows, headers):
+    widths = [len(h) for h in headers]
+    for r in rows:
+        widths = [max(w, len(str(c))) for w, c in zip(widths, r)]
+    line = "  ".join(h.ljust(w) for h, w in zip(headers, widths))
+    out = [line.rstrip(), "  ".join("-" * w for w in widths)]
+    out += ["  ".join(str(c).ljust(w) for c, w in zip(r, widths)).rstrip() for r in rows]
+    return "\n".join(out)
+
+
+def render(kind, res):
+    if kind == "posts":
+        rows = [(i.get("date") or "-", clip(i.get("title"), 60), clip(fmt_counts(i.get("counts")), 40), i.get("url") or "")
+                for i in res.get("items", [])]
+        head = f"{res['platform']}  {res['url']}  ({len(rows)} items)"
+        body = table(rows, ["DATE", "TITLE", "COUNTS", "URL"]) if rows else "(no items)"
+        extra = [f"needs login: {res['platform']} {n}" for n in res.get("needs_login", [])]
+        extra += [f"source: {'; '.join(res['source'])}"] if res.get("source") else []
+        return "\n".join([head, body] + extra)
+    if kind == "check":
+        rows = [(r["what"], r["status"], clip(r["detail"], 110)) for r in res["checks"]]
+        text = f"{res['platform']}  {res['url']}  ({res['kind']} url)\n" + table(rows, ["WHAT", "STATUS", "DETAIL"])
+        if any(r["status"] == "needs login" for r in res["checks"]):
+            text += "\nnext: " + SHARED_BROWSER_HINT
+        return text
+    if kind == "platforms":
+        return table(CAPABILITIES, ["PLATFORM", "PROFILE", "POSTS", "POST"])
+    rows = []
+    for k in ("platform", "name", "handle", "title", "author", "author_url", "date", "url", "location",
+              "bio", "description", "genres", "tags", "links", "verified", "channel_id", "duration_s"):
+        v = res.get(k)
+        if v in (None, "", []):
+            continue
+        if isinstance(v, list):
+            v = ", ".join(str(x) for x in v)
+        rows.append((k, clip(str(v), 300)))
+    if res.get("counts"):
+        rows.append(("counts", fmt_counts(res["counts"])))
+    for n in res.get("needs_login", []):
+        rows.append(("needs login", f"{res['platform']} {n}"))
+    if res.get("source"):
+        rows.append(("source", "; ".join(res["source"])))
+    w = max(len(r[0]) for r in rows) if rows else 0
+    return "\n".join(f"{k.ljust(w)}  {v}" for k, v in rows)
+
+
+def build_parser():
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="machine-readable JSON output")
+    common.add_argument("--no-cache", action="store_true", default=argparse.SUPPRESS, help="ignore the response cache")
+    common.add_argument("--ttl", type=int, default=argparse.SUPPRESS, help="cache TTL in seconds (default 3600)")
+    p = argparse.ArgumentParser(prog="socialweb", parents=[common],
+                                description="Polite, read-only, logged-out look at public social media pages.",
+                                epilog="exit codes: 0 ok, 1 error, 2 usage, 3 needs login, 4 not found, 5 rate limited",
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--version", action="version", version=f"socialweb {VERSION}")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("profile", parents=[common], help="public profile facts")
+    s.add_argument("platform", help=", ".join(PLATFORMS))
+    s.add_argument("target", help="handle or url")
+    s = sub.add_parser("posts", parents=[common], help="recent public posts/videos/tracks")
+    s.add_argument("platform")
+    s.add_argument("target")
+    s.add_argument("--limit", type=int, default=10, help="max items (default 10, max 50)")
+    s = sub.add_parser("post", parents=[common], help="one item via oEmbed / page metadata")
+    s.add_argument("url")
+    s = sub.add_parser("check", parents=[common], help="what is reachable logged-out, and what needs login")
+    s.add_argument("url")
+    sub.add_parser("platforms", parents=[common], help="what works per platform (no network)")
+    return p
+
+
+def make_ctx(no_cache=False, ttl=None):
+    root = default_cache_dir()
+    ttl = ttl if ttl is not None else int(os.environ.get("SOCIALWEB_TTL", DEFAULT_TTL))
+    cache = Cache(root, ttl=ttl, enabled=not no_cache)
+    limiter = Limiter(state_path=os.path.join(root, "hosts.json"))
+    http_ = Http(cache, limiter)
+    return Ctx(http_, YtDlp(http_))
+
+
+def main(argv=None, ctx=None, stdout=None, stderr=None):
+    stdout, stderr = stdout or sys.stdout, stderr or sys.stderr
+    args = build_parser().parse_args(argv)
+    as_json = getattr(args, "json", False)
+    if args.cmd == "platforms":
+        res = [dict(zip(("platform", "profile", "posts", "post"), r)) for r in CAPABILITIES]
+        print(json.dumps(res, indent=2) if as_json else render("platforms", res), file=stdout)
+        return EXIT_OK
+    ctx = ctx or make_ctx(getattr(args, "no_cache", False), getattr(args, "ttl", None))
+    try:
+        if args.cmd == "profile":
+            res, code = cmd_profile(ctx, args.platform, args.target), EXIT_OK
+        elif args.cmd == "posts":
+            res, code = cmd_posts(ctx, args.platform, args.target, args.limit), EXIT_OK
+        elif args.cmd == "post":
+            res, code = cmd_post(ctx, args.url), EXIT_OK
+        else:
+            res = cmd_check(ctx, args.url)
+            code = check_exit(res)
+    except SocialWebError as e:
+        if as_json:
+            err = {"ok": False, "error": e.kind, "message": str(e), "exit": e.exit_code}
+            if isinstance(e, NeedsLogin):
+                err.update(platform=e.platform, what=e.what, next=SHARED_BROWSER_HINT)
+            print(json.dumps(err, indent=2), file=stdout)
+        print(str(e) if isinstance(e, NeedsLogin) else f"socialweb: {e}", file=stderr)
+        if isinstance(e, NeedsLogin):
+            print("next: " + SHARED_BROWSER_HINT, file=stderr)
+        return e.exit_code
+    print(json.dumps(res, indent=2, ensure_ascii=False) if as_json else render(args.cmd, res), file=stdout)
+    return code
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""shared-browser-preflight: check before opening the shared (headed, dedicated-profile) Chrome.
+
+Read-only, local checks only. It never opens, reads, copies or prints cookies,
+tokens, profile files or the X authority file; it only checks that things exist
+(and their type/permissions via stat).
+
+    shared-browser-preflight [--data-dir DIR] [--port 9222] [--json]
+
+The shared browser uses its own profile dir, by default ~/.cache/browser-tools-shared
+(mode 0700), or a lane's own 0700 scratch dir given with --data-dir (e.g.
+/var/tmp/social/chrome-shared), and any free --port (one browser per port):
+    browser-start.js --data-dir ~/.cache/browser-tools-shared --wayland --port=9222
+It is for sessions shared with the user only; never point other agent work at it.
+The web skill's normal dir (~/.cache/browser-tools) is not used and not checked.
+
+Checks:
+  1. web-tools' browser-start.js is installed and supports --data-dir (web-tools >= 1.3.2);
+  2. HOME is not overridden (a scratch HOME breaks X auth for headed windows);
+  3. display: if WAYLAND_DISPLAY is set and $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY exists,
+     ready as a native Wayland window (--wayland; no X access). Only without Wayland:
+     DISPLAY set and the X authority file exists ($XAUTHORITY, else ~/.Xauthority),
+     existence only; XAUTHORITY pointing at the compositor's cookie is refused;
+  4. nothing already answers on the CDP port (one browser per port; a running
+     browser of unknown origin may carry another profile, even the user's real one);
+  5. the dedicated dir, if it exists, is a directory with mode 0700.
+
+Exit codes: 0 ready (prints the start command), 1 needs a user decision (read the
+messages and ask the user), 2 cannot run (fix the blocker first).
+"""
+import argparse
+import json
+import os
+import pwd
+import socket
+import stat
+import sys
+
+SHARED_DIR_NAME = os.path.join(".cache", "browser-tools-shared")
+
+
+def real_home():
+    try:
+        return pwd.getpwuid(os.getuid()).pw_dir
+    except (KeyError, AttributeError):
+        return os.path.expanduser("~")
+
+
+def web_tools_start(home):
+    cands = [os.environ.get("SOCIALWEB_BROWSER_START", ""),
+             os.path.join(home, ".synaps-cli", "plugins", "web-tools", "scripts", "browser", "browser-start.js")]
+    return next((c for c in cands if c and os.path.isfile(c)), None)
+
+
+def supports_data_dir(start_js, token="--data-dir"):
+    """True if the launcher script itself mentions `token` (reads the script, not any profile)."""
+    for path in (start_js, os.path.join(os.path.dirname(start_js), "start-args.mjs")):
+        try:
+            with open(path, encoding="utf-8") as f:
+                if token in f.read():
+                    return True
+        except OSError:
+            pass
+    return False
+
+
+def shared_dir(home, data_dir=None):
+    d = data_dir or os.environ.get("SOCIALWEB_SHARED_BROWSER_DIR") or os.path.join(home, SHARED_DIR_NAME)
+    if d == "~" or d.startswith("~/"):
+        d = os.path.join(home, d[2:])
+    return os.path.abspath(d)
+
+
+def port_in_use(port, host="127.0.0.1"):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(0.5)
+    try:
+        return s.connect_ex((host, port)) == 0
+    finally:
+        s.close()
+
+
+def wayland_socket(env):
+    """Path of the Wayland socket named by WAYLAND_DISPLAY, or None."""
+    wd = env.get("WAYLAND_DISPLAY")
+    if not wd:
+        return None
+    if os.path.isabs(wd):
+        return wd
+    xrd = env.get("XDG_RUNTIME_DIR")
+    return os.path.join(xrd, wd) if xrd else None
+
+
+def looks_like_compositor_cookie(path, env):
+    name = os.path.basename(path)
+    xrd = env.get("XDG_RUNTIME_DIR") or ""
+    return (name.startswith((".mutter-Xwaylandauth", "xauth_", ".Xwaylandauth")) or "Xwaylandauth" in name
+            or (xrd and os.path.dirname(os.path.realpath(path)).startswith(os.path.realpath(xrd))
+                and "auth" in name.lower()))
+
+
+def display_checks(env, home):
+    """Returns (blockers, issues, notes, mode) for the headed window; mode is 'wayland', 'x11' or None.
+
+    Native Wayland is preferred: a Wayland client can't read or inject into other
+    windows. X11 is only a fallback when there is no Wayland. Existence checks only.
+    """
+    blockers, issues, notes = [], [], []
+    if not sys.platform.startswith("linux"):
+        return blockers, issues, notes, None
+    sock = wayland_socket(env)
+    if sock:
+        if os.path.exists(sock):
+            notes.append(f"native Wayland: {sock} exists; the shared browser runs as a Wayland window "
+                         "(--wayland), with no X access.")
+            return blockers, issues, notes, "wayland"
+        notes.append(f"WAYLAND_DISPLAY is set but {sock} does not exist; falling back to X11 checks.")
+    elif env.get("WAYLAND_DISPLAY"):
+        notes.append("WAYLAND_DISPLAY is set but XDG_RUNTIME_DIR is not; falling back to X11 checks.")
+    x11 = env.get("DISPLAY")
+    if not x11:
+        blockers.append("no usable Wayland socket and no DISPLAY: a headed, shared window cannot be shown here.")
+        return blockers, issues, notes, None
+    xa = env.get("XAUTHORITY")
+    if xa and looks_like_compositor_cookie(xa, env):
+        blockers.append(f"XAUTHORITY points to {xa}, which looks like the compositor's (e.g. mutter Xwayland) "
+                        "cookie. X access to the user's screen allows reading and injecting input into other "
+                        "apps; only the user can approve that. Unset it; don't borrow another session's X auth.")
+    elif xa:
+        if not os.path.isfile(xa):
+            blockers.append(f"XAUTHORITY points to {xa}, which does not exist: X will refuse the window on "
+                            f"{x11}. Ask the user to start it from his desktop session.")
+    elif not os.path.isfile(os.path.join(home, ".Xauthority")):
+        blockers.append(f"no Wayland, XAUTHORITY not set and ~/.Xauthority missing: X will likely refuse the "
+                        f"window on {x11}. Ask the user to start the shared browser from his desktop session. "
+                        "Never point XAUTHORITY at the compositor's cookie or another session's X auth.")
+    return blockers, issues, notes, "x11"
+
+
+def preflight(port, env=None, data_dir=None):
+    env = os.environ if env is None else env
+    home = real_home()
+    blockers, issues, notes = [], [], []
+
+    if env.get("HOME") and os.path.realpath(env["HOME"]) != os.path.realpath(home):
+        blockers.append(f"HOME is overridden ({env['HOME']}, real home {home}). Never override HOME for the "
+                        "shared browser: it breaks X authorization for headed windows. Use --data-dir instead.")
+
+    start = web_tools_start(home)
+    if not start:
+        blockers.append("web-tools plugin's browser-start.js not found; install/enable web-tools (>= 1.3.2).")
+    elif not supports_data_dir(start):
+        blockers.append(f"{start} has no --data-dir option (web-tools < 1.3.2). Update web-tools; don't fall back "
+                        "to the default profile dir or a HOME override.")
+
+    b, i, n, mode = display_checks(env, home)
+    blockers += b
+    issues += i
+    notes += n
+    if mode == "wayland" and start and not supports_data_dir(start, "--ozone-platform=wayland"):
+        blockers.append(f"{start} has no --wayland option (needs web-tools 1.3.2 with Wayland support). Update "
+                        "web-tools; don't fall back to X auth.")
+
+    if port_in_use(port):
+        issues.append(f"something already answers on localhost:{port}. One browser per port: its profile is "
+                      "unknown and may be another agent's or a copy of the user's real Chrome. Don't attach to "
+                      "it unless the user confirms it is the shared window; else use another --port.")
+
+    sdir = shared_dir(home, data_dir)
+    real = os.path.realpath(sdir)
+    web_default = os.path.realpath(os.path.join(home, ".cache", "browser-tools"))
+    if real in (os.path.realpath(home), os.path.realpath(os.sep)) or \
+            os.path.realpath(home).startswith(real.rstrip(os.sep) + os.sep):
+        blockers.append(f"{sdir} is $HOME, / or a parent of $HOME; use a dedicated dir.")
+    elif real == web_default or real.startswith(web_default + os.sep):
+        blockers.append(f"{sdir} is the web skill's default profile dir; every agent's web browser uses it. "
+                        "Use ~/.cache/browser-tools-shared or a lane's own 0700 scratch dir.")
+    try:
+        st = os.lstat(sdir)
+    except FileNotFoundError:
+        notes.append(f"{sdir} does not exist yet; browser-start.js will create it with mode 0700.")
+    else:
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+            blockers.append(f"{sdir} exists but is not a plain directory (symlink or file). Ask the user.")
+        elif hasattr(os, "getuid") and st.st_uid != os.getuid():
+            blockers.append(f"{sdir} is owned by another user (uid {st.st_uid}); use your own dir.")
+        else:
+            if stat.S_IMODE(st.st_mode) != 0o700:
+                issues.append(f"{sdir} has mode {oct(stat.S_IMODE(st.st_mode))}, not 0700. Ask the user to run "
+                              f"`chmod 700 {sdir}`.")
+            notes.append(f"{sdir} exists: it may still hold the user's earlier shared-session sign-ins "
+                         "(that is its purpose; don't read them).")
+
+    cmd = f"{start or '<web-tools>/scripts/browser/browser-start.js'} --data-dir {sdir}" + \
+        (" --wayland" if mode == "wayland" else "") + f" --port={port}"
+    status = "cannot_run" if blockers else ("ask_user" if issues else "ready")
+    return {"status": status, "blockers": blockers, "issues": issues, "notes": notes, "start_command": cmd,
+            "shared_dir": sdir,
+            "rules": "headed (no --headless), dedicated --data-dir (never --profile, never a HOME override), "
+                     "user signs in himself, read-only, close the browser when the session ends"}
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="shared-browser-preflight", description=__doc__.splitlines()[0])
+    ap.add_argument("--port", type=int, default=9222, help="CDP port (one browser per port; default 9222)")
+    ap.add_argument("--data-dir", default=None,
+                    help="shared profile dir (default ~/.cache/browser-tools-shared; or a lane's own 0700 "
+                         "scratch dir, e.g. /var/tmp/social/chrome-shared)")
+    ap.add_argument("--json", action="store_true")
+    a = ap.parse_args(argv)
+    r = preflight(a.port, data_dir=a.data_dir)
+    if a.json:
+        print(json.dumps(r, indent=2))
+    else:
+        for b in r["blockers"]:
+            print("cannot run: " + b)
+        for i in r["issues"]:
+            print("ask user: " + i)
+        for n in r["notes"]:
+            print("note: " + n)
+        if r["status"] == "ready":
+            print("ready. Start the shared, headed Chrome with:")
+        else:
+            print("start command once resolved (never add --profile or --headless, never override HOME):")
+        print("  " + r["start_command"])
+    return {"ready": 0, "ask_user": 1, "cannot_run": 2}[r["status"]]
+
+
+if __name__ == "__main__":
+    sys.exit(main())
