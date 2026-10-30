@@ -108,7 +108,7 @@
       {
         "key": "transport",
         "type": "string",
-        "description": "auto | relay | direct. relay: Jev calls go through the Pria desktop app (~/.local/state/pria-desktop/fleet.sock); no local key is read; any relay failure leaves Jev off for that call (no retry, no key fallback). direct: the TypeSafe key path. auto: relay when ~/.local/state/pria-desktop exists, else direct.",
+        "description": "auto | relay | direct. relay: Jev calls go through the Pria desktop app (<app.state_dir>/fleet.sock from the host profile; default ~/.local/state/pria-desktop on Linux, none elsewhere); no local key is read; any relay failure leaves Jev off for that call (no retry, no key fallback). direct: the TypeSafe key path. auto: relay when that state dir exists, else direct.",
         "default": "auto"
       },
       {
@@ -199,19 +199,19 @@
         "key": "guard_rule1_scope",
         "type": "string",
         "default": "fleet",
-        "description": "Which sessions the rule-1 guard covers: fleet (sessions listed in ~/.pria/fleet/roster.toml and the team.toml files under ~/.pria/fleet/projects; an unreadable roster means every session) or all. Anything else means fleet."
+        "description": "Which sessions the rule-1 guard covers: fleet (sessions listed in roster.toml and the team.toml files under projects/ in the fleet dir, the host profile's app.fleet_dir, default ~/.pria/fleet; an unreadable roster means every session) or all. Anything else means fleet."
       },
       {
         "key": "guard_access",
         "type": "string",
         "default": "block",
-        "description": "The access rule (owner rules 27a/27b): refuses a call that changes access (chmod/chown/chgrp/setfacl/chattr outside the session's own worktree or scratch; users and groups; sudo/doas/pkexec/su; firewall tools; setcap; ssh keys; systemctl set-property/edit/revert; systemd-run outside the 27c(5) memory-cap scope; writes to protected paths such as ~/.ssh, sudoers, polkit and the jev config and state; unit or slice files whose new text sets a limit or access key; umask lines in shell or service config; inline python/perl/node/ruby code naming such a change; sandbox policy files per 27b's manual/auto switch file ~/.synaps-cli/memory/jev/sandbox-mode). No model call; runs with no key, a spent budget or the guard off. block, warn (log and count only) or off. Anything else means block. Owner-only by convention; there is no in-band override."
+        "description": "The access rule: refuses a call that changes access (chmod/chown/chgrp/setfacl/chattr outside the session's own worktree or scratch; users and groups; sudo/doas/pkexec/su; firewall tools; setcap; ssh keys; systemctl set-property/edit/revert; launchctl load/unload/bootstrap/bootout/enable/disable/setenv/unsetenv/limit/kickstart and the like; systemd-run outside the memory-cap scope form; writes to protected paths such as ~/.ssh, sudoers, polkit and the jev config and state; unit or slice files whose new text sets a limit or access key; umask lines in shell or service config; inline python/perl/node/ruby code naming such a change; sandbox policy files per the manual/auto sandbox switch file ~/.synaps-cli/memory/jev/sandbox-mode). No model call; runs with no key, a spent budget or the guard off. block, warn (log and count only) or off. Anything else means block. Owner-only by convention; there is no in-band override."
       },
       {
         "key": "guard_access_scope",
         "type": "string",
         "default": "all",
-        "description": "Which sessions the access rule covers: all (owner rule 27a binds every agent) or fleet (the rule-1 roster). Anything else means all."
+        "description": "Which sessions the access rule covers: all (the access rule binds every agent) or fleet (the rule-1 roster). Anything else means all."
       },
       {
         "key": "router",

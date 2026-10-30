@@ -64,6 +64,15 @@ from jev import relay  # noqa: E402
 if relay.STATE_DIR is None:
     relay.STATE_DIR = os.path.join(RUN_DIR, "no-pria-desktop")
 
+# The host profile: a fixed "nothing set" one, so no test runs the real
+# pria-fleet or reads the real ~/.pria/host.toml. Tests that need values
+# inject their own through HostProfile.use(...).
+from jev import host_profile  # noqa: E402
+
+if not getattr(host_profile.HostProfile, "jev_test_home", False):
+    host_profile.HostProfile.install(host_profile.HostProfile({}))
+    host_profile.HostProfile.jev_test_home = True
+
 # jev.log (logs.default_path, set by jev_ext.main()) under a real home's
 # .synaps-cli goes to the same per-run dir, so no test appends to the real log.
 from jev import logs  # noqa: E402

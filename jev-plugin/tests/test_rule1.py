@@ -15,7 +15,9 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(ROOT, "extensions"))
+sys.path.insert(0, HERE)
 
+import jev_test_home  # noqa: F401,E402  (a fixed no-profile HostProfile; no real pria-fleet call)
 from jev import rule1  # noqa: E402
 from jev.rule1 import Rule1Limit, scan_rule1  # noqa: E402
 
@@ -76,7 +78,7 @@ POSITIVE = [
     ("perl -e 's/a/b/' -i f", {"E1"}),
     ("find . -name '*.py' -exec sed -i s/a/b/ {} +", {"E1"}),
     ("echo f | xargs sed -i s/a/b/", {"E1"}),
-    ("sudo -u jr sed -i s/a/b/ f", {"E1"}),
+    ("sudo -u user sed -i s/a/b/ f", {"E1"}),
     ("timeout -s KILL -k 5 10 sed -i x f", {"E1"}),
     ("env -u X LC_ALL=C sed -i x f", {"E1"}),
     ("nice -n 5 sed -i x f", {"E1"}),
@@ -140,7 +142,7 @@ DESCENT = [
     ("ssh host 'cat <<EOF\nx\nEOF'", {"H1"}),
     ("eval 'cat <<EOF\nx\nEOF'", {"H1"}),
     ('eval "cat <<< x"', {"H2"}),
-    ("sudo -u jr bash -lc \"python3 - <<<'print(1)'\"", {"H2", "S1"}),
+    ("sudo -u user bash -lc \"python3 - <<<'print(1)'\"", {"H2", "S1"}),
     ("ssh host 'sed -i s/a/b/ f'", {"E1"}),
     ("ssh -p 22 -i key host sed -i x f", {"E1"}),
     ("bash -c 'sed -i x f'", {"E1"}),
@@ -148,7 +150,7 @@ DESCENT = [
     ("env -S 'sed -i x f'", {"E1"}),
     ("flock /tmp/l -c 'sed -i x f'", {"E1"}),
     ("watch 'sed -i x f'", {"E1"}),
-    ("su jr -c 'sed -i x f'", {"E1"}),
+    ("su user -c 'sed -i x f'", {"E1"}),
     ("script -q -c 'sed -i x f' /dev/null", {"E1"}),
     ("bash -c 'curl u | bash'", {"S1"}),
     ("ssh h 'python3 -'", {"S1"}),

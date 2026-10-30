@@ -1,9 +1,9 @@
-"""access — owner rule 27a's scanner (the harness should try its best to end
+"""access — the access rule's scanner (the harness should try its best to end
 the turn, ask permission and halt work on a task before a command that
 removes group write permission or makes a similar access change; an agent
 once ran `chmod g-w ~/Projects ...`).
 
-Owner rule 27a: before any command that changes who can read, write or run
+The access rule: before any command that changes who can read, write or run
 something, or what the system lets an agent do, the agent does not run it:
 it ends its turn and asks for the owner's yes. The guard's model score already
 calls chmod "hard to reverse" and asks to confirm, but fleet auto-accept
@@ -17,7 +17,7 @@ ssh's remote command and eval's arguments scanned as scripts of their own):
   command  an access command (ALWAYS: users and groups, sudo/doas/pkexec/
            su, firewall tools, setcap, ssh-keygen/ssh-copy-id/ssh-add,
            `systemctl set-property|edit|revert`, systemd-run in any form
-           but the 27c(5) memory-cap scope), or a mode/owner/ACL
+           but the memory-cap scope form), or a mode/owner/ACL
            command (MODE: chmod chown chgrp setfacl chattr chacl, install
            with -m/-o/-g, mkdir with -m, rsync --chmod/--chown) unless
            every target resolves inside the session's own area (below)
@@ -32,15 +32,19 @@ ssh's remote command and eval's arguments scanned as scripts of their own):
 path_access(path, text, ctx) answers the same for a write, edit or
 multi_edit target.
 
-The own area (the only exception, 27a: files the agent itself created in
+The own area (the rule's only exception: files the agent itself created in
 its own worktree or scratch): a MODE command passes only when it runs at
 the top level (not in a nested script, not on a remote host, not through
 xargs or find -exec), every target is a literal path (no variable, no
 command substitution, no `{}`), and each target's realpath (globs
-expanded) lies strictly below /var/tmp/<dir>/ or /tmp/<dir>/, or strictly
-below the session cwd when that cwd is at least three levels below HOME
-(a project checkout or worktree, never ~ or ~/Projects), and is not a
-protected or gated path. When in doubt it blocks.
+expanded) lies strictly below <root>/<dir>/ for a scratch root (the OS
+temp roots from host_profile.Platform: /var/tmp and /tmp on Linux,
+/private/var/tmp, /private/tmp and the per-user $TMPDIR on macOS; a host
+profile never adds one), or strictly below the session cwd when that cwd
+is a project: at least three levels below HOME (a project checkout or
+worktree, never ~ or ~/Projects; the host profile's workspace.root is not
+consulted, since facts are not authority);
+and it is not a protected or gated path. When in doubt it blocks.
 
 Limits (README): variables and control flow are not evaluated; a script
 run from a file (python3 f.py, bash f.sh) is not read; heredoc bodies are
@@ -58,7 +62,7 @@ import os
 import re
 from typing import Callable, NamedTuple
 
-from . import rule1
+from . import host_profile, rule1
 
 ACCESS_MAX = 64  # one is enough to decide
 
@@ -76,8 +80,8 @@ ALWAYS = {
     "vipw": "changes users or groups", "vigr": "changes users or groups",
     "newgrp": "runs as another group", "sg": "runs as another group",
     # privilege
-    "sudo": "runs as root (owner rule 14)", "sudoedit": "runs as root (owner rule 14)",
-    "doas": "runs as root (owner rule 14)", "pkexec": "runs as root (polkit)",
+    "sudo": "runs as root", "sudoedit": "runs as root",
+    "doas": "runs as root", "pkexec": "runs as root (polkit)",
     "su": "runs as another user", "runuser": "runs as another user",
     "visudo": "edits sudoers",
     # firewall
@@ -131,21 +135,21 @@ def _read_only(name: str, args: list) -> bool:
         return bool(longs) and not shorts and all(a.startswith(_FIREWALL_CMD_READ) for a in longs) and any(
             a.startswith(("--list-", "--get-", "--query-", "--info-", "--state", "--version")) for a in longs)
     return False
-_SYSTEMCTL_ACCESS = frozenset({"set-property", "edit", "revert"})
+# the gated subcommands of systemctl and launchctl: host_profile.Platform.service_gates()
 _SYSTEMCTL_VALUE = frozenset({"-H", "--host", "-M", "--machine", "-t", "--type", "-p", "--property",
                               "-s", "--signal", "--state", "-o", "--output", "-n", "--lines", "--root",
                               "--image", "--kill-whom", "--job-mode", "--what", "--timestamp",
                               "--drop-in", "--when", "--message", "--boot-loader-entry",
                               "--reboot-argument", "--marked", "--legend", "--preset-mode"})
 
-# systemd-run (owner rules 27a and 27c(5)). Without --scope a systemd manager
-# runs the job as a service: outside the session's process tree and its
-# sandbox. 27c(5) lets an agent cap its own child processes with
-# `systemd-run --user --scope` and the memory properties only; -E/--setenv
-# is part of that form too (an environment variable is no access item in
-# 27a). This check only ADDS asks, for every other form; the
-# 27c(5) form gets no hit from it (whether a cap tightens stays the agent's
-# duty, 27c(5)). Options are read as systemd-run's getopt reads them: an
+# systemd-run (the access rule and the memory-cap scope form). Without
+# --scope a systemd manager runs the job as a service: outside the session's
+# process tree and its sandbox. The memory-cap scope form lets an agent cap
+# its own child processes with `systemd-run --user --scope` and the memory
+# properties only; -E/--setenv is part of that form too (an environment
+# variable is no access item). This check only ADDS asks, for every other
+# form; the memory-cap form gets no hit from it (whether a cap tightens
+# stays the agent's duty). Options are read as systemd-run's getopt reads them: an
 # unambiguous prefix of a long option counts, a short cluster (-qGp X)
 # splits, and options end at the first word that is not one, or at `--`.
 # An expansion where an option can be, or one in a -p/-E value that can
@@ -179,8 +183,8 @@ _SYSRUN_WHY = {
     "system": "runs the job under the system manager (no --user)",
     "place": "runs the job in another slice, as another user or group, or on another machine or host",
     "property": "sets a unit property other than a memory cap (MemoryMax, MemoryHigh, MemorySwapMax)",
-    "named": "names its unit (--unit or --description), outside the 27c(5) memory-cap form",
-    "other": "uses an option outside the 27c(5) memory-cap form",
+    "named": "names its unit (--unit or --description), outside the memory-cap scope form",
+    "other": "uses an option outside the memory-cap scope form",
     "unseen": "uses options the scan cannot see",
 }
 
@@ -253,7 +257,7 @@ def _may_split(word, src: str | None) -> bool:
 
 def _sysrun_split(args: list, src: str | None = None) -> tuple[set, list]:
     """(the reasons this systemd-run asks: keys of _SYSRUN_WHY, empty for
-    the 27c(5) form or a --help/--version that runs nothing; the command
+    the memory-cap form or a --help/--version that runs nothing; the command
     it runs). `src`: the text the words were read from (their spans), to
     tell whether an expansion in a -p/-E value can split (_may_split);
     None: every expansion there is unseen."""
@@ -399,13 +403,13 @@ _DEST_OPTION_CMDS = {
 CODE_WORDS = re.compile(
     r"(?<![A-Za-z0-9_-])(?:l?chmod|l?chown|fchmod|fchown|lchmod|chflags|lchflags|chgrp|setfacl|chattr|"
     r"usermod|useradd|groupadd|gpasswd|visudo|sudoers|sudo|pkexec|polkit|iptables|ip6tables|nft|ufw|"
-    r"firewall-cmd|set-property|setcap|authorized_keys|ssh-keygen|ssh-copy-id)(?:Sync)?(?![A-Za-z0-9_-])")
+    r"firewall-cmd|set-property|setcap|authorized_keys|ssh-keygen|ssh-copy-id|launchctl)(?:Sync)?(?![A-Za-z0-9_-])")
 # Inline code that names a protected path (any use: a write is not told
 # apart from a read; when in doubt, block).
 CODE_PATHS = re.compile(
     r"\.ssh(?![A-Za-z0-9_-])|authorized_keys|sudoers|polkit|/etc/(?:passwd|group|shadow|gshadow|subuid|subgid|"
     r"security|pam\.d|login\.defs|ufw|nftables|iptables|firewalld)|\.synaps-cli/(?:sandbox|memory/jev|"
-    r"plugins/jev/config)|sandbox-mode|/systemd/")
+    r"plugins/jev/config)|sandbox-mode|/systemd/|Library/Launch(?:Agents|Daemons)|/etc/pf\.(?:conf|anchors)")
 
 
 def _code_hit(code: str) -> str | None:
@@ -435,8 +439,8 @@ RAW_WORDS = re.compile(
     r"(?<![A-Za-z0-9_.-])(?:chmod|chown|chgrp|setfacl|chattr|chacl|usermod|useradd|userdel|groupadd|"
     r"groupdel|groupmod|gpasswd|newgrp|visudo|sudoers|sudo|doas|pkexec|polkit|ufw|nft|iptables|"
     r"ip6tables|firewall-cmd|set-property|setcap|authorized_keys|ssh-keygen|ssh-copy-id|ssh-add|umask|"
-    r"systemd-run)"
-    r"(?![A-Za-z0-9_-])|\.ssh/|/systemd/|\.synaps-cli/sandbox")
+    r"systemd-run|launchctl)"
+    r"(?![A-Za-z0-9_-])|\.ssh/|/systemd/|\.synaps-cli/sandbox|Library/Launch(?:Agents|Daemons)")
 
 # Gated keys.
 SYSTEMD_KEYS = re.compile(
@@ -468,8 +472,9 @@ class _Enough(Exception):
 
 class Context:
     """Where paths resolve: the session cwd (None when the host sent none),
-    HOME, and the file-system reads the scan may make (realpath, glob, a
-    bounded read of a copy's source). Injected for tests."""
+    HOME, the file-system reads the scan may make (realpath, glob, a
+    bounded read of a copy's source), and the host profile (its Platform:
+    protected tables, temp roots, service gates). Injected for tests."""
 
     def __init__(self, cwd: str | None, home: str | None = None, *,
                  realpath: Callable[[str], str] = os.path.realpath,
@@ -478,7 +483,8 @@ class Context:
                  exists: Callable[[str], bool] | None = None,
                  isdir: Callable[[str], bool] | None = None,
                  perm: Callable[[str], int | None] | None = None,
-                 sandbox_mode: str = "manual") -> None:
+                 sandbox_mode: str = "manual",
+                 profile: host_profile.HostProfile | None = None) -> None:
         self.cwd = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else None
         home = os.environ.get("HOME") if home is None else home
         self.home = home if isinstance(home, str) and os.path.isabs(home) and home != "/" else None
@@ -495,6 +501,14 @@ class Context:
             self.home_real = realpath(self.home) if self.home else None
         except (OSError, ValueError):
             self.cwd_real = self.home_real = None
+        self.profile = profile or host_profile.HostProfile.current()
+        self.platform = self.profile.platform
+        self.service_gates = self.platform.service_gates()
+        # Facts are not authority: no host-profile value widens an exception.
+        # The own-scratch roots are the OS temp roots only (scratch.dir is
+        # never added), and an own project is the depth rule only
+        # (workspace.root is never consulted).
+        self.scratch_roots = tuple(self.platform.temp_roots())
 
 
 def _perm_bits(path: str) -> int | None:
@@ -526,31 +540,9 @@ def _strictly_under(path: str, base: str) -> bool:
     return path != base and path.startswith(base.rstrip("/") + "/")
 
 
-def _protected_tables(home: str | None):
-    always = [("/etc/ssh", "ssh config"), ("/etc/sudoers", "sudoers"), ("/etc/sudoers.d", "sudoers"),
-              ("/etc/sudo.conf", "sudoers"), ("/etc/doas.conf", "sudoers"),
-              ("/etc/polkit-1", "polkit"), ("/usr/share/polkit-1", "polkit"), ("/var/lib/polkit-1", "polkit"),
-              ("/etc/passwd", "users and groups"), ("/etc/group", "users and groups"),
-              ("/etc/shadow", "users and groups"), ("/etc/gshadow", "users and groups"),
-              ("/etc/subuid", "users and groups"), ("/etc/subgid", "users and groups"),
-              ("/etc/security", "pam and limits"), ("/etc/pam.d", "pam and limits"),
-              ("/etc/login.defs", "pam and limits"),
-              ("/etc/ufw", "firewall config"), ("/etc/default/ufw", "firewall config"),
-              ("/etc/nftables.conf", "firewall config"), ("/etc/iptables", "firewall config"),
-              ("/etc/firewalld", "firewall config")]
-    systemd = ["/etc/systemd", "/usr/lib/systemd", "/lib/systemd", "/run/systemd"]
-    umask = ["/etc/profile", "/etc/profile.d", "/etc/bash.bashrc", "/etc/zsh", "/etc/environment"]
-    synaps = []
-    if home:
-        always += [(os.path.join(home, ".ssh"), "~/.ssh"),
-                   (os.path.join(home, ".synaps-cli", "plugins", "jev", "config"), "the jev guard's config"),
-                   (os.path.join(home, ".synaps-cli", "memory", "jev"), "the jev guard's state and switch")]
-        systemd += [os.path.join(home, ".config", "systemd"), os.path.join(home, ".local", "share", "systemd")]
-        umask += [os.path.join(home, n) for n in (".bashrc", ".bash_profile", ".bash_login", ".profile",
-                                                  ".zshrc", ".zprofile", ".zshenv", ".zlogin",
-                                                  ".pam_environment", os.path.join(".config", "environment.d"))]
-        synaps = [os.path.join(home, ".synaps-cli", "config")]
-    return always, systemd, umask, synaps
+# The protected and gated path tables are per OS: host_profile.Platform.
+# protected_tables(home) (Linux: the old tables exactly; macOS adds the
+# launchd job dirs, pf and its shell files, each also under /private).
 
 
 def sandbox_dir(home: str) -> str:
@@ -558,7 +550,7 @@ def sandbox_dir(home: str) -> str:
 
 
 def switch_path(home: str) -> str:
-    """Owner rule 27b's switch: one word, manual or auto (module doc)."""
+    """The sandbox switch: one word, manual or auto (module doc)."""
     return os.path.join(home, ".synaps-cli", "memory", "jev", "sandbox-mode")
 
 
@@ -581,12 +573,12 @@ def read_sandbox_mode(home: str | None) -> str:
 
 def classify(path: str, ctx: Context) -> tuple[str, str] | None:
     """(class, gate) for a protected or gated absolute path, else None.
-    gate: '' (always protected), 'sandbox' (owner rule 27b), 'systemd',
+    gate: '' (always protected), 'sandbox' (the sandbox switch), 'systemd',
     'umask' or 'synaps'."""
     for home in {ctx.home, ctx.home_real}:
         if home and _under(path, sandbox_dir(home)):
             return "synaps sandbox policy", "sandbox"
-        always, systemd, umask, synaps = _protected_tables(home)
+        always, systemd, umask, synaps = ctx.platform.protected_tables(home)
         for base, name in always:
             if _under(path, base):
                 return name, ""
@@ -681,7 +673,7 @@ def _bases(ctx: Context) -> list:
     """(base path, class, gate) for every protected or gated base."""
     out = []
     for home in {ctx.home, ctx.home_real}:
-        always, systemd, umask, synaps = _protected_tables(home)
+        always, systemd, umask, synaps = ctx.platform.protected_tables(home)
         if home:
             out.append((sandbox_dir(home), "synaps sandbox policy", "sandbox"))
         out += [(b, n, "") for b, n in always]
@@ -773,7 +765,7 @@ def _classify_raw(raw: str, ctx: Context) -> tuple[str, str] | None:
 
 
 def sandbox_decision(raw: str, op: str, ctx: Context) -> str:
-    """Owner rule 27b for one path under ~/.synaps-cli/sandbox: 'pass',
+    """The sandbox switch for one path under ~/.synaps-cli/sandbox: 'pass',
     'auto' (passes; audited as access_auto) or 'block'. op: 'create' (the
     write tool, or cp/mv/install onto the path) or 'change' (anything else).
     MANUAL passes only creating a NEW sessions/<name>.conf directly in
@@ -843,11 +835,12 @@ def _own(raw: str, ctx: Context) -> bool:
 OWN_AREA_WHYS = frozenset({"changes access outside the session's own worktree or scratch",
                            "changes access on a target that is not a literal path",
                            "changes access on targets the scan cannot see"})
-SCRATCH_ROOTS = ("/var/tmp", "/tmp")  # scratch is strictly below <root>/<dir>/
 
 
 def _own_real(real: str, ctx: Context) -> bool:
-    for tmp in SCRATCH_ROOTS:
+    # scratch is strictly below <root>/<dir>/ (ctx.scratch_roots: the OS temp
+    # roots; a host profile never adds one)
+    for tmp in ctx.scratch_roots:
         if _strictly_under(real, tmp):
             rest = real[len(tmp) + 1:].split("/")
             if rest[0] in ("", ".", ".."):
@@ -857,12 +850,14 @@ def _own_real(real: str, ctx: Context) -> bool:
                 return True
     cwd, home = ctx.cwd_real, ctx.home_real
     if home and _strictly_under(real, home):
-        # owner rule 16a's project scratch (<project>/tmp/<dir>/...) and a
-        # worktree (.../.worktrees/<name>/...): strictly below their <dir>
+        # a project's scratch (<project>/tmp/<dir>/...) and a worktree
+        # (.../.worktrees/<name>/...): strictly below their <dir>
         parts = real[len(home.rstrip("/")) + 1:].split("/")
         for i, p in enumerate(parts):
             if ((p == "tmp" and i >= 2) or (p == ".worktrees" and i >= 1)) and len(parts) - i >= 3:
                 return True
+    # a cwd at least three levels below HOME (~/<a>/<b>/<project>) is a
+    # project (the host profile's workspace.root is never consulted)
     if cwd and home and _strictly_under(cwd, home):
         depth = len(cwd[len(home.rstrip("/")) + 1:].split("/"))
         if depth >= 3 and _strictly_under(real, cwd):
@@ -914,7 +909,7 @@ def _unwrap(argv: list, src: str | None = None) -> tuple[list, list, bool, list,
             runs.append(reasons)
             inners.append(argv)
             continue
-        spec = rule1.WRAPPERS.get(name)
+        spec = rule1.wrapper_spec(name)
         if spec is None:
             break
         names.append(name)
@@ -1035,10 +1030,9 @@ class _Visitor:
                     continue
                 self.hit(parser, "command", name, at, ALWAYS[name])
                 continue
-            if name == "systemctl":
-                ops, _ = _operands(name, args, _SYSTEMCTL_VALUE)
-                if ops and ops[0] in _SYSTEMCTL_ACCESS:
-                    self.hit(parser, "command", f"systemctl {ops[0]}", at, "changes unit or slice limits")
+            gated = self.ctx.service_gates.get(name)
+            if gated is not None:
+                self._service(parser, name, args, gated, at)
                 continue
             if name == "umask":
                 ops = [a for a in args if not a.startswith("-")]
@@ -1060,6 +1054,22 @@ class _Visitor:
             self._mode(parser, name, args, at, nested, remote, via, from_find)
             if name in WRITERS:
                 self._writer(parser, name, args, at)
+
+    def _service(self, parser, name: str, args: list, gated: frozenset, at) -> None:
+        """systemctl and launchctl (Platform.service_gates): a gated
+        subcommand is a command hit. launchctl has no global options: its
+        first word is the subcommand; one the scan cannot see, or none
+        (an old launchctl then reads subcommands from its input), asks too."""
+        if name == "systemctl":
+            ops, _ = _operands(name, args, _SYSTEMCTL_VALUE)
+            if ops and ops[0] in gated:
+                self.hit(parser, "command", f"systemctl {ops[0]}", at, "changes unit or slice limits")
+            return
+        sub = str(args[0]) if args else None
+        if sub is None or rule1.OPAQUE in sub:
+            self.hit(parser, "command", name, at, "runs a launchctl subcommand the scan cannot see")
+        elif sub.lower() in gated:
+            self.hit(parser, "command", f"{name} {sub.lower()}", at, "changes launchd jobs or their limits")
 
     def _descend_runs(self, parser, inners, at) -> None:
         """Read the scripts a systemd-run's command runs as rule 1's parser
@@ -1325,7 +1335,7 @@ class _Visitor:
             if hit is not None and hit[1] == "":
                 self.hit(parser, "write", hit[0], at, f"`{name}` touches a protected path")
                 return
-        # owner rule 27b: the sandbox dir
+        # the sandbox switch: the sandbox dir
         for raw in sources:
             value = _value(raw, parser)
             hit = _classify_raw(value, self.ctx)
@@ -1404,7 +1414,7 @@ class _Visitor:
         return [path] if len(sources) == 1 else None
 
     def _sandbox(self, parser, raw: str, op: str, at: int, name: str) -> bool:
-        """Record 27b's answer for one sandbox path; True when it blocks."""
+        """Record the sandbox switch's answer for one sandbox path; True when it blocks."""
         decision = sandbox_decision(raw, op, self.ctx)
         if decision == "pass":
             return False
@@ -1533,10 +1543,10 @@ def path_access(raw: str, text: str, ctx: Context, op: str = "change", old: str 
     """A write, edit or multi_edit target: protected, or gated and either
     the new text sets a gated key or the change alters a line of the file
     that sets one now (a value-only edit, a key line dropped). op: 'create'
-    for the write tool or a multi_edit create (27b: only a NEW session file
+    for the write tool or a multi_edit create (sandbox: only a NEW session file
     passes in manual mode), else 'change'. tool: 'write' (text is the whole
     file), 'edit' (old is old_string) or 'multi_edit' (edits are this
-    file's edits, in order). A kind 'auto' hit passes (27b auto mode;
+    file's edits, in order). A kind 'auto' hit passes (sandbox auto mode;
     audited)."""
     hit = _classify_raw(raw, ctx)
     if hit is None:

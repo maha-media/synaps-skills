@@ -118,8 +118,25 @@ WRAPPERS = {
                          "--delimiter", "--arg-file", "--replace"}), 0, False),
     "flock": (frozenset({"-w", "-E", "--timeout", "--conflict-exit-code"}), 1, False),
     "watch": (frozenset({"-n", "--interval"}), 0, False),
+}
+# Runner tools' known option sets, as data. Together with WRAPPERS this is
+# exactly the pre-port wrapper table (heavy1 was a static wrapper; dropping
+# it would scan less for an existing user). The wrapper set lives here, in
+# jev's own code: a host-profile fact (tools.*, runners[].tool, PATH) never
+# adds, removes or changes a wrapper.
+RUNNER_FLAGS = {
     "heavy1": (frozenset({"--lease", "--cancel"}), 0, False),
 }
+
+
+def wrapper_spec(name: str):
+    """A wrapper's (options with a value, positionals, takes VAR=x), or
+    None: the static WRAPPERS, then the RUNNER_FLAGS data. No host fact is
+    consulted."""
+    spec = WRAPPERS.get(name)
+    if spec is None:
+        spec = RUNNER_FLAGS.get(name)
+    return spec
 INPUT_OPS = {"<<": "heredoc", "<<-": "heredoc", "<<<": "herestring", "<": "file", "<>": "file", "<&": "file"}
 FED = frozenset({"heredoc", "herestring", "file", "pipe"})
 
@@ -182,7 +199,7 @@ def _unwrap(argv: list, strings: list) -> tuple[list, bool]:
         if not argv:
             break
         name = _basename(argv[0])
-        spec = WRAPPERS.get(name)
+        spec = wrapper_spec(name)
         if spec is None:
             break
         via_xargs = via_xargs or name == "xargs"

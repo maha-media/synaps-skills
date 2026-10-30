@@ -69,7 +69,7 @@ save() {  # key
 warn_if_symlinked_into_repo() {
   local dir; dir="$(dirname "$STORE")"
   if [[ -L "$dir" ]]; then
-    yellow "$dir is a symlink → $(readlink -f "$dir"); the key file lands inside that tree (it is git-ignored as /config)."
+    yellow "$dir is a symlink → $(cd -P "$dir" 2>/dev/null && pwd -P); the key file lands inside that tree (it is git-ignored as /config)."
   fi
 }
 

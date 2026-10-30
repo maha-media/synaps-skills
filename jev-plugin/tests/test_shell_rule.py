@@ -35,7 +35,7 @@ sys.path.insert(0, HERE)
 import jev_test_home  # noqa: F401,E402  (keeps the suite out of the real Allow-once store)
 from jev import audit as audit_mod  # noqa: E402
 from jev import guard  # noqa: E402
-from jev import shell_rules  # noqa: E402
+from jev import host_profile, shell_rules  # noqa: E402
 from jev.shell_rules import scan_shell  # noqa: E402
 
 UNGUARDED, ROOT_OP, HOME_OP, NESTED = "unguarded_variable", "root_operand", "home_operand", "nested_heredoc"
@@ -348,13 +348,13 @@ SIGNAL_ALL_SHAPES = [
     # spell the longer name (bash reads kill'all'5 as killall5)
     ("kill'all'5", "killall5"),
     ('kill"all"5 -9', "killall5"),
-    ("kill'all' -u jr", "killall -u"),
+    ("kill'all' -u user", "killall -u"),
     ("/sbin/kill\"all\"5", "killall5"),
     ('killall"5"', "killall5"),
     ("kill'-9' -1", "kill"),  # a glued quoted argument is still kill's
     # after a command runner
     ("sudo kill -9 -1", "kill"),
-    ("sudo -u jr kill -9 -1", "kill"),
+    ("sudo -u user kill -9 -1", "kill"),
     ("env kill -9 -1", "kill"),
     ("command kill -9 -1", "kill"),
     ("builtin kill -9 -1", "kill"),
@@ -385,30 +385,30 @@ SIGNAL_ALL_SHAPES = [
     ("sudo killall5 -9", "killall5"),
     ("'killall5' -9", "killall5"),
     # pkill / killall selecting by user alone (no pattern, no process name)
-    ("pkill -u jr", "pkill -u"),
-    ("pkill -U jr", "pkill -u"),
-    ("pkill -9 -u jr", "pkill -u"),
-    ("pkill -KILL -u jr", "pkill -u"),
-    ("pkill --signal KILL -u jr", "pkill -u"),
-    ("pkill --uid jr", "pkill -u"),
-    ("pkill --euid jr", "pkill -u"),
-    ("pkill --euid=jr", "pkill -u"),
-    ("pkill -ujr", "pkill -u"),
-    ("pkill -e -u jr", "pkill -u"),
-    ("pkill -fu jr", "pkill -u"),
-    ("pkill -u jr --", "pkill -u"),
+    ("pkill -u user", "pkill -u"),
+    ("pkill -U user", "pkill -u"),
+    ("pkill -9 -u user", "pkill -u"),
+    ("pkill -KILL -u user", "pkill -u"),
+    ("pkill --signal KILL -u user", "pkill -u"),
+    ("pkill --uid user", "pkill -u"),
+    ("pkill --euid user", "pkill -u"),
+    ("pkill --euid=user", "pkill -u"),
+    ("pkill -uuser", "pkill -u"),
+    ("pkill -e -u user", "pkill -u"),
+    ("pkill -fu user", "pkill -u"),
+    ("pkill -u user --", "pkill -u"),
     ('pkill -u "$USER"', "pkill -u"),
     ("pkill -u $(id -un)", "pkill -u"),
-    ("sudo pkill -u jr", "pkill -u"),
-    ("/usr/bin/pkill -u jr", "pkill -u"),
-    ("'pkill' -u jr", "pkill -u"),
-    ("killall -u jr", "killall -u"),
-    ("killall -9 -u jr", "killall -u"),
-    ("killall -s KILL -u jr", "killall -u"),
-    ("killall --user jr", "killall -u"),
-    ("killall --user=jr", "killall -u"),
-    ("killall -KILL --user jr", "killall -u"),
-    ('"killall" -u jr', "killall -u"),
+    ("sudo pkill -u user", "pkill -u"),
+    ("/usr/bin/pkill -u user", "pkill -u"),
+    ("'pkill' -u user", "pkill -u"),
+    ("killall -u user", "killall -u"),
+    ("killall -9 -u user", "killall -u"),
+    ("killall -s KILL -u user", "killall -u"),
+    ("killall --user user", "killall -u"),
+    ("killall --user=user", "killall -u"),
+    ("killall -KILL --user user", "killall -u"),
+    ('"killall" -u user', "killall -u"),
 ]
 
 # Not every process: a specific pid, a process group, a variable (an unset
@@ -422,14 +422,14 @@ QUIET_KILLS = [
     "kill -l 1", "kill -l", "kill -L", "kill --list", "kill -l -1",
     "kill %1", "kill -9 %1", "kill -9 $(cat app.pid)", "kill -9 `cat app.pid`",
     "systemctl kill --signal=KILL app.service", "docker kill $c", "tmux kill-session -t x", "tmux kill-server",
-    "pkill -f foo", "pkill foo", "pkill -u jr foo", "pkill -9 -u jr foo", "pkill -u jr -- foo",
-    'pkill -u jr -f "python3 x.py"', "pkill -U jr -x node", "pkill -P 123", "pkill -t pts/1 x",
-    'pkill -u jr "$PAT"', "pkill -fu jr worker", "pkill --euid=jr worker", "pkill --signal KILL -u jr foo",
-    "pgrep -u jr", "ps -u jr",
-    "killall foo", "killall -u jr foo", "killall -9 foo", "killall -u jr -- foo", "killall -s KILL -u jr foo",
-    "killall --user=jr foo",
+    "pkill -f foo", "pkill foo", "pkill -u user foo", "pkill -9 -u user foo", "pkill -u user -- foo",
+    'pkill -u user -f "python3 x.py"', "pkill -U user -x node", "pkill -P 123", "pkill -t pts/1 x",
+    'pkill -u user "$PAT"', "pkill -fu user worker", "pkill --euid=user worker", "pkill --signal KILL -u user foo",
+    "pgrep -u user", "ps -u user",
+    "killall foo", "killall -u user foo", "killall -9 foo", "killall -u user -- foo", "killall -s KILL -u user foo",
+    "killall --user=user foo",
     "skill", "mykill -9 -1", "kill_all -9 -1", "kill-all -9 -1", "killall5x", "xkill", "echo killed -1",
-    "pkill_x -u jr", "'killx' -9 -1", "kill'all'x -u jr",
+    "pkill_x -u user", "'killx' -9 -1", "kill'all'x -u user",
     "# kill -9 -1", "ls  # then kill -9 -1",
 ]
 
@@ -447,7 +447,7 @@ def benign_kill_script(count=300):
                   f"kill -1 {1000 + i}",
                   f"kill -9 -- -{1234 + i}",
                   f'pkill -u "$USER" -f "worker-{i}"',
-                  f"killall -u jr worker{i}"]
+                  f"killall -u user worker{i}"]
     return "\n".join(lines) + "\n"
 
 
@@ -823,8 +823,8 @@ class SignalAllTable(unittest.TestCase):
         self.assertEqual([(f.rule, f.command, f.line) for f in found], [(SIGNAL_ALL, "kill", 501)])
 
     def test_details_and_line_numbers(self):
-        for text, detail in (("kill -9 -1", "pid -1"), ("pkill -u jr", "selects by user alone"),
-                             ("killall -u jr", "selects by user alone"), ("killall5 -9", "every process")):
+        for text, detail in (("kill -9 -1", "pid -1"), ("pkill -u user", "selects by user alone"),
+                             ("killall -u user", "selects by user alone"), ("killall5 -9", "every process")):
             with self.subTest(text):
                 self.assertEqual([f.detail for f in scan_shell(text)], [detail])
         heredoc = "cat > stop.sh <<'EOF'\necho stopping\nkill -9 -1\nEOF\n"
@@ -838,6 +838,51 @@ class SignalAllTable(unittest.TestCase):
         # fresh reading takes it for a comment)
         found = scan_shell('git commit -m "fix\nCloses #12" && kill -9 -1\n')
         self.assertEqual([(f.rule, f.line) for f in found], [(SIGNAL_ALL, 2)])
+
+
+class SignalAllBSD(unittest.TestCase):
+    """macOS (and any non-Linux host) reads pkill/killall the BSD way as well
+    (a union with the procps reading), on any OS through an injected
+    profile. Linux keeps the procps reading only: its results are pinned
+    unchanged here, gaps included."""
+
+    BSD_ONLY = [("pkill -v -u user foo", "pkill -u"), ("pkill -u user .", "pkill -u"),
+                ("pkill -u user ''", "pkill -u"), ("pkill -u user -- ''", "pkill -u"),
+                ("pkill -v foo", "pkill -u"), ("pkill .", "pkill -u"), ("pkill -f '^'", "pkill -u"),
+                ("killall -m '.*' -u user", "killall -u"), ("killall -m .", "killall -u"),
+                ("killall -m -u user '['", "killall -u"), ("killall -s -u user", "killall -u")]
+    QUIET = ["pkill -u user foo", "killall -u user foo", 'pkill -u user "$PAT"', "pkill -u user -f foo",
+             "killall -m foo -u user", 'killall -m "$P" -u user', "pkill -t ttys001 .", "pkill -P 1 -v x",
+             "killall -t ttys001 -m .", "killall -l", "killall -c foo -u user"]
+
+    def scan(self, os_name, text):
+        with host_profile.HostProfile.use(host_profile.HostProfile({}, os_name=os_name)):
+            return shape(scan_shell(text))
+
+    def test_bsd_shapes_on_macos_and_other_hosts(self):
+        for os_name in ("macos", "other"):
+            for text, command in self.BSD_ONLY:
+                with self.subTest(os=os_name, text=text):
+                    self.assertEqual(self.scan(os_name, text), [(SIGNAL_ALL, command, ())])
+            for text in self.QUIET:
+                with self.subTest(os=os_name, text=text):
+                    self.assertEqual(self.scan(os_name, text), [])
+
+    def test_every_procps_shape_and_quiet_text_reads_the_same_on_macos(self):
+        for text, command in SIGNAL_ALL_SHAPES:
+            with self.subTest(text):
+                self.assertEqual(self.scan("macos", text), [(SIGNAL_ALL, command, ())])
+        for text in QUIET_KILLS:
+            with self.subTest(text):
+                self.assertEqual(self.scan("macos", text), [])
+
+    def test_linux_is_unchanged(self):
+        for text, _command in self.BSD_ONLY:
+            with self.subTest(text):
+                self.assertEqual(self.scan("linux", text), [])
+        for text in self.QUIET:
+            with self.subTest(text):
+                self.assertEqual(self.scan("linux", text), [])
 
 
 class ShellScriptTargets(unittest.TestCase):
@@ -915,8 +960,8 @@ class ShellRuleGuard(unittest.TestCase):
         for command, says in (
                 ("kill -9 -1", "line 1: kill with pid -1 signals every process you own (it has killed a whole "
                                "desktop session). Signal a specific pid or a process group > 1 instead"),
-                ("echo ok\nsudo pkill -u jr", "line 2: pkill -u with a user and no pattern signals every process"),
-                ("killall -u jr", "line 1: killall -u with a user and no process name signals every process"),
+                ("echo ok\nsudo pkill -u user", "line 2: pkill -u with a user and no pattern signals every process"),
+                ("killall -u user", "line 1: killall -u with a user and no process name signals every process"),
                 ("killall5 -9", "line 1: killall5 signals every process outside its own session")):
             with self.subTest(command):
                 reason = self.assert_blocked(*self.run_guard("bash", {"command": command}))
@@ -927,7 +972,7 @@ class ShellRuleGuard(unittest.TestCase):
             "write", {"path": str(self.ws / "stop.sh"), "content": "#!/bin/bash\nkill -TERM -- -1\n"}))
         self.assertIn("line 2: kill with pid -1", reason)
         # a variable, a specific pid or a pattern goes on to the model as before
-        for command in ("kill -TERM -- -$G", 'kill "$p"', "kill -1 123", "pkill -u jr worker", benign_kill_script(20)):
+        for command in ("kill -TERM -- -$G", 'kill "$p"', "kill -1 123", "pkill -u user worker", benign_kill_script(20)):
             with self.subTest(command[:40]):
                 result, client = self.run_guard("bash", {"command": command})
                 self.assertEqual((result["action"], len(client.calls)), ("continue", 1))
@@ -1432,7 +1477,7 @@ def _scan_units():
         "kill words": "kill -9 " * 30 + "\n",
         "kill operand lines": "kill -9 -12\n",
         "spelled kill near misses": "'kill' $p;k\"\"ill -0 $q;'pkill' -u x y\n",
-        "pkill options": "pkill " + "-fu jr -t x " * 20 + "p\n",
+        "pkill options": "pkill " + "-fu user -t x " * 20 + "p\n",
         # strings and backticks carried across lines (read twice), below and
         # past the second reading's cap (REOPEN_MAX: ScanLimit, the guard confirms)
         "sq lines, near miss": ("'", "rm -r a b\n"),

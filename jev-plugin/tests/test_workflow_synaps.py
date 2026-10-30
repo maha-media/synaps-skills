@@ -220,3 +220,47 @@ def test_wrapper_invalid_installation(tmp_path, missing):
                           input=b'', capture_output=True, timeout=3)
     assert proc.returncode != 0
     assert not (base/'workflow-stats.json').exists()
+
+
+def test_descendants_from_a_ps_table_deepest_first():
+    # {ppid: [pid]}: 10 -> 11 -> 12, 10 -> 13; 20 is unrelated; a cycle 12 -> 10 stops.
+    table = {10: [11, 13], 11: [12], 12: [10], 20: [21]}
+    assert a.descendants(10, table) == [12, 11, 13]
+    assert a.descendants(99, table) == []
+
+
+def _child():
+    return subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+
+
+def test_ps_children_lists_a_live_child():
+    # The macOS path (no /proc), run here through the real ps.
+    child = _child()
+    try:
+        assert child.pid in a.ps_children().get(os.getpid(), [])
+        assert child.pid in a.descendants(os.getpid(), a.ps_children())
+    finally:
+        child.kill(); child.wait()
+
+
+def test_ps_children_never_runs_a_ps_from_path(tmp_path, monkeypatch):
+    # The listing's pids get SIGKILLed: with no ps at the absolute paths, a
+    # ps on PATH is not run and the listing is empty.
+    called = tmp_path / 'called'
+    fake = tmp_path / 'ps'
+    fake.write_text(f"#!/bin/sh\necho x > '{called}'\necho '{os.getpid() + 1} {os.getpid()}'\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv('PATH', str(tmp_path))
+    monkeypatch.setattr(a, 'PS_PATHS', (str(tmp_path / 'nope' / 'ps'),))
+    assert a.ps_children() == {}
+    assert not called.exists()
+
+
+@pytest.mark.skipif(not os.path.isdir('/proc/self/task'), reason='Linux /proc only')
+def test_descendants_on_linux_reads_proc():
+    child = _child()
+    try:
+        assert child.pid in a.descendants(os.getpid())
+    finally:
+        child.kill(); child.wait()

@@ -1,4 +1,4 @@
-"""Allow once: the hand-off between the access rule (owner rules 27a/27b)
+"""Allow once: the hand-off between the access rule (and its sandbox switch)
 and Pria Desktop's "Permission change" item.
 
 Every access block writes a request record; the owner answers it with a native
@@ -44,7 +44,7 @@ format before the field and records waiting across an install still match.
 Nothing here ever unblocks on an error: a store that can't be written or
 read leaves the call blocked. Known limit (README): a script run from a
 file is not read by the guard, so a determined agent running as this user
-could forge an answer; the sandbox rule 27c(3) is the second layer.
+could forge an answer; the session sandbox is the second layer.
 """
 from __future__ import annotations
 
@@ -322,7 +322,7 @@ def record_block(home, rid: str, *, session, tool, cwd, tool_input, fp, hits, re
 
 
 def record_auto(home, *, session, tool, cwd, files, hits, now, subagent_id=None) -> str:
-    """Write requests/<id>.json for a 27b auto pass (an FYI: no command text)."""
+    """Write requests/<id>.json for a sandbox auto pass (an FYI: no command text)."""
     r = open_store(home, create=True)
     _prune(r, now)
     rid = new_id()
