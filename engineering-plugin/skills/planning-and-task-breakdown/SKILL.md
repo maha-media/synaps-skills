@@ -122,11 +122,17 @@ Arrange tasks so that:
 The plan exists. Tasks exist. **Code is next.** Before any task runs:
 
 ```bash
-cd ~/Projects/<org>/<repo>
+cd <primary-clone>                   # e.g. <workspace.root>/<repo>
 git fetch origin --prune
-git worktree add -b feat/<slug> ../.worktrees/<repo>-<slug> origin/main
-cd ../.worktrees/<repo>-<slug>
+git worktree add -b feat/<slug> <workspace.worktrees_dir>/<repo>-<slug> origin/main
+cd <workspace.worktrees_dir>/<repo>-<slug>
 ```
+
+`workspace.root` and `workspace.worktrees_dir` come from `pria-fleet host get <key>`
+(exit 0 = the path; any other exit or no pria-fleet = unset). Worktrees dir unset:
+`<workspace.root>/.worktrees`. Both unset and you're not already in the user's
+clone: print `missing: workspace.root` once and don't create the worktree. Never ask the user
+for it. See **worktrees-by-default** → The Layout.
 
 The primary checkout stays clean on the integration branch. All implementation happens in the worktree. This is non-negotiable — see **worktrees-by-default** for the full discipline.
 

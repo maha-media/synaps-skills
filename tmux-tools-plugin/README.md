@@ -39,10 +39,14 @@ Panes are addressed by **name** (tmux pane title), not by `%id`. `spawn install`
 ```bash
 synaps plugins install tmux-tools --marketplace synaps-skills
 # or symlink for local dev:
-ln -s ~/path/to/tmux-tools-plugin ~/.synaps-cli/plugins/tmux-tools
+ln -s ~/path/to/tmux-tools-plugin "${SYNAPS_BASE_DIR:-$HOME/.synaps-cli}/plugins/tmux-tools"
 ```
 
 The agent loads the skill on demand via `load_skill tmux`.
+
+Requires `tmux` (macOS: `brew install tmux`; Debian/Ubuntu: `sudo apt-get install tmux`)
+and, for `synaps.sh`, `python3`. `synaps.sh` reads
+`${SYNAPS_BASE_DIR:-~/.synaps-cli}/plugins.json`; `SYNAPS_PLUGINS_JSON` overrides the path.
 
 ## Auto-suggestion (future)
 

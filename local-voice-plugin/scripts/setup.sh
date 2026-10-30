@@ -3,8 +3,19 @@ set -euo pipefail
 
 plugin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 binary_name="synaps-voice-plugin"
-features="local-stt"
+features=""   # empty = per-platform default, see default_features
 model_name=""
+
+# Default Cargo features: local-stt everywhere, plus Metal (GPU) on Apple
+# Silicon macOS. An explicit --features always wins (e.g. --features local-stt
+# for a CPU-only Mac build).
+default_features() {
+  if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
+    echo "local-stt,metal"
+  else
+    echo "local-stt"
+  fi
+}
 
 usage() {
   cat <<USAGE
@@ -14,7 +25,8 @@ Builds the Synaps local voice sidecar and installs it to:
   $plugin_dir/bin/$binary_name
 
 Options:
-  --features FEATURES  Cargo features to build (default: local-stt)
+  --features FEATURES  Cargo features to build (default: local-stt;
+                       local-stt,metal on Apple Silicon macOS)
   --model base.en      Validate expected Whisper model path and print download guidance
   -h, --help           Show this help
 USAGE
@@ -44,6 +56,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+[[ -n "$features" ]] || features="$(default_features)"
+
 if ! command -v cargo >/dev/null 2>&1; then
   cat >&2 <<'ERR'
 error: Rust/Cargo is required to build local voice.
@@ -57,7 +71,8 @@ case "$(uname -s)" in
     echo "Detected Linux. If build fails for native audio/Whisper deps, install packages such as: build-essential pkg-config clang cmake libasound2-dev"
     ;;
   Darwin)
-    echo "Detected macOS. Xcode command line tools are required. Optional Metal acceleration can be built with --features local-stt,metal."
+    echo "Detected macOS. Xcode command line tools are required. Metal is on by default on Apple Silicon; pass --features local-stt for a CPU-only build."
+    echo "The first microphone use triggers a macOS permission prompt for your terminal app (System Settings > Privacy & Security > Microphone)."
     ;;
   MINGW*|MSYS*|CYGWIN*|Windows_NT)
     echo "Detected Windows. Ensure Rust MSVC toolchain and required native build tools are installed."

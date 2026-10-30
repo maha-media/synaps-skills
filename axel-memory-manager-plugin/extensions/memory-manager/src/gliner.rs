@@ -3,7 +3,8 @@
 //! Wraps an `ort::Session` over a HuggingFace ONNX export of GLiNER (e.g.
 //! `onnx-community/gliner_small-v2.1`). The model file is downloaded lazily
 //! on first use via [`velocirag::download::ensure_model`] and cached at
-//! `$XDG_CACHE_HOME/velocirag/models/gliner-small-v2.1`.
+//! `dirs::cache_dir()/velocirag/models/gliner-small-v2.1` (Linux
+//! `$XDG_CACHE_HOME` or `~/.cache`, macOS `~/Library/Caches`).
 //!
 //! Status:
 //!   * Loader (`GlinerSession::load`) — fully implemented; logs the ONNX

@@ -4,7 +4,7 @@
 # Use this after `git push` to a marketplace repo: it opens Synaps in a fresh
 # tmux pane, navigates the plugins modal, refreshes the marketplace cache,
 # and installs/updates plugins — then quits cleanly. Detection is via
-# `~/.synaps-cli/plugins.json` mutations (the TUI saves on every action), not
+# `${SYNAPS_BASE_DIR:-~/.synaps-cli}/plugins.json` mutations (the TUI saves on every action), not
 # screen-scraping, so it's robust across theme/layout changes.
 #
 # Subcommands:
@@ -26,7 +26,7 @@ PROG="$(basename "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PANE_SH="$SCRIPT_DIR/pane.sh"
 
-PLUGINS_JSON="${SYNAPS_PLUGINS_JSON:-$HOME/.synaps-cli/plugins.json}"
+PLUGINS_JSON="${SYNAPS_PLUGINS_JSON:-${SYNAPS_BASE_DIR:-$HOME/.synaps-cli}/plugins.json}"
 
 die()  { echo "$PROG: error: $*" >&2; exit 1; }
 warn() { echo "$PROG: $*" >&2; }
@@ -218,6 +218,7 @@ nav_down() {
 
 cmd_status() {
     local filter="${1:-}"
+    [ -f "$PLUGINS_JSON" ] || die "plugins.json not found at $PLUGINS_JSON (set SYNAPS_BASE_DIR or SYNAPS_PLUGINS_JSON)"
     pj '
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -410,7 +411,7 @@ cmd_sync() {
 }
 
 usage() {
-    sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
+    sed -n '2,/^$/p' "$0" | sed 's/^# //;s/^#//'
     exit 2
 }
 

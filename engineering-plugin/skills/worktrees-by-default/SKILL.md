@@ -39,22 +39,38 @@ If another process (an agent, a CI hook, a watcher) might switch branches under 
 
 ## The Layout
 
-Convention used in this repo and recommended elsewhere:
+Where the user's repos and worktrees live is a host fact, not a fixed path. Read it
+(read-only; never write the host profile yourself):
+
+```bash
+pria-fleet host get workspace.root            # where the user's repos live
+pria-fleet host get workspace.worktrees_dir   # where per-task worktrees go
+```
+
+Exit 0 prints the absolute path. Any other exit (9 unset; 2 unknown key, or an older
+pria-fleet without `host`; 6 or 1 a profile problem), or no `pria-fleet` at all,
+means **unset**:
+
+- `workspace.worktrees_dir` unset but `workspace.root` known: use `<workspace.root>/.worktrees`.
+- Both unset: if you are already inside the user's clone, the primary clone is
+  `git rev-parse --show-toplevel`; otherwise print `missing: workspace.root` once and
+  don't create a worktree. Never ask the user for a host fact, and don't guess a
+  home-dir layout. (An agent that knows the fact may propose it to the app.)
 
 ```
-~/Projects/<org>/<repo>/                       ← primary clone, stays on `main`
-~/Projects/<org>/.worktrees/<repo>-<slug>/     ← per-task worktree
+<workspace.root>/…/<repo>/                      ← primary clone, stays on `main`
+<workspace.worktrees_dir>/<repo>-<slug>/        ← per-task worktree
 ```
 
-- One sibling `.worktrees/` directory per organization (or per project parent)
+- One `.worktrees/` directory per workspace (or per project parent, if the user keeps one there)
 - Worktree name = `<repo>-<short-slug>` describing the work
 - Branch name = `feat/<slug>` or `fix/<slug>` matching the worktree slug
 
 Example:
 ```
-~/Projects/Maha-Media/synaps-skills/                                  → main
-~/Projects/Maha-Media/.worktrees/synaps-skills-engineering-worktrees/ → feat/engineering-worktrees
-~/Projects/Maha-Media/.worktrees/synaps-skills-fetch-fix/             → fix/fetch-redirects
+<workspace.root>/synaps-skills/                                  → main
+<workspace.worktrees_dir>/synaps-skills-engineering-worktrees/   → feat/engineering-worktrees
+<workspace.worktrees_dir>/synaps-skills-fetch-fix/               → fix/fetch-redirects
 ```
 
 ## The Gate Function
@@ -82,10 +98,10 @@ On primary clone, branch is main or integration?
 From the primary clone:
 
 ```bash
-cd ~/Projects/<org>/<repo>           # primary clone
+cd <primary-clone>                   # e.g. <workspace.root>/<repo>
 git fetch origin --prune             # ensure base is fresh
-git worktree add -b feat/<slug> ../.worktrees/<repo>-<slug> origin/main
-cd ../.worktrees/<repo>-<slug>
+git worktree add -b feat/<slug> <workspace.worktrees_dir>/<repo>-<slug> origin/main
+cd <workspace.worktrees_dir>/<repo>-<slug>
 ```
 
 Verify:
@@ -128,14 +144,14 @@ Run all four steps. Do not skip any.
 
 ```bash
 # 1. Leave the worktree before deleting it
-cd ~/Projects/<org>/<repo>           # primary clone
+cd <primary-clone>                   # e.g. <workspace.root>/<repo>
 
 # 2. Make sure local main reflects the merge
 git checkout main
 git pull origin main                 # fast-forward to merged state
 
 # 3. Remove the worktree directory
-git worktree remove ../.worktrees/<repo>-<slug>
+git worktree remove <workspace.worktrees_dir>/<repo>-<slug>
 
 # 4. Delete the local branch and prune remote refs
 git branch -d feat/<slug>            # -d (safe) since merged
@@ -250,7 +266,7 @@ After PR merges (cleanup gate — run before claiming the task is done):
 - [ ] `git worktree list` shows only the primary entry
 - [ ] `git branch` no longer lists the merged feature branch
 - [ ] `git fetch --prune` has dropped the remote tracking ref
-- [ ] `~/Projects/<org>/.worktrees/<repo>-<slug>/` directory no longer exists on disk
+- [ ] `<workspace.worktrees_dir>/<repo>-<slug>/` directory no longer exists on disk
 
 ## Related skills
 

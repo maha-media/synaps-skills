@@ -886,7 +886,7 @@ fn handle_axel_command(
                 Usage: axel <subcommand>\n\n\
                 Subcommands:\n  \
                 help          Show this help.\n  \
-                models        List cached models in $XDG_CACHE_HOME/velocirag/models/.\n  \
+                models        List cached models in <user cache dir>/velocirag/models/.\n  \
                 download      Eagerly download the GLiNER model (~165 MB) so the\n                first chat turn doesn't block.\n  \
                 download-embeddings\n                Explicitly download the ~86 MB embedding model\n                (never downloaded implicitly; embeddings setting must be on).\n  \
                 retention     Per-retention-class memory counts for the trusted\n                project scope (fails closed without one).\n  \
@@ -1015,8 +1015,8 @@ fn dir_size_bytes(path: &std::path::Path) -> std::io::Result<u64> {
 ///
 /// `$AXEL_GLINER_MODEL_DIR` wins (used by tests + power users); otherwise we
 /// fall back to velocirag's standard cache layout
-/// (`$XDG_CACHE_HOME/velocirag/models/gliner-small-v2.1`, which honours
-/// `$HOME` via the `dirs` crate on Linux).
+/// (`dirs::cache_dir()/velocirag/models/gliner-small-v2.1`: Linux
+/// `$XDG_CACHE_HOME` or `~/.cache`, macOS `~/Library/Caches`).
 fn gliner_model_dir() -> PathBuf {
     if let Some(p) = std::env::var_os("AXEL_GLINER_MODEL_DIR") {
         return PathBuf::from(p);

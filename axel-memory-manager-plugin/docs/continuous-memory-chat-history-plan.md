@@ -31,9 +31,12 @@ completed lifecycle/T32–T36 branches remain untouched as bases.
 
 | Repo | Base commit | New branch | New worktree |
 |---|---|---|---|
-| SynapsCLI | `048cb5c0` (`feat/request-lifecycle-hardening`) | `feat/continuous-memory-host` | `/home/jr/Projects/Maha-Media/.worktrees/SynapsCLI-continuous-memory` |
-| Axel | `562e6508` (`feat/project-memory-t32-t36`) | `feat/continuous-memory-axel` | `/home/jr/Projects/Maha-Media/.worktrees/axel-continuous-memory` |
-| synaps-skills (plugin) | `0790b195` (`feat/axel-memory-t32-t36`) | `feat/continuous-memory-plugin` | `/home/jr/Projects/Maha-Media/.worktrees/synaps-skills-continuous-memory` |
+| SynapsCLI | `048cb5c0` (`feat/request-lifecycle-hardening`) | `feat/continuous-memory-host` | `<worktrees>/SynapsCLI-continuous-memory` |
+| Axel | `562e6508` (`feat/project-memory-t32-t36`) | `feat/continuous-memory-axel` | `<worktrees>/axel-continuous-memory` |
+| synaps-skills (plugin) | `0790b195` (`feat/axel-memory-t32-t36`) | `feat/continuous-memory-plugin` | `<worktrees>/synaps-skills-continuous-memory` |
+
+`<worktrees>` is the maintainer's worktrees directory
+(`pria-fleet host get workspace.worktrees_dir`); substitute your own.
 
 Rules:
 

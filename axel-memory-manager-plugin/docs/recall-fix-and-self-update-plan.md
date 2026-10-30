@@ -689,7 +689,7 @@ The `--update` flag is distinct from `--version TAG`: `--update` always pulls `l
 ### 7.1 Pre-deploy backup
 
 ```bash
-LIVE_BIN="/home/jr/.synaps-cli/plugins/axel-memory-manager/extensions/memory-manager/target/release/memory-manager"
+LIVE_BIN="${SYNAPS_BASE_DIR:-$HOME/.synaps-cli}/plugins/axel-memory-manager/extensions/memory-manager/target/release/memory-manager"
 cp -v "$LIVE_BIN" "${LIVE_BIN}.bak.pre-recall-fix"
 ls -lh "${LIVE_BIN}.bak.pre-recall-fix"
 ```
@@ -699,7 +699,7 @@ The currently installed binary is 33 MB (confirmed at `ls -la` output: `33075808
 ### 7.2 Build and copy
 
 ```bash
-cd /home/jr/Projects/Maha-Media/.worktrees/synaps-skills-axel-recall-and-self-update
+cd "$WORKTREES/synaps-skills-axel-recall-and-self-update"   # $WORKTREES: your worktrees dir
 cd axel-memory-manager-plugin/extensions/memory-manager
 cargo build --release
 ls -lh target/release/memory-manager  # should be newer mtime
@@ -738,7 +738,7 @@ The `.r8-wal` is currently 1.28 MB (`axel.r8-wal` at `May  8 09:44`) despite `ax
 ### 7.5 Roll-back
 
 ```bash
-LIVE_BIN="/home/jr/.synaps-cli/plugins/axel-memory-manager/extensions/memory-manager/target/release/memory-manager"
+LIVE_BIN="${SYNAPS_BASE_DIR:-$HOME/.synaps-cli}/plugins/axel-memory-manager/extensions/memory-manager/target/release/memory-manager"
 cp -v "${LIVE_BIN}.bak.pre-recall-fix" "$LIVE_BIN"
 # Restart sessions to pick up the restored binary
 ```
@@ -798,7 +798,7 @@ cargo test -j 8 -- --test-threads=8
 # ── Phase 3 ────────────────────────────────────────────────────────────────────
 
 # 9. Validate new workflow YAML syntax
-cd /home/jr/Projects/Maha-Media/.worktrees/synaps-skills-axel-recall-and-self-update
+cd "$WORKTREES/synaps-skills-axel-recall-and-self-update"
 python3 -c "import yaml; yaml.safe_load(open('.github/workflows/axel-upstream-bump.yml'))"
 
 # 10. Dry-run the bump workflow logic manually
@@ -816,7 +816,7 @@ bash scripts/setup.sh --check
 # ── Phase 4 ────────────────────────────────────────────────────────────────────
 
 # 13. Backup and deploy (per §7.1-7.2)
-LIVE_BIN="/home/jr/.synaps-cli/plugins/axel-memory-manager/extensions/memory-manager/target/release/memory-manager"
+LIVE_BIN="${SYNAPS_BASE_DIR:-$HOME/.synaps-cli}/plugins/axel-memory-manager/extensions/memory-manager/target/release/memory-manager"
 cp "$LIVE_BIN" "${LIVE_BIN}.bak.pre-recall-fix"
 cp axel-memory-manager-plugin/extensions/memory-manager/target/release/memory-manager "$LIVE_BIN"
 

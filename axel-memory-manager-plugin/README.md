@@ -19,7 +19,7 @@ need a Rust toolchain for supported platforms. Current release assets are named:
 2. Install/verify the extension binary:
 
    ```bash
-   cd ~/.synaps-cli/plugins/axel-memory-manager
+   cd "${SYNAPS_BASE_DIR:-$HOME/.synaps-cli}/plugins/axel-memory-manager"
    ./scripts/setup.sh
    ```
 
@@ -58,7 +58,13 @@ git push origin axel-memory-manager-v0.1.0
 - Brain file: `~/.config/axel/axel.r8` (SQLite WAL — the entire agent brain
   in one file). Override with `$AXEL_BRAIN`, `$PLUGIN_DIR/axel.r8`, or
   `$SYNAPS_DATA_DIR/axel.r8` (first match wins).
-- Embedding cache: `~/.cache/velocirag/models/` and `~/.cache/axel/embeddings/`.
+- Embedding cache: `<cache>/velocirag/models/` and `<cache>/axel/embeddings/`,
+  where `<cache>` is the OS user cache dir (Rust `dirs::cache_dir()`):
+  - Linux: `$XDG_CACHE_HOME`, else `~/.cache`
+  - macOS: `~/Library/Caches`
+
+  `axel download-embeddings` prints the resolved `cache_dir`. The brain file
+  default (`~/.config/axel/axel.r8`) is the same on both OSes.
 
 ### Building against a local axel checkout
 

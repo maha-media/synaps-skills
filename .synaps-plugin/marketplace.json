@@ -22,7 +22,7 @@
     {
       "name": "engineering",
       "description": "Engineering discipline skills — code review, security review, TDD, debugging, spec-driven development, incremental implementation, planning, verification, worktree-based isolation, multi-agent convergence loops, automated test harness (external oracle/harness proof), tmux fleet orchestration (orchestrator/coder split), and the HTML Plan Ecosystem (live plans-server + Plan Inbox). Battle-tested patterns for shipping reliable software.",
-      "version": "0.6.0-beta",
+      "version": "0.6.1-beta",
       "author": {
         "name": "Haseeb Khalid",
         "url": "https://github.com/HaseebKhalid1507"
@@ -44,7 +44,7 @@
     {
       "name": "tmux-tools",
       "description": "Use when `$TMUX` is set to drive long-running, interactive, or streaming work in a side worker pane — installs needing sudo, log tailing, build/test daemons, parallel shells, user-injectable input.",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "author": {
         "name": "JR Morton",
         "url": "https://github.com/maha-media"
@@ -66,7 +66,7 @@
     {
       "name": "local-voice",
       "description": "Opt-in local voice dictation sidecar plugin. Owns microphone capture, VAD, and Whisper STT outside the Synaps CLI core.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "JR Morton",
         "url": "https://github.com/maha-media"
@@ -77,7 +77,7 @@
     {
       "name": "axel-memory-manager",
       "description": "Axel — portable agent intelligence: project-scoped memory tools (memory_search/fetch/store/forget), offline lexical FTS, sensitivity + retention classes, one .r8 file as the agent's entire brain.",
-      "version": "0.2.0",
+      "version": "0.3.1",
       "author": {
         "name": "JR Morton",
         "url": "https://github.com/maha-media"

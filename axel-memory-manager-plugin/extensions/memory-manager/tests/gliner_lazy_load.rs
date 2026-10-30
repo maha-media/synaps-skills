@@ -14,8 +14,10 @@
 //!
 //! Model resolution mirrors `tests/gliner_inference.rs`:
 //!   1. `$AXEL_GLINER_MODEL_DIR` (set by us if not already)
-//!   2. `$HOME/.cache/velocirag/models/gliner-small-v2.1`
-//!   3. `/tmp/gliner-probe/models--onnx-community--gliner_small-v2.1/snapshots/*`
+//!   2. `velocirag::download::models_cache_dir()/gliner-small-v2.1`
+//!      (Linux `$XDG_CACHE_HOME` or `~/.cache`, macOS `~/Library/Caches`)
+//!   3. `$AXEL_GLINER_PROBE_DIR/models--onnx-community--gliner_small-v2.1/snapshots/*`
+//!      (default `<std::env::temp_dir()>/gliner-probe`)
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -95,6 +97,15 @@ fn ensure_gliner(
     attempted.store(true, Ordering::Relaxed);
 }
 
+/// HF snapshot dir under `$AXEL_GLINER_PROBE_DIR` (default: `gliner-probe`
+/// in the OS temp dir). No hard-coded `/tmp`, so it works on macOS too.
+fn probe_snapshots_dir() -> PathBuf {
+    std::env::var_os("AXEL_GLINER_PROBE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("gliner-probe"))
+        .join("models--onnx-community--gliner_small-v2.1/snapshots")
+}
+
 fn locate_real_model_dir() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("AXEL_GLINER_MODEL_DIR") {
         let pb = PathBuf::from(p);
@@ -102,14 +113,13 @@ fn locate_real_model_dir() -> Option<PathBuf> {
             return Some(pb);
         }
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        let pb = PathBuf::from(home).join(".cache/velocirag/models/gliner-small-v2.1");
+    {
+        let pb = velocirag::download::models_cache_dir().join("gliner-small-v2.1");
         if gliner_model_cached(&pb) {
             return Some(pb);
         }
     }
-    let probe_root =
-        PathBuf::from("/tmp/gliner-probe/models--onnx-community--gliner_small-v2.1/snapshots");
+    let probe_root = probe_snapshots_dir();
     if let Ok(rd) = std::fs::read_dir(&probe_root) {
         for entry in rd.flatten() {
             let p = entry.path();
@@ -129,7 +139,7 @@ fn lazy_load_against_real_model() {
         None => {
             eprintln!(
                 "skipping: no GLiNER model found (set AXEL_GLINER_MODEL_DIR, or place under \
-                 ~/.cache/velocirag/models/gliner-small-v2.1, or /tmp/gliner-probe/...)"
+                 <cache>/velocirag/models/gliner-small-v2.1, or set AXEL_GLINER_PROBE_DIR)"
             );
             return;
         }

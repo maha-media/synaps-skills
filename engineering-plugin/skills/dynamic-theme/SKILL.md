@@ -51,12 +51,14 @@ Other entry points: `plan theme` (show current + source), `plan theme --infer`
 ## The loop
 
 ```
-plan theme --digest > /tmp/digest.txt      # read the repo
+work="$(mktemp -d)"                         # private scratch dir (in $TMPDIR, else /tmp)
+plan theme --digest > "$work/digest.txt"    # read the repo
 # … design the theme (see rules below) …
-cat > /tmp/theme.json <<'JSON'             # schema-valid engtheme/1
+cat > "$work/theme.json" <<'JSON'           # schema-valid engtheme/1
 { "schema": "engtheme/1", "title": "…", … }
 JSON
-plan theme --write /tmp/theme.json         # validate + write (or reject)
+plan theme --write "$work/theme.json"       # validate + write (or reject)
+rm -rf "$work"                              # when done
 ```
 
 If `--write` reports rejected fields, **fix them and rerun** — never hand-edit
