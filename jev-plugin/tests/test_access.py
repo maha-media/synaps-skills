@@ -81,7 +81,7 @@ class Commands(HomeCase):
                             ("firewall-cmd --add-port=1/tcp", "firewall-cmd"),
                             ("ssh-keygen -R host", "ssh-keygen"), ("ssh-add -D", "ssh-add"),
                             ("ssh-add ~/.ssh/k", "ssh-add"),
-                            ("pkexec ls", "pkexec"), ("visudo", "visudo"), ("ssh-copy-id g1pro", "ssh-copy-id"),
+                            ("pkexec ls", "pkexec"), ("visudo", "visudo"), ("ssh-copy-id buildhost", "ssh-copy-id"),
                             ("ssh-keygen -t ed25519 -f k", "ssh-keygen"), ("timeout 5 sudo -n true", "sudo"),
                             ("env A=1 doas ls", "doas"), ("setcap cap_net_raw+ep f", "setcap"),
                             ("systemctl --user set-property app.slice MemoryMax=8G", "systemctl set-property"),
@@ -200,7 +200,7 @@ class Commands(HomeCase):
 
     def test_nested_remote_xargs_find(self):
         cases = [("bash -c 'chmod +x scripts/run.sh'", "inside a nested script"),
-                 ("ssh g1pro 'chmod 600 x'", "remote host"),
+                 ("ssh buildhost 'chmod 600 x'", "remote host"),
                  ("ls | xargs chmod +x", "xargs or find"),
                  ("find ~/Projects -type d -exec chmod g-w {} +", "xargs or find")]
         for text, why in cases:
@@ -220,7 +220,7 @@ class Commands(HomeCase):
     def test_what_passes(self):
         for text in ["grep -n chmod f", "echo 'sudo chmod g-w x'", "git log --grep=chmod", "man chmod",
                      "systemctl --user status x", "systemctl --user restart x.service", "ls -la ~/.ssh",
-                     "cat ~/.ssh/config", "ssh g1pro ls", "ssh-keygen -l -f k.pub", "rm -rf target/",
+                     "cat ~/.ssh/config", "ssh buildhost ls", "ssh-keygen -l -f k.pub", "rm -rf target/",
                      "mkdir -p /var/tmp/lane/x", "python3 -c 'print(1)'", "echo hi > /var/tmp/x/out.txt",
                      "cargo test -p synaps", "git -c rerere.enabled=false merge x", "umask",
                      "umask 022; ls", "stat -c %a f", "ls -l ~/.synaps-cli/sandbox/sessions",
@@ -275,9 +275,9 @@ class SystemdRun(HomeCase):
             ("systemd-run --user --scope --gid 0 make", "another slice"),
             ("systemd-run --user --scope -M box make", "another slice"),
             ("systemd-run --user --scope --machine=box make", "another slice"),
-            ("systemd-run --user --scope -H g1pro make", "another slice"),
-            ("systemd-run --user --scope -Hg1pro make", "another slice"),
-            ("systemd-run --user --scope --host=jr@g1pro make", "another slice"),
+            ("systemd-run --user --scope -H buildhost make", "another slice"),
+            ("systemd-run --user --scope -Hbuildhost make", "another slice"),
+            ("systemd-run --user --scope --host=user@buildhost make", "another slice"),
             ("systemd-run --user --scope -p CPUQuota=50% make", "other than a memory cap"),
             ("systemd-run --user --scope --property=TasksMax=10 make", "other than a memory cap"),
             ("systemd-run --user --scope --property Delegate=yes make", "other than a memory cap"),
@@ -419,7 +419,7 @@ class SystemdRun(HomeCase):
         for script in ["bash -c 'chmod -R g-w ~/Projects'", "sh -c 'chmod -R g-w ~/Projects'",
                        "timeout 5 bash -c 'chmod -R g-w ~/Projects'", "nohup sh -c 'sudo ls'",
                        "env -S 'chmod -R g-w ~/Projects'", "eval chmod -R g-w ~/Projects",
-                       "ssh g1pro chmod -R g-w ~/Projects", "script -q -c 'chmod -R g-w ~/Projects' /dev/null",
+                       "ssh buildhost chmod -R g-w ~/Projects", "script -q -c 'chmod -R g-w ~/Projects' /dev/null",
                        "flock /tmp/l -c 'chmod -R g-w ~/Projects'", "watch -n 5 chmod -R g-w ~/Projects",
                        "find . -name x -exec bash -c 'chmod 777 ~/Projects' \\;",
                        "bash -c \"cd /tmp && bash -c 'usermod -aG docker jr'\"",
