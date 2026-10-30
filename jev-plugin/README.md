@@ -174,7 +174,7 @@ All keys live under `extension.jev.*` in `~/.synaps-cli/config`, or as
 | Key | Default | Notes |
 |---|---|---|
 | `api_key` | — | set with `/jev key …` or `scripts/setup.sh --key …`; also `TYPESAFE_API_KEY` env or `extension.jev.api_key` in `~/.synaps-cli/config` |
-| `transport` | `auto` | `relay`, `direct` or `auto` (relay when `~/.local/state/pria-desktop` exists, else direct); see [Pria desktop relay](#pria-desktop-relay-transport) |
+| `transport` | `auto` | `relay`, `direct` or `auto` (relay when the [host profile](#host-profile-and-platform)'s `app.state_dir` exists: by default `~/.local/state/pria-desktop` on Linux, none elsewhere; else direct); see [Pria desktop relay](#pria-desktop-relay-transport) |
 | `model` | `jev-latest` | pin `jev-1.13.0` once thresholds are tuned |
 | `timeout_ms` | `3000` | keep < 5000 — the runtime's hook timeout is fail-open |
 | `audit_file` | `memory/jev/audit.jsonl` | relative to `SYNAPS_BASE_DIR`; contains command text; chmod 600; `""` disables |
@@ -189,7 +189,7 @@ All keys live under `extension.jev.*` in `~/.synaps-cli/config`, or as
 | `guard_confirm` | `auto` | what a guard confirm does: `auto` (never prompts; see [guard confirms](#guard-confirms-guard_confirm)) or `prompt` (every confirm asks, the old behaviour); anything else, a missing key or a missing config dir means `auto` |
 | `guard_shell_rule` | `block` | the [shell-safety rule](#shell-safety-rule-deterministic-block): `block`, `confirm` or `off`; anything else means `block` |
 | `guard_rule1` | `block` | the [rule-1 guard](#rule-1-guard-deterministic-block-fleet-sessions): `block`, `warn` (log and count only) or `off`; anything else means `block`. Owner-only by convention |
-| `guard_access` | `block` | the [access rule](#access-rule-owner-rules-27a27b-deterministic-block): `block`, `warn` (log and count only) or `off`; anything else means `block`. Owner-only by convention |
+| `guard_access` | `block` | the [access rule](#access-rule-deterministic-block): `block`, `warn` (log and count only) or `off`; anything else means `block`. Owner-only by convention |
 | `guard_access_scope` | `all` | which sessions the access rule covers: `all` or `fleet` (the rule-1 roster); anything else means `all` |
 | `guard_rule1_scope` | `fleet` | which sessions the rule-1 guard covers: `fleet` (listed in the fleet roster; an unreadable roster means every session) or `all`; anything else means `fleet` |
 | `router` | `true` | `/jev router on\|off [--save]` |
@@ -246,7 +246,7 @@ Every `log(` call site, and where its line goes (`[jev] ` prefix omitted):
 | `config transport: unrecognised value …`, `config log_routine: unrecognised value …` | `initialize` | notice |
 | `relay: ok (…)`, `relay: Jev is off (<code>)…` (once per change of relay state) | `relay.py` | notice, limited (`relay:<code>`, family `relay`) |
 | `guard rule-1: fleet roster readable again`, `… no fleet on this host …`, `… WARN fleet roster unreadable …` (once per change of state) | `roster.py` | notice, limited by its text |
-| `guard <tool>: block …`: the model, the shell-safety rule, shell text too large, malformed input, `multi_edit`, `send_events` (pattern or model), the rule-1 guard, the access rule (27a) | `guard.py` | notice, limited by its text |
+| `guard <tool>: block …`: the model, the shell-safety rule, shell text too large, malformed input, `multi_edit`, `send_events` (pattern or model), the rule-1 guard, the access rule | `guard.py` | notice, limited by its text |
 | `guard <tool>: warn …` (rule-1 guard or access rule in `warn` mode) | `guard.py` | notice, limited by its text |
 | `guard <tool>: error after N ms → confirm \| continue \| block (<category>)`: an evaluation failure (timeout, hook budget spent, transport or upstream error, invalid or malformed answer, deadline unavailable, …); the guard is exempt from the [optional budgets](#optional-session-budgets-and-circuit-breaker) and the circuit, so it is never budget-denied | `guard.py` | notice, limited (`guard.error:<category>:<outcome>`, family `guard: evaluation errors`) |
 | `guard <tool>: the 27b auto record could not be written …` | `guard.py` | notice, limited (`guard.27b_record`) |
@@ -276,7 +276,7 @@ process now passes its notices through a small limiter (`logs.Limiter`):
   repeating starts its next window at once (no new first line); a key quiet
   for a whole window is forgotten, so its next notice reaches stderr again;
 - on a change of state (a line that clears the key: a model answer after
-  guard evaluation errors, a written 27b record, a compress fold), **one**
+  guard evaluation errors, a written sandbox auto record, a compress fold), **one**
   line, to both: `<label>: recovered after N errors`. Once an EPISODE: until
   the key is forgotten (a quiet window), a later recovery is only the
   summary's `; ok again`;
@@ -732,8 +732,14 @@ shows it.
       session.
     - `pkill` selecting by user alone (`-u`, `-U`, `--uid`, `--euid`, with
       no pattern) and `killall` with `-u` / `--user` and no process name:
-      `pkill -u jr`, `pkill -9 -u jr`, `killall -u jr`. With a pattern or a
-      name it is not found: `pkill -u jr worker`, `killall -u jr foo`.
+      `pkill -u user`, `pkill -9 -u user`, `killall -u user`. With a pattern or a
+      name it is not found: `pkill -u user worker`, `killall -u user foo`.
+      On macOS (and any host but Linux) the flags are also read the BSD way,
+      and either reading's finding counts: a pattern or `killall -m` regex
+      that matches every name (`.`, `''`, `'.*'`), `pkill -v`, and `killall
+      -s` (a dry run) select by user too, with or without `-u` unless another
+      selector (`-t`, `-P`, `-j` …) narrows it. Linux keeps the procps
+      reading only, unchanged.
 
     One finding per command. The reason is fixed text (never the input):
     for kill, "kill with pid -1 signals every process you own (it has
@@ -861,7 +867,7 @@ Friction, deliberate (these block):
   by a number does not).
 - `signal_all` reads quoted text as code too: `echo 'kill -9 -1'`, a
   commit message showing it, and `grep killall5 notes.txt` (killall5 with
-  any arguments) block. `pkill -u jr` blocks even with another selector
+  any arguments) block. `pkill -u user` blocks even with another selector
   (`-t pts/1`, `-P 123`): only a pattern clears it. `systemctl kill`,
   `docker kill` and `tmux kill-session` are read as `kill` with their
   arguments, so they block only with a literal `-1` operand.
@@ -893,9 +899,10 @@ Known misses:
   `$ ' " \` in a row inside it, is not recognised.
 - `signal_all` sees literal shapes only: a pid from a variable or a
   substitution (`kill -9 $ALL` with `ALL=-1`, `kill -9 $(echo -1)`), a pid
-  passed through `xargs kill`, long options abbreviated (`pkill --eu jr`)
-  or, for killall, written with one dash (`killall -user jr`), and an
-  empty pattern (`pkill -u jr ''`) are not found. A program that calls
+  passed through `xargs kill`, long options abbreviated (`pkill --eu user`)
+  or, for killall, written with one dash (`killall -user user`), and on
+  Linux an empty or match-all pattern (`pkill -u user ''`, `pkill -u user
+  .`) are not found. A program that calls
   `kill(-1, …)` itself, as that test binary did, is no shell text:
   that is the harness review rule's part (refuse pid <= 1, and stop on a
   failed start), not this scan's.
@@ -924,8 +931,10 @@ is written (by name or shebang), so the retry is checked too.
   inside double quotes), `( … )` groups and `${…}` words. Wrappers are
   unwrapped (`sudo`, `env`, `timeout`, `nice`, `setsid`, `taskset`, `xargs`,
   `command`, `exec`, `nohup`, `stdbuf`, `ionice`, `chrt`, `flock`, `watch`,
-  `heavy1`, `time`, `builtin`, `doas`, with their option arguments), and so
-  are `find -exec`/`-execdir` commands. **Descent:** the `-c` string of a
+  `time`, `builtin`, `doas`, with their option arguments; and `heavy1`
+  with `--lease`/`--cancel`, kept as runner data), and so are
+  `find -exec`/`-execdir` commands. The wrapper set is jev's own: no
+  host-profile value adds or changes one. **Descent:** the `-c` string of a
   shell, `ssh`'s remote command, `eval`'s arguments and the command strings
   of `env -S`, `flock -c`, `watch`, `su`/`runuser -c` and `script -c` are
   read again as scripts of their own (up to 8 deep); a hit there names the
@@ -949,16 +958,17 @@ is written (by name or shebang), so the retry is checked too.
   stops it. Its scan is timed by the same 4 s hook budget, from frame
   receipt, and done before the guard's own.
 - **Scope** (`guard_rule1_scope`). `fleet` (default): the call's
-  `session_id` is listed in `~/.pria/fleet/roster.toml` (`[master].session`,
+  `session_id` is listed in `<fleet>/roster.toml` (`[master].session`,
   every `[[team]].foreman`) or in a `team.toml` anywhere under
-  `~/.pria/fleet/projects/` (`foreman`, every `[[worker]].session`). Files
+  `<fleet>/projects/`, where `<fleet>` is the host profile's
+  `app.fleet_dir` (`~/.pria/fleet`; the reader computes it, no override) (`foreman`, every `[[worker]].session`). Files
   are read again when their mtime, size or inode changes; the tree is
   searched again at most every 30 s, or every 2 s when a session is not
   found. The roster is read only when there is something to refuse. A
   roster that cannot be read or parsed puts **every** session in scope (one
   WARN log line per change of state; the refusal says "the fleet roster
   could not be read, so this rule applies to every session"). A missing or
-  empty `session_id` is in scope. A host with no `~/.pria/fleet` at all has
+  empty `session_id` is in scope. A host with no fleet dir at all has
   no fleet sessions: scope `fleet` matches none there (CI, other machines).
   `all`: every session (the owner's own sessions only when they set it).
 - **Modes** (`guard_rule1`). `block` (default); `warn` logs, counts and
@@ -1008,23 +1018,34 @@ tool), `python3 - </dev/null`, `bash < f.sh` / `python3 < f.py` (run the file
 by name), and shell_send into a non-shell PTY (a REPL) whose input happens to
 read as one of the shapes (`1 << 3`).
 
-### Access rule (owner rules 27a/27b, deterministic BLOCK)
+### Access rule (deterministic BLOCK)
 
-Owner rule 27a: before any command that changes who can read, write or run
+The access rule: before any command that changes who can read, write or run
 something, or what the system lets an agent do, the agent does not run it;
 it ends its turn and asks for the owner's yes (a worker asks its foreman). The model guard rates chmod "hard to reverse" and asks to
 confirm, but fleet auto-accept passes a confirm, so this rule **blocks**,
-decided locally (`extensions/jev/access.py`), with the text "Owner rule
-27a: this changes access. Don't run it or work around it. End your turn and
-ask for the owner's yes (a worker asks its foreman). This task waits."
+decided locally (`extensions/jev/access.py`), with the text "jev: blocked
+by the access rule (decided locally, no model call). This changes access.
+Don't run it or work around it. End your turn and ask for the owner's yes
+(a worker asks its foreman). This task waits."
 
 | Kind | Refused |
 |---|---|
-| command | users and groups (`usermod`, `useradd`, `gpasswd`, `groupadd` …), `sudo`/`sudoedit`/`doas`/`pkexec`/`su`/`runuser`/`visudo`, `newgrp`/`sg`, firewall tools (`ufw`, `nft`, `iptables`, `firewall-cmd` …), `setcap`/`chcon`/`setsebool`/`semanage`, `ssh-keygen` (not `-l -F -B -y`), `ssh-copy-id`, `ssh-add` (not `-l -L`), `systemctl set-property\|edit\|revert`, `systemd-run` in any form but the 27c(5) memory-cap scope (below); and `chmod`/`chown`/`chgrp`/`setfacl`/`chattr`/`chacl`, `install`/`mkdir` with `-m`/`-o`/`-g`, `rsync --chmod/--chown/--usermap/--groupmap` unless every target is in the session's own area |
+| command | users and groups (`usermod`, `useradd`, `gpasswd`, `groupadd` …), `sudo`/`sudoedit`/`doas`/`pkexec`/`su`/`runuser`/`visudo`, `newgrp`/`sg`, firewall tools (`ufw`, `nft`, `iptables`, `firewall-cmd` …), `setcap`/`chcon`/`setsebool`/`semanage`, `ssh-keygen` (not `-l -F -B -y`), `ssh-copy-id`, `ssh-add` (not `-l -L`), `systemctl set-property\|edit\|revert`, `launchctl load\|unload\|bootstrap\|bootout\|enable\|disable\|setenv\|unsetenv\|limit\|kickstart\|submit\|remove\|config\|asuser\|bsexec` and a `launchctl` whose subcommand is missing or unseen (on every OS), `systemd-run` in any form but the memory-cap scope form (below); and `chmod`/`chown`/`chgrp`/`setfacl`/`chattr`/`chacl`, `install`/`mkdir` with `-m`/`-o`/`-g`, `rsync --chmod/--chown/--usermap/--groupmap` unless every target is in the session's own area |
 | write | a redirect, `tee`, `cp`/`mv`/`install`/`ln`/`rsync`/`scp`, `dd of=`, `curl -o`, `wget -O`, `sed`/`perl -i`, `touch`, `truncate`, `rm` … naming a protected path (`~/.ssh`, `/etc/ssh`, sudoers, polkit, passwd/group/shadow/subuid/subgid, `/etc/security`, `pam.d`, the firewall configs, the jev config and `~/.synaps-cli/memory/jev`), or a gated path whose new text sets a gated key: systemd unit/slice/drop-in dirs and `Slice=`, `Memory*=`, `CPU*=`, `IO*=`, `TasksMax=`, `UMask=`, `User=`, `Group=`, `DynamicUser=`, `SupplementaryGroups=`, `ReadWritePaths=`, `ReadOnlyPaths=`, `InaccessiblePaths=`, `ProtectHome=`, `ProtectSystem=`, `PrivateTmp=`, `NoNewPrivileges=`, `CapabilityBoundingSet=`, `AmbientCapabilities=`, `Delegate=`; shell rc and environment files and `umask`; `~/.synaps-cli/config` and `umask`/`sandbox`/`landlock` keys. A copy's source is read (256 KiB); an unreadable source counts as setting a key |
 | code | `python -c`, `perl -e/-E`, `node -e/--eval/-p`, `ruby -e` code naming an access change (`os.chmod`, `chownSync`, `sudo`, `authorized_keys` …) or a protected path (`.ssh`, sudoers, polkit, `/etc/passwd` …, `.synaps-cli/sandbox`, the jev config and state, `/systemd/`); a read is not told apart from a write |
 | shell umask | `umask` in the call with a mode that leaves group or other write on (`umask 002`, `umask 000`, `umask g+w`, `umask $M`); `umask`, `umask -S`, `022`, `077` pass |
-| sandbox (27b) | anything under `~/.synaps-cli/sandbox`, by the switch below |
+| sandbox | anything under `~/.synaps-cli/sandbox`, by the switch below |
+
+Paths are matched as written and as realpaths. **Per OS** (the `Platform`
+of the [host profile](#host-profile-and-platform)): Linux has exactly the
+tables above. macOS adds, always protected (any write asks): the launchd
+job dirs (`~/Library/LaunchAgents`, `/Library/LaunchAgents`,
+`/Library/LaunchDaemons`, `/System/Library/LaunchAgents|LaunchDaemons`,
+`/etc/launchd.conf`) and pf (`/etc/pf.conf`, `/etc/pf.anchors`); as umask
+files `/etc/zshrc`, `/etc/zprofile`, `/etc/zshenv`, `/etc/zlogin`,
+`/etc/bashrc`; and every `/etc`, `/var` and `/tmp` base again under
+`/private`, where macOS keeps them.
 
 The same targets are checked for the **write**, **edit** and **multi_edit**
 tools (the new text is the content, `new_string` or the edit's text).
@@ -1057,16 +1078,22 @@ tools (the new text is the content, `new_string` or the edit's text).
   nested, not over ssh, not through `xargs` or `find -exec`, no `-L`/`-H`,
   no `setfacl --restore`), with literal targets (no variables, command
   substitution or `{}`; `$HOME` is resolved), each realpath (globs expanded)
-  strictly below `/var/tmp/<dir>/` or `/tmp/<dir>/` (or a file, never a
-  directory, right in `/var/tmp` or `/tmp`), strictly below a project's
-  `tmp/<dir>/` (owner rule 16a's scratch, at least two levels below HOME)
-  or a `.worktrees/<name>/`, or strictly below the session cwd when that
-  cwd is at least three levels below HOME, and not a protected or gated
-  path. A top-level `cd`/`pushd` to a literal directory that exists moves
+  strictly below `<temp>/<dir>/` (or a file, never a directory, right in
+  `<temp>`), strictly below a project's `tmp/<dir>/` (a project's scratch,
+  at least two levels below HOME) or a `.worktrees/<name>/`, or strictly
+  below the session cwd when that cwd is a project, and not a protected or
+  gated path. `<temp>`: `/var/tmp` and `/tmp` on Linux (as before); on
+  macOS `/private/var/tmp`, `/private/tmp` and a per-user `$TMPDIR` under
+  `/private/var/folders`; plus the host profile's `scratch.dir` only when it
+  sets one that resolves strictly below HOME or a temp root (never HOME,
+  `/` or above). A project cwd: with the host profile's `workspace.root`
+  (resolving strictly below HOME), a cwd strictly below it that is not its
+  worktrees dir; without one (or with one that fails that check), exactly
+  the old rule, a cwd at least three levels below HOME. A top-level `cd`/`pushd` to a literal directory that exists moves
   where later relative targets resolve (never the own-area bases); any
   other move (`popd`, `cd -`, `cd $X`, a `cd` in a subshell, a nested
   script or a pipeline) makes relative targets unknown, so they block.
-  `chmod g-w ~/Projects ~/Projects/example` blocks from any cwd. The guard
+  `chmod g-w ~/workspace ~/workspace/example` blocks from any cwd. The guard
   cannot prove which scratch dir or worktree is this session's, so any of
   them counts (a best-effort check). When every
   hit is such a mode command, the refusal adds how to name own files by
@@ -1078,7 +1105,7 @@ tools (the new text is the content, `new_string` or the edit's text).
   `ssh-keygen` (`-l -F -B -y`), `ssh-add` (`-l -L`), `ufw status|show|app
   list`, `nft list`, `iptables -L/-S` and `firewall-cmd --list-*/--get-*/
   --query-*/--state` pass; `sed`/`perl` without `-i` only read.
-- **systemd-run** (owner rule 27c(5)). Without `--scope` a systemd manager
+- **systemd-run** (the memory-cap scope form). Without `--scope` a systemd manager
   runs the job as a service, outside the session's process tree and its
   sandbox, so it asks; so does a scope with anything but `--user`,
   `--scope`, `-q`, `--same-dir`, `--collect`, `-E`/`--setenv` (an
@@ -1095,7 +1122,7 @@ tools (the new text is the content, `new_string` or the edit's text).
   per `systemd-run`, a fixed reason. Options are read as systemd-run reads
   them (an unambiguous long-option prefix, short clusters, options end at
   the first other word or `--`); `--help` and `--version` run nothing.
-  This check only adds asks: the 27c(5) form gets no hit from it, as
+  This check only adds asks: the memory-cap scope form gets no hit from it, as
   before, and whether its caps tighten stays the agent's duty. The command
   it runs is scanned like any other (`systemd-run --user --scope -p
   MemoryMax=1G -- chmod 777 ~/x` still asks for the chmod), and the
@@ -1103,16 +1130,16 @@ tools (the new text is the content, `new_string` or the edit's text).
   `nohup` …): a shell's `-c` string, ssh's remote command, `eval`'s
   arguments, `su`/`runuser`/`script -c`, and the `env -S`, `flock -c` and
   `watch` strings, each as a nested script. So `systemd-run --user --scope
-  -p MemoryMax=8G -- bash -c 'chmod -R g-w ~/Projects'` asks "inside a
+  -p MemoryMax=8G -- bash -c 'chmod -R g-w ~/workspace'` asks "inside a
   nested script", as `timeout 600 bash -c '…'` does. Only this scan reads
   them: the rule-1 scan still doesn't unwrap systemd-run. Not modelled:
   brace and glob expansion (`{…}`, `*`) where an option or a value can be.
-- **27b sandbox switch.** `~/.synaps-cli/memory/jev/sandbox-mode` holds one
+- **Sandbox switch.** `~/.synaps-cli/memory/jev/sandbox-mode` holds one
   word; exactly `auto` (whitespace ignored) is auto, anything else, missing
   or unreadable is **manual**. The file is protected: the owner writes it
   from their own terminal. Manual passes only creating a NEW `sessions/<name>.conf`
   directly in `sessions/` (the write tool, or `cp`/`mv`/`install` onto a
-  missing target); everything else under `sandbox/` blocks, adding "(27b:
+  missing target); everything else under `sandbox/` blocks, adding "(sandbox:
   this can widen a sandbox; the owner's yes)". Auto passes any create, edit,
   replace or delete strictly below `sessions/`, auditing a change to an
   existing file as rule `access_auto`; `sandbox/OFF` and the rest outside
@@ -1128,7 +1155,7 @@ tools (the new text is the content, `new_string` or the edit's text).
   and lets it go on otherwise.
 - **Audit.** One row per block (or warn) with `rule: "access"`: kind, fixed
   token, fixed reason, line, descent flag, where and the session id; one
-  row per 27b auto pass with `rule: "access_auto"`; never the command
+  row per sandbox auto pass with `rule: "access_auto"`; never the command
   text. Block and auto rows name their `request`; block rows add `answer`
   (`new`, `deny_only`, `waiting`, `deny`, `unrecorded`, `error`). Counters
   `guard.access.{command,write,code,sandbox,block,warn,auto,stopped,
@@ -1171,7 +1198,7 @@ tools (the new text is the content, `new_string` or the edit's text).
 - **Allow once: limits.** The store sits under `~/.synaps-cli/memory/jev`,
   which the write rule protects, so a visible tool call can't write an
   answer; but a script run from a file isn't read, so an agent running as
-  this user could forge one. For sandboxed sessions the sandbox rule 27c(3)
+  this user could forge one. For sandboxed sessions the sandbox
   refuses those paths as a second layer; unsandboxed sessions and
   subagents have only the guard. A builder is told apart only by the
   host's `subagent_id` (`sa_N`): if the host gave the same id to a later
@@ -1185,10 +1212,55 @@ tools (the new text is the content, `new_string` or the edit's text).
   plugin's code dir (`~/.synaps-cli/plugins/jev/` apart from `config`) is
   not protected: installs write it.
 
+## Host profile and Platform
+
+`extensions/jev/host_profile.py` holds every host and OS difference; no
+other module checks the OS. **HostProfile** reads the Pria host profile
+only through `pria-fleet host --json` (stdin closed, 1 s timeout, never the
+file), caches it per process and reads it again when `~/.pria/host.toml`
+changes (mtime, size or inode; one stat a second at most) or after 60 s.
+Keys used: `workspace.root`, `workspace.worktrees_dir`, `scratch.dir`,
+`app.state_dir`, `app.fleet_dir`, `host.service_manager`. `tools.*` and
+`runners` are read and validated but nothing acts on them. Anything
+invalid (relative, `..`, control characters, `/`) is unset.
+
+**Zero-touch.** Most users have no Pria Desktop. No `pria-fleet`, an older
+one (`unknown command host`, exit 2) or exit 9 means every key is unset,
+silently. Exit 6, 1, 8, a timeout or bad output mean unset plus one jev log
+line. jev never asks the user for a host fact, asks no setup question and
+never writes `host.toml`. Every key has a safe default, so jev never needs
+a `missing: KEY` line:
+
+- `scratch.dir` and `workspace.root`: no extra scratch root, and the old
+  project rule;
+- `app.state_dir`: Linux's path, else no relay;
+- `app.fleet_dir`: `~/.pria/fleet`;
+- `host.service_manager`: from the OS.
+
+**Facts, not authority.** No profile value (`tools.*`, `runners[].tool`, a
+runner's interpreter or launcher, `PATH`) is approval to run something, a
+trusted wrapper or a trusted interpreter. jev runs nothing the profile
+names, the rule-1 wrapper set stays in jev's code, and `bin/jev-python`
+never consults `tools.python`. A missing fact relaxes no policy and never
+falls back to a bare-`PATH` or local run. Otherwise the profile only names
+where things live. The two values that widen an exception (`scratch.dir`,
+`workspace.root`) are validated first.
+
+**Platform** (`linux`, `macos` or `other`) holds:
+
+- the protected tables (Linux unchanged; macOS adds to them);
+- the temp roots;
+- the service gates: `systemctl` and `launchctl` on every OS;
+- the kill readings: procps on Linux; BSD plus procps elsewhere;
+- the per-OS default dirs: `scratch.dir` is `~/.cache/pria/scratch` on
+  Linux and `~/Library/Caches/Pria/scratch` on macOS.
+
 ## Pria desktop relay (`transport`)
 
-With `transport` = `relay` (or `auto` on a host where
-`~/.local/state/pria-desktop` exists) every Jev call goes to the Pria
+With `transport` = `relay` (or `auto` on a host where the host profile's
+`app.state_dir` exists: by default `~/.local/state/pria-desktop` on Linux;
+no default elsewhere, so no relay there unless the profile names one)
+every Jev call goes to the Pria
 desktop app over `fleet.sock` in that dir, one JSON object per line: a
 `hello` (the plugin reads `fleet.token` only to send it there, after
 connecting; it is never logged or stored), then one `jev.decide` request
