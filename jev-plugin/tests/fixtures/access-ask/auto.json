@@ -1,0 +1,26 @@
+{
+  "cwd": "/home/jr/Projects/Org/repo",
+  "files": [
+    {
+      "op": "create",
+      "path": "/home/jr/.synaps-cli/sandbox/sessions/old.conf"
+    }
+  ],
+  "hits": [
+    {
+      "descent": false,
+      "kind": "auto",
+      "line": 0,
+      "token": "synaps sandbox policy",
+      "where": "path",
+      "why": "changes a session sandbox file (auto mode)"
+    }
+  ],
+  "hits_total": 1,
+  "id": "2ff2e0c4563e3ea0aba0ac355bb08f31",
+  "kind": "auto",
+  "session": "20261020-000000-aaaa",
+  "tool": "write",
+  "ts": "2026-10-21T04:07:50Z",
+  "v": 1
+}

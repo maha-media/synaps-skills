@@ -1,0 +1,26 @@
+{
+  "allow_once_possible": true,
+  "command": "chmod g-w ~/Projects",
+  "cwd": "/home/jr/Projects/Org/repo",
+  "expires_at": "2026-10-22T04:07:50Z",
+  "fingerprint": "6e6a211ac571c524c12535164eccdbd7671afea59ec54ad329285ebfb9fbe11d",
+  "hits": [
+    {
+      "descent": false,
+      "kind": "command",
+      "line": 1,
+      "token": "chmod",
+      "where": "command",
+      "why": "changes access outside the session's own worktree or scratch"
+    }
+  ],
+  "hits_total": 1,
+  "id": "1fec6a1b63246a8bdedc031dfa4d484f",
+  "kind": "block",
+  "reason": "jev: blocked by the access rule (decided locally, no model call). Owner rule 27a: this changes access. Don't run it or work around it. End your turn and ask for JR's yes (a worker asks its foreman). This task waits.\nline 1: `chmod` changes access outside the session's own worktree or scratch\n27a's only exception is a file you created yourself for this task in your own scratch (/var/tmp/<lane>/...) or worktree. If that is all this is, name those files by literal path (absolute, or after a plain `cd` to a literal directory) in a call of their own; it is checked again. Otherwise stop here. After JR's yes, JR runs it himself in his own terminal (or approves it once); do not retry it another way.\nRequest 1fec6a1b63246a8bdedc031dfa4d484f: JR can answer it in Pria Desktop (Permission change). If he allows it once, run exactly this call again, unchanged, within 30 minutes of his answer; anything else stays blocked.",
+  "session": "20261020-000000-aaaa",
+  "tool": "bash",
+  "truncated": false,
+  "ts": "2026-10-21T04:07:50Z",
+  "v": 1
+}
