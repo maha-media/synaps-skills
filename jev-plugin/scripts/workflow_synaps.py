@@ -150,21 +150,60 @@ def send(proc, value, deadline):
             continue
 
 
-def descendants(pid):
-    """Linux ordinary descendants; child stays in the outer harness process group.
+def descendants(pid, table=None):
+    """Ordinary descendants, deepest first; child stays in the outer harness process group.
 
-    No setsid/daemonization: outer SIGKILL still reaches the entire job even if
-    this adapter cannot run cleanup. This is not containment of hostile tools.
+    Linux reads /proc/<pid>/task/<pid>/children (unchanged). Without /proc
+    (macOS) the parent links come from one `ps -A -o pid=,ppid=` listing
+    (`table`: {ppid: [pid, ...]}, a test seam). No setsid/daemonization: outer
+    SIGKILL still reaches the entire job even if this adapter cannot run
+    cleanup. This is not containment of hostile tools.
     """
-    found = []
-    try:
-        children = Path(f"/proc/{pid}/task/{pid}/children").read_text().split()
-    except OSError:
+    if table is None and os.path.isdir("/proc/self/task"):
+        found = []
+        try:
+            children = Path(f"/proc/{pid}/task/{pid}/children").read_text().split()
+        except OSError:
+            return found
+        for child in children:
+            found.extend(descendants(int(child)))
+            found.append(int(child))
         return found
-    for child in children:
-        found.extend(descendants(int(child)))
-        found.append(int(child))
+    if table is None:
+        table = ps_children()
+    found, seen = [], {pid}
+
+    def walk(parent, depth):
+        for child in table.get(parent, ()):
+            if child not in seen and depth < 64:
+                seen.add(child)
+                walk(child, depth + 1)
+                found.append(child)
+    walk(pid, 0)
     return found
+
+
+PS_PATHS = ("/bin/ps", "/usr/bin/ps")  # absolute only: never a ps from PATH
+
+
+def ps_children():
+    """{ppid: [pid, ...]} from `ps -A -o pid=,ppid=` (BSD and procps ps alike);
+    {} when no ps at PS_PATHS, or it fails or is slow. The pids it lists are
+    SIGKILLed by cleanup(), so a ps found on PATH is never run."""
+    ps = next((p for p in PS_PATHS if os.path.isfile(p) and os.access(p, os.X_OK)), None)
+    if ps is None:
+        return {}
+    try:
+        out = subprocess.run([ps, "-A", "-o", "pid=,ppid="], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, timeout=5, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    table = {}
+    for line in out.decode("ascii", "replace").splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            table.setdefault(int(parts[1]), []).append(int(parts[0]))
+    return table
 
 
 def cleanup(proc, known):

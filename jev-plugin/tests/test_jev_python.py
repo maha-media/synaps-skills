@@ -100,5 +100,62 @@ class JevPython(unittest.TestCase):
         self.assertEqual(int(out.strip()), p.pid)
 
 
+MARK_PROBE = "import os, sys; print(os.environ.get('JEV_PY_MARK', 'probe'), sys.version_info >= (3, 11))"
+
+
+def fake_pria_fleet(d: Path, calls: Path, python: Path) -> None:
+    """A pria-fleet that records each call in `calls` and answers any query
+    with `python`, as on a host whose profile sets tools.python."""
+    p = d / "pria-fleet"
+    p.write_text("#!/bin/sh\n"
+                 f"echo \"$*\" >> '{calls}'\n"
+                 f"echo '{python}'\n"
+                 "exit 0\n")
+    p.chmod(0o755)
+
+
+def marked_python(path: Path) -> Path:
+    """A 3.11+ python that says it was the one picked."""
+    path.write_text(f"#!/bin/sh\nJEV_PY_MARK=profile exec '{sys.executable}' \"$@\"\n")
+    path.chmod(0o755)
+    return path
+
+
+class NoProfilePython(unittest.TestCase):
+    """Host-profile facts are not authority: the launcher never asks
+    pria-fleet for tools.python and never runs an interpreter a profile
+    names. It takes the first 3.11+ of its own probe, or fails loudly."""
+
+    def setUp(self):
+        t = tempfile.TemporaryDirectory()
+        self.addCleanup(t.cleanup)
+        self.d = Path(t.name)
+        self.home = self.d / "home"
+        (self.home / ".local" / "bin").mkdir(parents=True)
+        self.calls = self.d / "calls"
+        prof = marked_python(self.d / "profile-python")
+        fake_pria_fleet(self.d, self.calls, prof)
+        fake_pria_fleet(self.home / ".local" / "bin", self.calls, prof)
+
+    def test_a_profile_python_is_never_consulted_or_run(self):
+        (self.d / "python3").symlink_to(sys.executable)  # the probe's pick
+        r = run(str(self.d), "-c", MARK_PROBE, home=str(self.home))
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "probe True"), r.stderr)
+        self.assertFalse(self.calls.exists())
+
+    @unittest.skipIf(any(os.path.exists(p) for p in ABSOLUTE_CANDIDATES),
+                     "an absolute candidate exists on this host")
+    def test_no_probe_python_fails_loudly_rather_than_run_the_profiles(self):
+        fake_old_python(self.d)
+        r = run(str(self.d), "-c", MARK_PROBE, home=str(self.home))
+        self.assertEqual((r.returncode, r.stdout), (127, ""), r.stderr)
+        self.assertFalse(self.calls.exists())
+
+    def test_the_launcher_names_no_profile_reader(self):
+        text = LAUNCHER.read_text()
+        for word in ("pria-fleet", "tools.python", "host.toml"):
+            self.assertNotIn(word, text)
+
+
 if __name__ == "__main__":
     unittest.main()
