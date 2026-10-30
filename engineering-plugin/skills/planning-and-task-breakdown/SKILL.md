@@ -131,7 +131,8 @@ cd <workspace.worktrees_dir>/<repo>-<slug>
 `workspace.root` and `workspace.worktrees_dir` come from `pria-fleet host get <key>`
 (exit 0 = the path; any other exit or no pria-fleet = unset). Worktrees dir unset:
 `<workspace.root>/.worktrees`. Both unset and you're not already in the user's
-clone: ask the user where their repos live. See **worktrees-by-default** → The Layout.
+clone: print `missing: workspace.root` once and don't create the worktree. Never ask the user
+for it. See **worktrees-by-default** → The Layout.
 
 The primary checkout stays clean on the integration branch. All implementation happens in the worktree. This is non-negotiable — see **worktrees-by-default** for the full discipline.
 

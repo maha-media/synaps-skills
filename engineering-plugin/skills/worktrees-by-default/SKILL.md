@@ -53,8 +53,9 @@ means **unset**:
 
 - `workspace.worktrees_dir` unset but `workspace.root` known: use `<workspace.root>/.worktrees`.
 - Both unset: if you are already inside the user's clone, the primary clone is
-  `git rev-parse --show-toplevel`; otherwise **ask the user where their repos live**
-  (and where worktrees should go) before creating one. Don't guess a home-dir layout.
+  `git rev-parse --show-toplevel`; otherwise print `missing: workspace.root` once and
+  don't create a worktree. Never ask the user for a host fact, and don't guess a
+  home-dir layout. (An agent that knows the fact may propose it to the app.)
 
 ```
 <workspace.root>/…/<repo>/                      ← primary clone, stays on `main`
